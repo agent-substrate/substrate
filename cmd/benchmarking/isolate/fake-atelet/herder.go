@@ -24,6 +24,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -78,6 +79,10 @@ type herder struct {
 	// epochs is where Run and Restore read the epoch they report; the relay
 	// records it when the Worker registers. Workers are named by their pod UID.
 	epochs *workerEpochs
+	// runtimes maps an actor UID to the runtime its last Run or Restore
+	// named, which Checkpoint reports as the snapshot's stamp, as atelet
+	// does for a worker that adds no attributes of its own.
+	runtimes sync.Map
 }
 
 // newActorCSR returns a CSR for a fresh key. ate-api-server takes only the
@@ -162,6 +167,7 @@ func (h *herder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.R
 	if err := wait(ctx, time.Now(), h.delays.run); err != nil {
 		return nil, err
 	}
+	h.runtimes.Store(req.GetActorUid(), req.GetSandboxRuntime())
 	return &ateletpb.RunResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
@@ -172,6 +178,7 @@ func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*at
 	if err := wait(ctx, time.Now(), h.delays.restore); err != nil {
 		return nil, err
 	}
+	h.runtimes.Store(req.GetActorUid(), req.GetSandboxRuntime())
 	return &ateletpb.RestoreResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
@@ -188,7 +195,17 @@ func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	if err := wait(ctx, start, h.delays.checkpoint); err != nil {
 		return nil, err
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	// Report the snapshot as atelet does: kept on the node after a deferred
+	// upload, durable after an immediate one that kept no local copy.
+	snap := proto.CloneOf(req.GetSnapshot())
+	if rt, ok := h.runtimes.Load(req.GetActorUid()); ok {
+		snap.SandboxRuntime = proto.CloneOf(rt.(*ateletpb.ActorSandboxRuntime))
+	}
+	report := &ateletpb.SnapshotReport{Snapshot: snap}
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+		return &ateletpb.CheckpointResponse{State: &ateletpb.ActorSnapshotState{LatestDurable: report}}, nil
+	}
+	return &ateletpb.CheckpointResponse{State: &ateletpb.ActorSnapshotState{LatestLocal: report}}, nil
 }
 
 func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {

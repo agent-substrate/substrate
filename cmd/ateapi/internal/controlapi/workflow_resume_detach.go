@@ -33,9 +33,10 @@ import (
 )
 
 // shouldDetachFromNode reports whether a SUSPENDED actor's assignment failed
-// for lack of room on the node it is pinned to.
+// for lack of room, or of a worker that can restore its snapshot, on the node
+// it is pinned to.
 func shouldDetachFromNode(actor *ateapi.Actor, assignErr error) bool {
-	return errors.Is(assignErr, errNoWorkerRoom) &&
+	return (errors.Is(assignErr, errNoWorkerRoom) || errors.Is(assignErr, errNoRestoringWorker)) &&
 		actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED &&
 		actor.GetStatus().GetAssignedNode() != ""
 }
@@ -53,11 +54,13 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	if actor, err = w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node); err != nil {
 		return nil, err
 	}
+	// SnapshotRuntime still keeps out the workers that cannot restore the
+	// snapshot at all.
 	constraints := schedulingConstraints(actor, actorTemplate)
 	constraints.RequiredNodes = nil
 	constraints.RequiredRuntime = hardware.Requirement{}
 	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
-		if errors.Is(err, scheduling.ErrNoCapacity) {
+		if errors.Is(err, scheduling.ErrNoCapacity) || errors.Is(err, scheduling.ErrNoRestoringWorker) {
 			return nil, assignErr
 		}
 		return nil, err

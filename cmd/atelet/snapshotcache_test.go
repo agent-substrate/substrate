@@ -418,19 +418,26 @@ func TestDownloadExternalCheckpointSharesOneDownload(t *testing.T) {
 // in the restore directory, as a directory or as the file itself, fails the
 // restore instead of being followed outside it.
 func TestDownloadExternalCheckpointCachedSubdirAndSymlinks(t *testing.T) {
-	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory", "fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta"})
+	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory", "fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta", "fs/data/fscheckpoint.pb": "volume bundle"})
 	ctx := context.Background()
 
 	// Two files share the subdirectory and are fetched in parallel: the
-	// directory is made once, before either, not raced into by both.
+	// directory is made once, before either, not raced into by both. A
+	// per-volume bundle file nests one directory deeper.
 	dir := restoreDir(t, base, "subdir")
-	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar", "fs/rootfs-upper-app.tar"}, cacheModeLink); err != nil {
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar", "fs/rootfs-upper-app.tar", "fs/data/fscheckpoint.pb"}, cacheModeLink); err != nil {
 		t.Fatalf("downloadExternalCheckpoint with subdirectory files: %v", err)
 	}
-	for name, want := range map[string]string{"fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta"} {
+	for name, want := range map[string]string{"fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta", "fs/data/fscheckpoint.pb": "volume bundle"} {
 		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != want {
 			t.Fatalf("subdirectory file %s = %q, %v", name, got, err)
 		}
+	}
+
+	// Its parent is made first when no file sits in it.
+	nested := restoreDir(t, base, "nested")
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, nested, []string{"fs/data/fscheckpoint.pb"}, cacheModeLink); err != nil {
+		t.Fatalf("downloadExternalCheckpoint with only a per-volume file: %v", err)
 	}
 
 	outside := filepath.Join(base, "outside")
@@ -454,6 +461,9 @@ func TestDownloadExternalCheckpointCachedSubdirAndSymlinks(t *testing.T) {
 	}
 	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dirLink, []string{"fs/data.tar"}, cacheModeCopy); err == nil {
 		t.Error("a symlink in place of the checkpoint subdirectory was followed")
+	}
+	if err := s.downloadExternalCheckpoint(ctx, testActor, testSnapshotURI, dirLink, []string{"fs/data/fscheckpoint.pb"}, cacheModeCopy); err == nil {
+		t.Error("a symlink in place of the checkpoint subdirectory was followed for a per-volume file")
 	}
 	if got, err := os.ReadFile(keep); err != nil || string(got) != "keep me" {
 		t.Errorf("file outside the restore directory = %q, %v; want untouched", got, err)

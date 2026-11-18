@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -50,6 +51,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 )
@@ -108,6 +110,9 @@ type fakeWorker struct {
 	// onRestore, if non-nil, runs inside RestoreWorkload after it recorded
 	// the request, before it fails with restoreErr or succeeds.
 	onRestore func()
+	// snapshotAttributes are the worker's own attributes every
+	// CheckpointWorkload returns for the snapshot it wrote.
+	snapshotAttributes []*ateworkerpb.AttributeEntry
 	// stopsWorkload, if set, makes a checkpoint stop the workload, as a real
 	// worker's does. Until a Run or Restore starts it again, CheckpointWorkload
 	// answers with the stopping checkpoint's response while the checkpoint dir
@@ -185,7 +190,7 @@ func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.Ch
 	if f.onCheckpoint != nil {
 		f.onCheckpoint()
 	}
-	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}
+	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names, SnapshotAttributes: f.snapshotAttributes}
 	if f.stopsWorkload {
 		f.setStoppedBy(resp)
 	}
@@ -1474,9 +1479,11 @@ type pluginActor struct {
 	store  *recordingObjectStorage
 	rec    *sandboxAssetsRecord
 	spec   *ateletpb.WorkloadSpec
+	// runtime is the runtime the actor's Run named.
+	runtime *ateletpb.ActorSandboxRuntime
 }
 
-func runPluginActor(t *testing.T) *pluginActor {
+func runPluginActor(t *testing.T, opts ...func(*ateletpb.RunRequest)) *pluginActor {
 	t.Helper()
 	useTempNodeDirs(t)
 
@@ -1503,7 +1510,7 @@ func runPluginActor(t *testing.T) *pluginActor {
 	}
 
 	advertiseRuntime(t, a.s, a.rec)
-	if _, err := a.s.Run(t.Context(), &ateletpb.RunRequest{
+	req := &ateletpb.RunRequest{
 		Atespace:              "ate-demo",
 		ActorName:             "counter",
 		ActorUid:              pluginActorUID,
@@ -1512,10 +1519,23 @@ func runPluginActor(t *testing.T) *pluginActor {
 		WorkerPodUid:          pluginWorkerPodUID,
 		SandboxRuntime:        runtimeFor(t, a.rec),
 		Spec:                  a.spec,
-	}); err != nil {
+	}
+	for _, opt := range opts {
+		opt(req)
+	}
+	a.runtime = runtimeFor(t, a.rec)
+	if _, err := a.s.Run(t.Context(), req); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	return a
+}
+
+// stamped is snap as atelet reports it once checkpointed: with the stamp of
+// the runtime the actor runs under, from a worker that adds no attributes.
+func (a *pluginActor) stamped(snap *ateletpb.Snapshot) *ateletpb.Snapshot {
+	out := proto.CloneOf(snap)
+	out.SandboxRuntime = a.runtime
+	return out
 }
 
 // snapshot is the Snapshot the control plane names for the actor's checkpoint
@@ -1609,10 +1629,10 @@ func TestImmediateCheckpointKeepsLocalCopy(t *testing.T) {
 		t.Errorf("local snapshot after an immediate checkpoint: stat = %v, want it kept", err)
 	}
 	st := resp.GetState()
-	if got := st.GetLatestLocal(); !proto.Equal(got.GetSnapshot(), snap) || got.GetLocalCommitTime() == nil || got.GetDurableCompleteTime() != nil {
+	if got := st.GetLatestLocal(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || got.GetLocalCommitTime() == nil || got.GetDurableCompleteTime() != nil {
 		t.Errorf("latest_local = %v, want %v with its commit time and no upload time", got, snap)
 	}
-	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetLocalCommitTime() == nil || got.GetDurableCompleteTime() == nil {
+	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || got.GetLocalCommitTime() == nil || got.GetDurableCompleteTime() == nil {
 		t.Errorf("latest_durable = %v, want %v with its commit and upload times", got, snap)
 	}
 }
@@ -1643,7 +1663,7 @@ func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	if st.GetLatestLocal() != nil {
 		t.Errorf("latest_local = %v, want unset without a local copy", st.GetLatestLocal())
 	}
-	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() == nil {
+	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || got.GetDurableCompleteTime() == nil {
 		t.Errorf("latest_durable = %v, want %v with its upload time", got, snap)
 	}
 	if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, st) {
@@ -1736,7 +1756,7 @@ func TestStaleCheckpointRetryLeavesRestoredActorAlone(t *testing.T) {
 			if tc.detach {
 				committed = st.GetLatestDurable().GetSnapshot()
 			}
-			if !proto.Equal(committed, snap) {
+			if !proto.Equal(committed, a.stamped(snap)) {
 				t.Errorf("state = %v, want %v as committed", st, snap)
 			}
 			if _, err := os.Stat(inUse); err != nil {
@@ -1779,7 +1799,8 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 			var workerCheckpoints atomic.Int32
 			a.worker.onCheckpoint = func() { workerCheckpoints.Add(1) }
 			snap := a.snapshot("snap-1", 1)
-			if _, err := a.checkpoint(t, snap, tc.first); err != nil {
+			first, err := a.checkpoint(t, snap, tc.first)
+			if err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
 			if tc.detachFirst {
@@ -1805,6 +1826,9 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 			if n := workerCheckpoints.Load(); n != 1 {
 				t.Errorf("worker checkpointed the actor %d times, want once", n)
 			}
+			if want := reportedStamp(first.GetState(), "snap-1"); want == nil || !proto.Equal(reportedStamp(resp.GetState(), "snap-1"), want) {
+				t.Errorf("retry reports stamp %v, want the first call's %v", reportedStamp(resp.GetState(), "snap-1"), want)
+			}
 			if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 				t.Errorf("leftover in the bundle dir after the retry: stat = %v, want it cleaned up", err)
 			}
@@ -1812,10 +1836,10 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 				t.Errorf("bundle dir exists = %v (err = %v), want %v", err == nil, err, tc.wantLocal)
 			}
 			st := resp.GetState()
-			if got := st.GetLatestLocal().GetSnapshot(); proto.Equal(got, snap) != tc.wantLocal {
+			if got := st.GetLatestLocal().GetSnapshot(); proto.Equal(got, a.stamped(snap)) != tc.wantLocal {
 				t.Errorf("latest_local = %v, want local = %v", got, tc.wantLocal)
 			}
-			if got := st.GetLatestDurable().GetSnapshot(); proto.Equal(got, snap) != tc.wantDurable {
+			if got := st.GetLatestDurable().GetSnapshot(); proto.Equal(got, a.stamped(snap)) != tc.wantDurable {
 				t.Errorf("latest_durable = %v, want durable = %v", got, tc.wantDurable)
 			}
 			if got := slices.Contains(a.store.keys(), manifestKey("snap-1")); got != tc.wantDurable {
@@ -1830,6 +1854,129 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 			}
 			if len(rm.ScopeMetrics) != 0 {
 				t.Error("the retry recorded a checkpoint duration, want none")
+			}
+		})
+	}
+}
+
+// reportedStamp returns the stamp state reports for the snapshot named uuid,
+// from latest_local or latest_durable, or nil when it reports none.
+func reportedStamp(state *ateletpb.ActorSnapshotState, uuid string) *ateletpb.ActorSandboxRuntime {
+	for _, r := range []*ateletpb.SnapshotReport{state.GetLatestLocal(), state.GetLatestDurable()} {
+		if r.GetSnapshot().GetSnapshotUuid() == uuid && r.GetSnapshot().GetSandboxRuntime() != nil {
+			return r.GetSnapshot().GetSandboxRuntime()
+		}
+	}
+	return nil
+}
+
+// TestCheckpointStamp checks the stamp a snapshot carries in every report of
+// it and in its manifest: the host attributes of the runtime the actor ran
+// under, plus the worker's attributes for the snapshot.
+func TestCheckpointStamp(t *testing.T) {
+	layout := &ateworkerpb.AttributeEntry{
+		Key: "worker.layout", Value: "per_volume",
+		CompatibleValues: []*ateworkerpb.CompatibleValue{{Value: "", Fidelity: ateworkerpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}},
+	}
+	wantLayout := &ateletpb.AttributeEntry{
+		Key: "worker.layout", Value: "per_volume",
+		CompatibleValues: []*ateletpb.CompatibleValue{{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}},
+	}
+	// runWithWorkerKey runs the actor under a runtime that carries the worker
+	// key the worker registered, as an assignment's does.
+	runWithWorkerKey := func(req *ateletpb.RunRequest) {
+		req.SandboxRuntime.Version.Attributes = append(req.SandboxRuntime.Version.Attributes, &ateletpb.AttributeEntry{
+			Key: "worker.layout", Value: "per_volume",
+			CompatibleValues: []*ateletpb.CompatibleValue{{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}},
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		run   func(*ateletpb.RunRequest)
+		attrs []*ateworkerpb.AttributeEntry
+		// oldRecord drops the runtime from the on-node record, as a record an
+		// earlier release wrote has none.
+		oldRecord bool
+		// wantWorker are the worker attributes the stamp holds after the host
+		// ones.
+		wantWorker []*ateletpb.AttributeEntry
+		wantNone   bool
+		wantErr    bool
+	}{
+		{name: "host attributes only"},
+		{name: "drops the worker attributes of the runtime the actor ran under", run: runWithWorkerKey},
+		{name: "adds the worker's attributes for the checkpoint", run: runWithWorkerKey, attrs: []*ateworkerpb.AttributeEntry{layout}, wantWorker: []*ateletpb.AttributeEntry{wantLayout}},
+		{name: "no stamp from a record an earlier release wrote", oldRecord: true, attrs: []*ateworkerpb.AttributeEntry{layout}, wantNone: true},
+		{name: "rejects a worker attribute without the worker prefix", attrs: []*ateworkerpb.AttributeEntry{{Key: hardware.AttrArchitecture, Value: "arm64"}}, wantErr: true},
+		{name: "rejects an invalid worker attribute", attrs: []*ateworkerpb.AttributeEntry{{Key: "worker.layout", Value: "x", CompatibleValues: []*ateworkerpb.CompatibleValue{{Value: "x", Fidelity: ateworkerpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}}}}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var opts []func(*ateletpb.RunRequest)
+			if tc.run != nil {
+				opts = append(opts, tc.run)
+			}
+			a := runPluginActor(t, opts...)
+			a.worker.snapshotAttributes = tc.attrs
+			if tc.oldRecord {
+				rec, err := readSandboxRecord(pluginActorUID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec.SandboxRuntime = nil
+				if err := writeSandboxRecord(pluginActorUID, rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snap := a.snapshot("snap-1", 1)
+			resp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Checkpoint succeeded, want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			var want *ateletpb.ActorSandboxRuntime
+			if !tc.wantNone {
+				want = runtimeFor(t, a.rec)
+				want.Version.Attributes = append(want.Version.Attributes, tc.wantWorker...)
+			}
+			if diff := cmp.Diff(want, reportedStamp(resp.GetState(), "snap-1"), protocmp.Transform()); diff != "" {
+				t.Errorf("reported snapshot sandbox_runtime mismatch (-want +got):\n%s", diff)
+			}
+			manifest, err := readSnapshotManifest(ateletpath.LocalSnapshotDir(pluginActorUID, "snap-1"))
+			if err != nil {
+				t.Fatalf("reading the manifest: %v", err)
+			}
+			rec, err := unmarshalSandboxRecord(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got *ateletpb.ActorSandboxRuntime
+			if rec.SandboxRuntime != nil {
+				got = rec.SandboxRuntime.ActorSandboxRuntime
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("manifest sandboxRuntime mismatch (-want +got):\n%s", diff)
+			}
+			retry, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+			if err != nil {
+				t.Fatalf("retried Checkpoint: %v", err)
+			}
+			if diff := cmp.Diff(want, reportedStamp(retry.GetState(), "snap-1"), protocmp.Transform()); diff != "" {
+				t.Errorf("retried report's snapshot sandbox_runtime mismatch (-want +got):\n%s", diff)
+			}
+			// A background upload makes the snapshot durable, and keeps its stamp.
+			if _, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+				Atespace: "ate-demo", ActorName: "counter", ActorUid: pluginActorUID,
+				ActorTemplateAtespace: "default", ActorTemplateName: "counter", Snapshot: snap,
+			}); err != nil {
+				t.Fatalf("PromoteSnapshot: %v", err)
+			}
+			if got := a.s.snapshots.State(pluginActorUID).GetLatestDurable().GetSnapshot().GetSandboxRuntime(); !proto.Equal(got, want) {
+				t.Errorf("latest_durable stamp after the upload = %v, want %v", got, want)
 			}
 		})
 	}
@@ -1880,7 +2027,7 @@ func TestRetriedCheckpointAfterUncommittedStaging(t *testing.T) {
 			if err != nil {
 				t.Fatalf("retried Checkpoint: %v", err)
 			}
-			if got := resp.GetState().GetLatestLocal().GetSnapshot(); !proto.Equal(got, snap) {
+			if got := resp.GetState().GetLatestLocal().GetSnapshot(); !proto.Equal(got, a.stamped(snap)) {
 				t.Errorf("latest_local = %v, want %v", got, snap)
 			}
 			if n := captures.Load(); n != 1 {
@@ -2083,10 +2230,10 @@ func TestPromoteSnapshotRecordsUpload(t *testing.T) {
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")); err != nil {
 		t.Errorf("local snapshot after promote: stat = %v, want it kept", err)
 	}
-	if got := st.GetLatestLocal(); !proto.Equal(got.GetSnapshot(), snap) || !proto.Equal(got.GetLocalCommitTime(), commitTime) || got.GetDurableCompleteTime() != nil {
+	if got := st.GetLatestLocal(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || !proto.Equal(got.GetLocalCommitTime(), commitTime) || got.GetDurableCompleteTime() != nil {
 		t.Errorf("latest_local = %v, want %v committed at %v, with no upload time", got, snap, commitTime)
 	}
-	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || !proto.Equal(got.GetLocalCommitTime(), commitTime) || got.GetDurableCompleteTime() == nil {
+	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || !proto.Equal(got.GetLocalCommitTime(), commitTime) || got.GetDurableCompleteTime() == nil {
 		t.Errorf("latest_durable = %v, want %v committed at %v, with its upload time", got, snap, commitTime)
 	}
 	if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, st) {
@@ -2712,7 +2859,7 @@ func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
 		t.Fatalf("PruneLocalCheckpoints: %v", err)
 	}
 
-	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() != nil {
+	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || got.GetDurableCompleteTime() != nil {
 		t.Errorf("latest_durable = %v, want %v with no upload time", got, snap)
 	}
 }
@@ -2761,7 +2908,7 @@ func TestPromoteSnapshotAfterDetach(t *testing.T) {
 	// PromoteSnapshot after detach finds the local snapshot gone, probes object
 	// storage for the manifest uploaded during detach, and succeeds without
 	// re-uploading.
-	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() != nil {
+	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || got.GetDurableCompleteTime() != nil {
 		t.Errorf("latest_durable = %v, want %v with no upload time", got, snap)
 	}
 }
@@ -2991,7 +3138,7 @@ func TestPromoteSnapshotWaitsForBackgroundUpload(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("PromoteSnapshot: %v", res.err)
 	}
-	if got := res.state.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() == nil {
+	if got := res.state.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), a.stamped(snap)) || got.GetDurableCompleteTime() == nil {
 		t.Errorf("latest_durable = %v, want %v with the background upload's time", got, snap)
 	}
 }
@@ -3909,11 +4056,11 @@ func TestCheckpointFinishesWhenCallerCancels(t *testing.T) {
 					t.Fatalf("%s Checkpoint: %v", call.name, res.err)
 				}
 				st := res.resp.GetState()
-				if got := st.GetLatestLocal().GetSnapshot(); !proto.Equal(got, snap) {
+				if got := st.GetLatestLocal().GetSnapshot(); !proto.Equal(got, a.stamped(snap)) {
 					t.Errorf("%s latest_local = %v, want %v", call.name, got, snap)
 				}
 				if mode == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
-					if got := st.GetLatestDurable().GetSnapshot(); !proto.Equal(got, snap) {
+					if got := st.GetLatestDurable().GetSnapshot(); !proto.Equal(got, a.stamped(snap)) {
 						t.Errorf("%s latest_durable = %v, want %v", call.name, got, snap)
 					}
 				}

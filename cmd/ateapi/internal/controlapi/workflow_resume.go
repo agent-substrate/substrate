@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -164,6 +165,15 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 func checkSnapshotUpload(actorRef resources.ActorRef, actor *ateapi.Actor) error {
 	if snap := snapshotToResume(actor.GetStatus()); snap != nil && snap.GetDurableSnapshot() == nil {
 		return apierror.DataLoss("Actor %s snapshot %s records no upload", actorRef, snap.GetUuid())
+	}
+	return nil
+}
+
+// checkSnapshotStamp fails with FailedPrecondition when snapshotToResume has
+// no stamp: nothing says which workers can restore it.
+func checkSnapshotStamp(actorRef resources.ActorRef, actor *ateapi.Actor) error {
+	if snap := snapshotToResume(actor.GetStatus()); snap != nil && snap.GetSandboxRuntime() == nil {
+		return apierror.FailedPrecondition("Actor %s snapshot %s has no sandbox runtime stamp and cannot be restored", actorRef, snap.GetUuid())
 	}
 	return nil
 }
@@ -407,6 +417,9 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	if err := checkSnapshotUpload(actorRef, actor); err != nil {
 		return nil, nil, err
 	}
+	if err := checkSnapshotStamp(actorRef, actor); err != nil {
+		return nil, nil, err
+	}
 	start := time.Now()
 	outcome := ateattr.SchedulerOutcomeError
 	poolNamespace := ""
@@ -425,13 +438,17 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 	assignedWorker, err := w.scheduler.Schedule(ctx, constraints)
 	if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-		constraints.RequiredRuntime = hardware.Requirement{}
-		assignedWorker, err = w.scheduler.Schedule(ctx, constraints)
+		// The bind below asks again under the relaxed requirement the pick
+		// met.
+		assignedWorker, constraints.RequiredRuntime, err = w.scheduleRelaxed(ctx, constraints)
 	}
 	if err != nil {
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			outcome = ateattr.SchedulerOutcomeNoCapacity
 			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+		}
+		if errors.Is(err, scheduling.ErrNoRestoringWorker) {
+			return nil, nil, apierror.FailedPrecondition("snapshot %s of Actor %s: %w", snapshotToResume(actor.GetStatus()).GetUuid(), actorRef, errNoRestoringWorker)
 		}
 		return nil, nil, err
 	}
@@ -526,6 +543,28 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 // constraints.
 var errNoWorkerRoom = errors.New("no worker has room for the actor")
 
+// errNoRestoringWorker reports that every worker that meets the Actor's other
+// constraints declares it cannot restore the Actor's snapshot.
+var errNoRestoringWorker = errors.New("no worker that meets the actor's constraints can restore the snapshot")
+
+// scheduleRelaxed schedules the actor on a worker that restores its snapshot
+// at less than all of it, the highest fidelity first, once no worker that
+// restores all of it has room. Constraints.SnapshotRuntime keeps out every
+// worker that cannot restore the snapshot at all. It returns the relaxed
+// RequiredRuntime the worker met.
+func (w *ActorWorkflow) scheduleRelaxed(ctx context.Context, constraints scheduling.Constraints) (*ateapi.Worker, hardware.Requirement, error) {
+	required := constraints.RequiredRuntime
+	for f := required.Max() - 1; f > ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES; f-- {
+		constraints.RequiredRuntime = required.AtLeast(f)
+		if worker, err := w.scheduler.Schedule(ctx, constraints); !errors.Is(err, scheduling.ErrNoCapacity) {
+			return worker, constraints.RequiredRuntime, err
+		}
+	}
+	constraints.RequiredRuntime = hardware.Requirement{}
+	worker, err := w.scheduler.Schedule(ctx, constraints)
+	return worker, constraints.RequiredRuntime, err
+}
+
 // errWorkerFilledUp reports that the Worker the scheduler picked would not take
 // the Actor once the store asked under its row lock. Retryable: the next
 // attempt re-runs scheduling.
@@ -541,9 +580,10 @@ func workerAssignmentFrom(w *ateapi.Worker, snapRuntime hardware.Requirement) *a
 		WorkerPodIps:    slices.Clone(w.GetStatus().GetIps()),
 		NodeName:        w.GetNodeName(),
 		WorkerSpiffeId:  w.GetWorkerSpiffeId(),
-		// The runtime the actor is started or restored under. Snapshots taken
-		// during this assignment are stamped with it, so a worker that later
-		// changes its default does not relabel state captured on the old one.
+		// The runtime the actor is started or restored under. atelet stamps
+		// snapshots taken during this assignment with its host attributes, so
+		// a worker that later changes its default does not relabel state
+		// captured on the old one.
 		SandboxRuntime: proto.CloneOf(snapRuntime.RuntimeFor(w.GetStatus())),
 	}
 }
@@ -558,8 +598,34 @@ func toAteletSandboxRuntime(in *ateapi.ActorSandboxRuntime) *ateletpb.ActorSandb
 	if v := in.GetVersion(); v != nil {
 		out.Version = &ateletpb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
 		for _, a := range v.GetAttributes() {
-			out.Version.Attributes = append(out.Version.Attributes, &ateletpb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+			entry := &ateletpb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()}
+			for _, c := range a.GetCompatibleValues() {
+				entry.CompatibleValues = append(entry.CompatibleValues, &ateletpb.CompatibleValue{Value: c.GetValue(), Fidelity: ateletpb.CompatibleFidelity(c.GetFidelity())})
+			}
+			out.Version.Attributes = append(out.Version.Attributes, entry)
 		}
+	}
+	return out
+}
+
+// fromAteletSandboxRuntime converts atelet's ActorSandboxRuntime to the
+// control plane's, which it mirrors field for field, with the attributes
+// sorted by key as ate-api-server records them.
+func fromAteletSandboxRuntime(in *ateletpb.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := &ateapi.ActorSandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	if v := in.GetVersion(); v != nil {
+		out.Version = &ateapi.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
+		for _, a := range v.GetAttributes() {
+			entry := &ateapi.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()}
+			for _, c := range a.GetCompatibleValues() {
+				entry.CompatibleValues = append(entry.CompatibleValues, &ateapi.CompatibleValue{Value: c.GetValue(), Fidelity: ateapi.CompatibleFidelity(c.GetFidelity())})
+			}
+			out.Version.Attributes = append(out.Version.Attributes, entry)
+		}
+		slices.SortFunc(out.Version.Attributes, func(a, b *ateapi.AttributeEntry) int { return strings.Compare(a.GetKey(), b.GetKey()) })
 	}
 	return out
 }
@@ -570,7 +636,7 @@ func schedulingConstraints(actor *ateapi.Actor, tmpl *ateapi.ActorTemplate) sche
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
-	required := hardware.NewRequirement(requiredSnapshotRuntime(snap, tmpl))
+	required := requiredSnapshotRuntime(snap, tmpl)
 	c := scheduling.Constraints{
 		SandboxClass:    snap.GetSandboxRuntime().GetSandboxClass(),
 		RequiredRuntime: required,
@@ -595,21 +661,23 @@ func snapshotToResume(status *ateapi.ActorStatus) *ateapi.Snapshot {
 }
 
 // snapshotSandboxClass returns the sandbox class of snapshotToResume, or ""
-// when the actor has none and cold-boots. Unlike requiredSnapshotRuntime it
-// does not depend on fidelity: a worker of another class cannot read the
-// snapshot's files even for a volumes-only restore.
+// when the actor has none and cold-boots. A worker of another class cannot
+// read the snapshot's files even for a volumes-only restore.
 func snapshotSandboxClass(actor *ateapi.Actor) string {
 	return snapshotToResume(actor.GetStatus()).GetSandboxRuntime().GetSandboxClass()
 }
 
-// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on snap, the
-// snapshotToResume, when the resume restores its memory state, or nil when it
-// does not (cold boot, ROOTFS or VOLUMES fidelity, or replaced template).
-func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) *ateapi.ActorSandboxRuntime {
-	if snap.GetFidelity() != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY || templateReplaced(snap, tmpl) {
-		return nil
+// requiredSnapshotRuntime returns what a worker must run to restore snap, the
+// snapshotToResume: its stamp, at every fidelity. The restore recovers at
+// most the snapshot's fidelity, and only its volumes under a replaced
+// template. It requires nothing for a cold boot. checkSnapshotStamp refuses a
+// snapshot without a stamp before this is asked.
+func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) hardware.Requirement {
+	fidelity := snap.GetFidelity()
+	if templateReplaced(snap, tmpl) {
+		fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	}
-	return snap.GetSandboxRuntime()
+	return hardware.NewRequirement(snap.GetSandboxRuntime(), fidelity)
 }
 
 // canRelaxRuntime reports whether scheduling may drop its runtime requirement.
@@ -636,7 +704,8 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when
-// relaxable — satisfies constraints with RequiredRuntime relaxed.
+// relaxable — satisfies constraints with RequiredRuntime relaxed. Either way
+// the worker must restore the snapshot at some fidelity.
 func (w *ActorWorkflow) appliesWithFallback(worker *ateapi.Worker, constraints scheduling.Constraints, relaxable bool) bool {
 	relaxed := constraints
 	relaxed.RequiredRuntime = hardware.Requirement{}
@@ -712,8 +781,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
-	// A re-entered resume skips assignWorkerAttempt, which checks this too.
+	// A re-entered resume skips assignWorkerAttempt, which checks these too.
 	if err := checkSnapshotUpload(actorRef, actor); err != nil {
+		return tele, 0, err
+	}
+	if err := checkSnapshotStamp(actorRef, actor); err != nil {
 		return tele, 0, err
 	}
 
@@ -736,8 +808,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 
 	snap := snapshotToResume(actor.GetStatus())
 
-	// The assignment is what the next checkpoint is stamped from, so it is also
-	// what decides how this restore runs.
+	// The assignment's host attributes are what atelet stamps the next
+	// checkpoint with, so it is also what decides how this restore runs.
 	sandboxRuntime := toAteletSandboxRuntime(assignment.GetSandboxRuntime())
 
 	// New actor without any existing snapshots to restore from.
@@ -770,19 +842,17 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 	}
 
-	// Exclusive by construction: requiredSnapshotRuntime returns nil when the
-	// template changed, so runtimeIncompatible is false when templateReplaced
-	// is true.
-	requiredRuntime := requiredSnapshotRuntime(snap, actorTemplate)
-	runtimeIncompatible := requiredRuntime != nil && !hardware.Matches(assignment.GetSandboxRuntime(), requiredRuntime)
-
 	fidelity := fidelityToAtelet(snap.GetFidelity())
-	switch {
-	case templateReplaced(snap, actorTemplate):
+	if templateReplaced(snap, actorTemplate) {
 		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-	case runtimeIncompatible:
-		logRuntimeFallback(ctx, actorRef, assignment, requiredRuntime)
-		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	}
+	required := requiredSnapshotRuntime(snap, actorTemplate)
+	switch restorable := required.RestoreFidelity(assignment.GetSandboxRuntime()); {
+	case restorable == ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE:
+		return tele, 0, apierror.FailedPrecondition("worker %s of Actor %s cannot restore snapshot %s", assignment.GetWorkerPod(), actorRef, snap.GetUuid())
+	case restorable < required.Max():
+		logRuntimeFallback(ctx, actorRef, assignment, snap.GetSandboxRuntime(), restorable)
+		fidelity = compatibleFidelityToAtelet(restorable)
 	}
 	tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 	req := &ateletpb.RestoreRequest{
@@ -825,13 +895,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	return tele, resp.GetWorkerEpoch(), nil
 }
 
-// logRuntimeFallback records a resume that restores without memory state
-// because the assigned worker does not run the runtime the snapshot's memory
-// state was captured under.
-func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime) {
-	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring without memory state",
+// logRuntimeFallback records a resume that restores less than the snapshot
+// holds because the assigned worker's runtime restores only up to fidelity.
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime, fidelity ateapi.CompatibleFidelity) {
+	slog.WarnContext(ctx, "Assigned worker restores less of the snapshot than it holds",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),
+		slog.String("fidelity", fidelity.String()),
 		slog.Any("required_runtime", required),
 		slog.Any("assigned_runtime", assignment.GetSandboxRuntime()))
 }

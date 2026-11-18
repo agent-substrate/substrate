@@ -22,12 +22,52 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 )
 
 const fsCheckpointManifest = "fscheckpoint.pb"
+
+const (
+	// attrDurableFSLayout is the worker attribute naming the layout of a
+	// snapshot's durable-dir filesystem checkpoint.
+	attrDurableFSLayout = hardware.WorkerKeyPrefix + "durable_fs_layout"
+	// layoutPerVolume is one bundle per volume, in fs/<volume>/. A snapshot
+	// without attrDurableFSLayout has one bundle for every volume in fs/.
+	layoutPerVolume = "per_volume"
+)
+
+// registeredAttributes are the worker attributes this worker reports on every
+// runtime. It reads both layouts, so it restores a snapshot without
+// attrDurableFSLayout at every fidelity.
+func registeredAttributes() []*ateletpb.AttributeEntry {
+	return []*ateletpb.AttributeEntry{{
+		Key:              attrDurableFSLayout,
+		Value:            layoutPerVolume,
+		CompatibleValues: []*ateletpb.CompatibleValue{{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}},
+	}}
+}
+
+// snapshotAttributes returns the worker attributes of the snapshot a
+// checkpoint wrote as snapshotFiles: attrDurableFSLayout when it holds
+// per-volume bundles, which a worker without the attribute cannot read at any
+// fidelity, and none when it holds no durable-dir bundle.
+func snapshotAttributes(snapshotFiles []string) []*ateworkerpb.AttributeEntry {
+	for _, f := range snapshotFiles {
+		if filepath.Dir(filepath.Dir(f)) == resources.FSCheckpointSubdir {
+			return []*ateworkerpb.AttributeEntry{{
+				Key:              attrDurableFSLayout,
+				Value:            layoutPerVolume,
+				CompatibleValues: []*ateworkerpb.CompatibleValue{{Value: "", Fidelity: ateworkerpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}},
+			}}
+		}
+	}
+	return nil
+}
 
 // rootfsFSCheckpointPaths returns the runsc filesystem checkpoint target specs
 // (rootfs/=<container_name>:/) for all workload containers' rootfs overlays,
@@ -41,27 +81,27 @@ func rootfsFSCheckpointPaths(containers []*ateworkerpb.Container) []string {
 }
 
 // durableFSCheckpointPaths returns the runsc filesystem checkpoint target
-// specs (fs/=<container_name>:<mount_path>) for all durable-dir volume mounts
-// across containers, grouping them into the "fs/" subdirectory bundle. Every
-// mount is emitted even when a volume is shared across multiple mounts: runsc
-// creates one shared tmpfs under whichever mount is set up first and
-// deduplicates by vfs.Filesystem when saving.
+// specs (fs/<volume>/=<container_name>:<mount_path>) for all durable-dir
+// volume mounts across containers, one bundle per volume. Every mount is
+// emitted even when a volume is shared across multiple mounts: runsc creates
+// one shared tmpfs under whichever mount is set up first and deduplicates by
+// vfs.Filesystem when saving, and the mounts of a volume share its bundle.
 func durableFSCheckpointPaths(containers []*ateworkerpb.Container) []string {
 	var paths []string
 	for _, c := range containers {
 		for _, m := range c.GetDurableDirVolumeMounts() {
-			paths = append(paths, fmt.Sprintf("%s/=%s:%s", resources.FSCheckpointSubdir, c.GetName(), m.GetMountPath()))
+			paths = append(paths, fmt.Sprintf("%s/%s/=%s:%s", resources.FSCheckpointSubdir, m.GetName(), c.GetName(), m.GetMountPath()))
 		}
 	}
 	return paths
 }
 
 // durableSnapshotFiles returns the subset of snapshotFiles that belong to the
-// durable-dir filesystem checkpoint in the fs/ subdirectory.
+// durable-dir filesystem checkpoint: the files under fs/, in either layout.
 func durableSnapshotFiles(snapshotFiles []string) []string {
 	var out []string
 	for _, f := range snapshotFiles {
-		if filepath.Dir(f) == resources.FSCheckpointSubdir {
+		if strings.HasPrefix(f, resources.FSCheckpointSubdir+"/") {
 			out = append(out, f)
 		}
 	}
@@ -72,8 +112,9 @@ func durableSnapshotFiles(snapshotFiles []string) []string {
 // filesystem checkpoint bundles in checkpointDir that apply at the requested
 // fidelity:
 //   - ROOTFS and MEMORY require `<checkpointDir>/rootfs/fscheckpoint.pb`.
-//   - Every fidelity uses `<checkpointDir>/fs` when
-//     `<checkpointDir>/fs/fscheckpoint.pb` exists.
+//   - Every fidelity uses the durable-dir bundles: `<checkpointDir>/fs` when
+//     `<checkpointDir>/fs/fscheckpoint.pb` exists, and each
+//     `<checkpointDir>/fs/<volume>` that holds a `fscheckpoint.pb`.
 func fsRestoreArgs(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity) ([]string, error) {
 	var subdirs []string
 	if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS ||
@@ -81,6 +122,15 @@ func fsRestoreArgs(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity) 
 		subdirs = append(subdirs, resources.RootfsCheckpointSubdir)
 	}
 	subdirs = append(subdirs, resources.FSCheckpointSubdir)
+	volumes, err := os.ReadDir(filepath.Join(checkpointDir, resources.FSCheckpointSubdir))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("while listing durable-dir filesystem checkpoints: %w", err)
+	}
+	for _, v := range volumes {
+		if v.IsDir() {
+			subdirs = append(subdirs, filepath.Join(resources.FSCheckpointSubdir, v.Name()))
+		}
+	}
 
 	var args []string
 	for _, sub := range subdirs {

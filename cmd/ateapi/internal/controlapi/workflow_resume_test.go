@@ -1112,8 +1112,14 @@ type capturingAtelet struct {
 	// whatever else happens while the workload checkpoints. Its error fails
 	// the RPC.
 	onCheckpoint func(ctx context.Context) error
-	// checkpointState is the snapshot state Checkpoint returns.
+	// checkpointState is the snapshot state Checkpoint returns. When nil,
+	// it reports the requested snapshot as atelet does: in latest_local for
+	// a deferred upload, in latest_durable for an immediate one that kept no
+	// local copy.
 	checkpointState *ateletpb.ActorSnapshotState
+	// checkpointStamp is the stamp every report of the requested snapshot
+	// carries. newWireCaptureWorkflow sets testSandboxRuntime's.
+	checkpointStamp *ateletpb.ActorSandboxRuntime
 	// promoteState is the snapshot state PromoteSnapshot returns.
 	promoteState *ateletpb.ActorSnapshotState
 	// promoteErr, when set, fails PromoteSnapshot after it is recorded.
@@ -1160,7 +1166,20 @@ func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.Checkpoi
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return &ateletpb.CheckpointResponse{State: proto.CloneOf(f.checkpointState)}, nil
+	state := proto.CloneOf(f.checkpointState)
+	if state == nil {
+		report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
+		state = &ateletpb.ActorSnapshotState{LatestLocal: report}
+		if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+			state = &ateletpb.ActorSnapshotState{LatestDurable: report}
+		}
+	}
+	for _, r := range []*ateletpb.SnapshotReport{state.GetLatestLocal(), state.GetUploading(), state.GetLatestDurable()} {
+		if s := r.GetSnapshot(); s != nil && s.GetSnapshotUuid() == req.GetSnapshot().GetSnapshotUuid() {
+			s.SandboxRuntime = proto.CloneOf(f.checkpointStamp)
+		}
+	}
+	return &ateletpb.CheckpointResponse{State: state}, nil
 }
 
 func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
@@ -1271,7 +1290,7 @@ func wireTestAssignment() *ateapi.WorkerAssignment {
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
 
-	fake := &capturingAtelet{}
+	fake := &capturingAtelet{checkpointStamp: toAteletSandboxRuntime(testSandboxRuntime())}
 	return &ActorWorkflow{store: persistence, dialer: newNodeAteletDialer(t, fake)}, fake
 }
 
@@ -1335,11 +1354,19 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	dataScope := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	unspecScope := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 
+	amd64RT := testSandboxRuntime()
+	arm64RT := testRuntime("arm64", "")
+	// extSnap and localSnap are stamped with amd64RT, the runtime a row's
+	// assignment records unless it names another.
 	extSnap := func(uri string, fidelity ateapi.SnapshotFidelity) *ateapi.Snapshot {
-		return newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
+		snap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
+		snap.SandboxRuntime = amd64RT
+		return snap
 	}
 	localSnap := func(name string, fidelity ateapi.SnapshotFidelity) *ateapi.Snapshot {
-		return newPausedSnapshot(t, 1, fidelity, "", name, "node-1")
+		snap := newPausedSnapshot(t, 1, fidelity, "", name, "node-1")
+		snap.SandboxRuntime = amd64RT
+		return snap
 	}
 	stampedLocalSnap := func(name string, fidelity ateapi.SnapshotFidelity, rt *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
 		snap := localSnap(name, fidelity)
@@ -1377,7 +1404,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		localTmplUID string
 		// sourceTag seeds Actor.SourceTag when testing explicit tag clones.
 		sourceTag *ateapi.ObjectRef
-		// assignedRuntime seeds WorkerAssignment.SandboxRuntime.
+		// assignedRuntime seeds WorkerAssignment.SandboxRuntime, amd64RT when
+		// unset.
 		assignedRuntime *ateapi.ActorSandboxRuntime
 		// externalNewer gives externalSnapshot a higher generation than
 		// localSnapshot. By default the local snapshot is newer.
@@ -1406,8 +1434,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		kind string
 	}
 
-	amd64RT := testSandboxRuntime()
-	arm64RT := testRuntime("arm64", "")
 	wantAteletRuntime := map[*ateapi.ActorSandboxRuntime]*ateletpb.ActorSandboxRuntime{
 		amd64RT: {
 			SandboxClass: "gvisor",
@@ -1423,6 +1449,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "arm64"}},
 			},
 		},
+	}
+	// withLayoutRule is amd64RT with a worker key whose rule caps a worker
+	// without the key at f.
+	withLayoutRule := func(f ateapi.CompatibleFidelity) *ateapi.ActorSandboxRuntime {
+		rt := proto.CloneOf(amd64RT)
+		rt.Version.Attributes = append(rt.Version.Attributes, &ateapi.AttributeEntry{
+			Key: "worker.layout", Value: "per_volume",
+			CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: f}},
+		})
+		return rt
 	}
 	stampedExtSnap := func(owner ateapi.SnapshotOwner, uri string, fidelity ateapi.SnapshotFidelity, rt *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
 		snap := newDurableSnapshot(1, owner, fidelity, "", durableSnapshotName, uri, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
@@ -1811,6 +1847,41 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "24c snapshot whose rule caps the worker at Volumes restores as Volumes",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, withLayoutRule(ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES)),
+				tmplUID:          "current",
+				assignedRuntime:  amd64RT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				kind:         ateattr.SnapshotKindLatest,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			// Scheduling never assigns such a worker. One an earlier attempt
+			// assigned is refused before atelet is called.
+			name: "24d snapshot the assigned worker cannot restore fails without a restore",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, withLayoutRule(ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE)),
+				tmplUID:          "current",
+				assignedRuntime:  amd64RT,
+			},
+			want: restoreWant{code: codes.FailedPrecondition},
+		},
+		{
+			// Nothing says which workers can restore it.
+			name: "24e snapshot without a stamp fails without a restore",
+			actor: actorSeed{externalSnapshot: func() *ateapi.Snapshot {
+				snap := extSnap(actorURI, fullScope)
+				snap.SandboxRuntime = nil
+				return snap
+			}()},
+			want: restoreWant{code: codes.FailedPrecondition},
+		},
+		{
 			// A recorded upload changes nothing: a local restore names the
 			// local snapshot's upload whether or not it is COMPLETED.
 			name: "25 uploaded pause snapshot restores locally and sends its upload",
@@ -1869,6 +1940,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Fatal("created template has no UID; the matching tmplUID case would be vacuous")
 			}
 
+			assigned := tt.actor.assignedRuntime
+			if assigned == nil {
+				assigned = amd64RT
+			}
 			// Sync and async suspended actors are both SUSPENDED; a node-local
 			// checkpoint is what makes the resume local.
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
@@ -1876,7 +1951,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.SourceTag = tt.actor.sourceTag
 				a.Status.WorkerAssignment = wireTestAssignment()
-				a.Status.WorkerAssignment.SandboxRuntime = proto.CloneOf(tt.actor.assignedRuntime)
+				a.Status.WorkerAssignment.SandboxRuntime = proto.CloneOf(assigned)
 				resolve := func(uid string) string {
 					if uid == "current" {
 						return createdTmpl.GetMetadata().GetUid()
@@ -1940,7 +2015,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				return
 			}
 
-			wantSandboxRuntime := wantAteletRuntime[tt.actor.assignedRuntime]
+			wantSandboxRuntime := wantAteletRuntime[assigned]
 			if tt.want.run {
 				if run == nil || restore != nil {
 					t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Run", restore, run)
@@ -2804,6 +2879,114 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		}
 	})
 
+	// layoutRT is rt with worker.layout=value and a rule of f for a side
+	// without the key.
+	layoutRT := func(rt *ateapi.ActorSandboxRuntime, value string, f ateapi.CompatibleFidelity) *ateapi.ActorSandboxRuntime {
+		rt = proto.CloneOf(rt)
+		rt.Version.Attributes = append(rt.Version.Attributes, &ateapi.AttributeEntry{
+			Key: "worker.layout", Value: value,
+			CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: f}},
+		})
+		return rt
+	}
+	// perVolumeSnap is a MEMORY snapshot no worker without worker.layout can
+	// restore.
+	perVolumeSnap := layoutRT(amd64RT, "per_volume", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE)
+
+	t.Run("never falls back to a worker that cannot restore the snapshot", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "old-pod", "node-old", amd64RT)
+		newArmRT := layoutRT(arm64RT, "per_volume", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY)
+		seedRuntimeWorker(t, ctx, st, "arm-pod", "node-arm", newArmRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, perVolumeSnap))
+
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		if err != nil {
+			t.Fatalf("assignWorkerAttempt: %v", err)
+		}
+		if got := worker.GetWorkerPod(); got != "arm-pod" {
+			t.Errorf("assigned worker = %q, want %q, the only one that can restore the snapshot", got, "arm-pod")
+		}
+		assertAssignedRuntime(t, stored, newArmRT)
+	})
+
+	t.Run("falls back to the highest fidelity first", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		// The snapshot's rule caps a worker without worker.layout at
+		// VOLUMES; the arm64 worker has the key and restores at ROOTFS.
+		snapRT := layoutRT(amd64RT, "v2", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES)
+		seedRuntimeWorker(t, ctx, st, "volumes-pod", "node-volumes", amd64RT)
+		rootfsRT := layoutRT(arm64RT, "v2", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY)
+		seedRuntimeWorker(t, ctx, st, "rootfs-pod", "node-rootfs", rootfsRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, snapRT))
+
+		_, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		if err != nil {
+			t.Fatalf("assignWorkerAttempt: %v", err)
+		}
+		if got := worker.GetWorkerPod(); got != "rootfs-pod" {
+			t.Errorf("assigned worker = %q, want %q, which restores more", got, "rootfs-pod")
+		}
+	})
+
+	t.Run("fails when only workers that cannot restore the snapshot exist", func(t *testing.T) {
+		for _, node := range []string{"", "node-old"} {
+			t.Run("pinned to "+node, func(t *testing.T) {
+				ctx := context.Background()
+				st := newTestPersistence(t)
+				seedRuntimeWorker(t, ctx, st, "old-pod", "node-old", amd64RT)
+				snap := durableMemorySnapshot(t, perVolumeSnap)
+				if node != "" {
+					snap = newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", node)
+					snap.SandboxRuntime = perVolumeSnap
+				}
+				actor := seedActorWithSnapshot(t, ctx, st, suspended, node, snap)
+
+				_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+				if got := apierror.Code(err); got != codes.FailedPrecondition || !errors.Is(err, errNoRestoringWorker) {
+					t.Fatalf("assignWorkerAttempt = %v (code %v), want FailedPrecondition with errNoRestoringWorker", err, got)
+				}
+				if !shouldDetachFromNode(actor, err) && node != "" {
+					t.Error("a pinned actor does not try another node, want it to")
+				}
+				after, err := st.GetActor(ctx, actorRef)
+				if err != nil {
+					t.Fatalf("GetActor: %v", err)
+				}
+				if got := after.GetStatus().GetState(); got != suspended {
+					t.Errorf("state = %v, want SUSPENDED", got)
+				}
+				if got := after.GetStatus().GetWorkerAssignment(); got != nil {
+					t.Errorf("WorkerAssignment = %v, want none", got)
+				}
+				if worker := storetest.WorkerHostingActor(t, ctx, st, actor.GetMetadata().GetUid()); worker != "" {
+					t.Errorf("worker %q holds the actor, want none", worker)
+				}
+			})
+		}
+	})
+
+	t.Run("refuses a snapshot without a stamp", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", amd64RT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, nil))
+
+		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("assignWorkerAttempt = %v (code %v), want FailedPrecondition", err, got)
+		}
+		after := mustReadActor(t, ctx, st, actorRef)
+		if after.GetStatus().GetState() != suspended || after.GetStatus().GetWorkerAssignment() != nil {
+			t.Errorf("actor = %v, want SUSPENDED and unassigned", after.GetStatus())
+		}
+		if worker := storetest.WorkerHostingActor(t, ctx, st, actor.GetMetadata().GetUid()); worker != "" {
+			t.Errorf("worker %q holds the actor, want none", worker)
+		}
+	})
+
 	t.Run("relaxed schedule landing on restorable worker records matched restorable runtime", func(t *testing.T) {
 		ctx := context.Background()
 		st := newTestPersistence(t)
@@ -2931,7 +3114,8 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 }
 
 // TestRequiredSnapshotRuntime pins which snapshot a resume takes its sandbox
-// class and runtime constraint from, and when it takes no runtime constraint.
+// class and runtime constraint from, the most the restore may recover, and
+// when it takes no runtime constraint.
 func TestRequiredSnapshotRuntime(t *testing.T) {
 	const tmplUID = "tmpl-uid"
 	tmpl := &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Uid: tmplUID}}
@@ -2955,10 +3139,17 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		return snap
 	}
 
+	const (
+		maxMemory  = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY
+		maxRootfs  = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_ROOTFS
+		maxVolumes = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES
+	)
 	tests := []struct {
 		name      string
 		snapshots []*ateapi.Snapshot
 		want      *ateapi.ActorSandboxRuntime
+		// wantMax is the most the restore may recover, when want is set.
+		wantMax   ateapi.CompatibleFidelity
 		wantClass string
 	}{
 		{name: "no snapshot cold-boots unconstrained"},
@@ -2966,27 +3157,35 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			name:      "completed MEMORY durable snapshot requires its runtime",
 			snapshots: []*ateapi.Snapshot{durable(1, memory, tmplUID, completed, durableRT)},
 			want:      durableRT,
+			wantMax:   maxMemory,
 			wantClass: "gvisor",
 		},
 		{
-			name:      "completed ROOTFS durable snapshot restores no memory state",
+			name:      "completed ROOTFS durable snapshot requires its runtime up to ROOTFS",
 			snapshots: []*ateapi.Snapshot{durable(1, rootfs, tmplUID, completed, durableRT)},
+			want:      durableRT,
+			wantMax:   maxRootfs,
 			wantClass: "gvisor",
 		},
 		{
-			name:      "VOLUMES durable snapshot restores no memory state",
+			name:      "VOLUMES durable snapshot requires its runtime up to VOLUMES",
 			snapshots: []*ateapi.Snapshot{durable(1, volumes, tmplUID, completed, durableRT)},
+			want:      durableRT,
+			wantMax:   maxVolumes,
 			wantClass: "gvisor",
 		},
 		{
-			name:      "durable snapshot captured under a replaced template is not restored",
+			name:      "durable snapshot captured under a replaced template restores only its volumes",
 			snapshots: []*ateapi.Snapshot{durable(1, memory, "old-tmpl-uid", completed, durableRT)},
+			want:      durableRT,
+			wantMax:   maxVolumes,
 			wantClass: "gvisor",
 		},
 		{
 			name:      "durable snapshot with no template uid keeps its runtime",
 			snapshots: []*ateapi.Snapshot{durable(1, memory, "", completed, durableRT)},
 			want:      durableRT,
+			wantMax:   maxMemory,
 			wantClass: "gvisor",
 		},
 		{
@@ -3001,17 +3200,21 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			name:      "local checkpoint requires its runtime",
 			snapshots: []*ateapi.Snapshot{local(1, memory, tmplUID, localRT)},
 			want:      localRT,
+			wantMax:   maxMemory,
 			wantClass: "microvm",
 		},
 		{
 			name:      "local checkpoint with no template uid keeps its runtime",
 			snapshots: []*ateapi.Snapshot{local(1, memory, "", localRT)},
 			want:      localRT,
+			wantMax:   maxMemory,
 			wantClass: "microvm",
 		},
 		{
-			name:      "local checkpoint captured under a replaced template is not restored",
+			name:      "local checkpoint captured under a replaced template restores only its volumes",
 			snapshots: []*ateapi.Snapshot{local(1, memory, "old-tmpl-uid", localRT)},
+			want:      localRT,
+			wantMax:   maxVolumes,
 			wantClass: "microvm",
 		},
 		{
@@ -3021,6 +3224,7 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				durable(2, memory, tmplUID, completed, durableRT),
 			},
 			want:      durableRT,
+			wantMax:   maxMemory,
 			wantClass: "gvisor",
 		},
 		{
@@ -3030,22 +3234,27 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
 			want:      localRT,
+			wantMax:   maxMemory,
 			wantClass: "microvm",
 		},
 		{
-			name: "ROOTFS local checkpoint imposes no constraint beside a stamped durable snapshot",
+			name: "ROOTFS local checkpoint requires its own runtime up to ROOTFS beside a stamped durable snapshot",
 			snapshots: []*ateapi.Snapshot{
 				local(2, rootfs, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			want:      localRT,
+			wantMax:   maxRootfs,
 			wantClass: "microvm",
 		},
 		{
-			name: "VOLUMES local checkpoint imposes no constraint beside a stamped durable snapshot",
+			name: "VOLUMES local checkpoint requires its own runtime up to VOLUMES beside a stamped durable snapshot",
 			snapshots: []*ateapi.Snapshot{
 				local(2, volumes, tmplUID, localRT),
 				durable(1, memory, tmplUID, completed, durableRT),
 			},
+			want:      localRT,
+			wantMax:   maxVolumes,
 			wantClass: "microvm",
 		},
 		{
@@ -3056,14 +3265,19 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 				local(2, memory, tmplUID, localRT),
 			},
 			want:      localRT,
+			wantMax:   maxMemory,
 			wantClass: "microvm",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := &ateapi.Actor{Status: &ateapi.ActorStatus{Snapshots: tc.snapshots}}
-			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(snapshotToResume(actor.GetStatus()), tmpl), protocmp.Transform()); diff != "" {
+			required := requiredSnapshotRuntime(snapshotToResume(actor.GetStatus()), tmpl)
+			if diff := cmp.Diff(tc.want, required.Runtime(), protocmp.Transform()); diff != "" {
 				t.Errorf("requiredSnapshotRuntime mismatch (-want +got):\n%s", diff)
+			}
+			if tc.want != nil && required.Max() != tc.wantMax {
+				t.Errorf("requiredSnapshotRuntime Max() = %v, want %v", required.Max(), tc.wantMax)
 			}
 			if got := snapshotSandboxClass(actor); got != tc.wantClass {
 				t.Errorf("snapshotSandboxClass = %q, want %q", got, tc.wantClass)
@@ -3363,7 +3577,7 @@ func TestCanRelaxRuntime(t *testing.T) {
 				AssignedNode: tc.node,
 				Snapshots:    tc.snapshots,
 			}}
-			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required)}); got != tc.want {
+			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)}); got != tc.want {
 				t.Errorf("canRelaxRuntime = %v, want %v", got, tc.want)
 			}
 		})
@@ -3415,11 +3629,44 @@ func TestToAteletSandboxRuntime(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "rules",
+			in: &ateapi.ActorSandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateapi.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateapi.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateapi.CompatibleValue{
+							{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+							{Value: "flat", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES},
+						}},
+					},
+				},
+			},
+			want: &ateletpb.ActorSandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateletpb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateletpb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{
+							{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+							{Value: "flat", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES},
+						}},
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if diff := cmp.Diff(tc.want, toAteletSandboxRuntime(tc.in), protocmp.Transform()); diff != "" {
 				t.Errorf("toAteletSandboxRuntime mismatch (-want +got):\n%s", diff)
+			}
+			// A stamp atelet returns comes back as the control plane's.
+			if diff := cmp.Diff(tc.in, fromAteletSandboxRuntime(tc.want), protocmp.Transform()); diff != "" {
+				t.Errorf("fromAteletSandboxRuntime mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

@@ -359,8 +359,12 @@ message Snapshot {
   // +k8s:optional
   SnapshotStorage durable_snapshot = 7;
 
-  // sandbox_runtime is the runtime the actor ran under when the snapshot was
-  // taken.
+  // sandbox_runtime is this snapshot's stamp, which says what its guest needs
+  // from the worker that restores it: atelet's host attributes for the
+  // runtime the actor ran under, plus the worker's attributes for the
+  // checkpoint it wrote. Each snapshot of an actor may carry a different one.
+  // It is set once the checkpoint returns. A snapshot without one cannot be
+  // restored.
   //
   // +k8s:optional
   ActorSandboxRuntime sandbox_runtime = 8;
@@ -2537,16 +2541,16 @@ message VersionedSandboxCompat {
   // +k8s:maxLength=64
   string schema_version = 1;
 
-  // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
-  // hardware features after masking (e.g. "architecture", "cpu_features").
-  // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value (except
-  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
-  // subset of the worker's); keys only the worker has are ignored, so a worker
-  // can gain keys under one schema_version without invalidating older
-  // snapshots. Removing or recomputing a key is a new schema_version, under
-  // which older snapshots no longer match.
+  // Key-value compatibility attributes defined by this schema version. atelet
+  // writes the host attributes, such as "architecture", "cpu_features" and
+  // "sandbox_bundle_hash". The worker adds its own, whose keys start with
+  // "worker.".
+  // A worker restores a snapshot under the same schema_version at a fidelity
+  // decided key by key: an equal value keeps it, and "cpu_features" keeps it
+  // when the snapshot's bitmask is a subset of the worker's. A different
+  // value, or a key on one side only, lowers it to the lower of the
+  // compatible_values that both sides give for the other's value, or to
+  // ROOTFS when neither gives one.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -2558,6 +2562,8 @@ message VersionedSandboxCompat {
 }
 
 // AttributeEntry is a single key-value compatibility attribute.
+//
+// +k8s:customValidation # no compatible_values entry for value itself
 message AttributeEntry {
   // Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
   //
@@ -2570,6 +2576,51 @@ message AttributeEntry {
   // +k8s:required
   // +k8s:maxLength=256
   string value = 2;
+
+  // Restore limits for when the other side has a different value for key.
+  // On a worker runtime the other side is the snapshot. On a snapshot it is
+  // the worker. A value of "" stands for the other side lacking key.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=value
+  repeated CompatibleValue compatible_values = 3;
+}
+
+// CompatibleValue is the most a restore may recover when the other side has
+// value for the key of its AttributeEntry.
+message CompatibleValue {
+  // The other side's value. "" stands for the other side lacking the key.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  string value = 1;
+
+  // The most a restore may recover, or `COMPATIBLE_FIDELITY_NONE` when the
+  // worker cannot restore the snapshot.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=4 # keep this in sync with the CompatibleFidelity enum
+  CompatibleFidelity fidelity = 2;
+}
+
+// CompatibleFidelity is the most a restore may recover, or NONE when the
+// worker cannot restore the snapshot at all. Unlike SnapshotFidelity it has a
+// level below VOLUMES.
+enum CompatibleFidelity {
+  // Not set. Rejected by validation.
+  COMPATIBLE_FIDELITY_UNSPECIFIED = 0;
+  // The worker cannot restore the snapshot.
+  COMPATIBLE_FIDELITY_NONE = 1;
+  // At most the snapshot's durable volumes.
+  COMPATIBLE_FIDELITY_VOLUMES = 2;
+  // At most the volumes and the root filesystem changes.
+  COMPATIBLE_FIDELITY_ROOTFS = 3;
+  // The whole snapshot, memory included.
+  COMPATIBLE_FIDELITY_MEMORY = 4;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 // WorkerResources represents a set of resources.

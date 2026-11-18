@@ -23,7 +23,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestRootfsFSCheckpointPaths(t *testing.T) {
@@ -61,9 +64,9 @@ func TestDurableFSCheckpointPaths(t *testing.T) {
 
 	got := durableFSCheckpointPaths(containers)
 	want := []string{
-		"fs/=app:/var/data",
-		"fs/=app:/var/cache",
-		"fs/=sidecar:/var/log/app",
+		"fs/data/=app:/var/data",
+		"fs/cache/=app:/var/cache",
+		"fs/logs/=sidecar:/var/log/app",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("durableFSCheckpointPaths() = %v, want %v", got, want)
@@ -71,76 +74,111 @@ func TestDurableFSCheckpointPaths(t *testing.T) {
 }
 
 func TestDurableSnapshotFiles(t *testing.T) {
-	snapshotFiles := []string{
-		"checkpoint.img",
-		"fs/fscheckpoint.pb",
-		"fs/multitar.img",
-		"fs/pages.img",
-		"fs/pages_meta.img",
-		"pages.img",
-		"pages_meta.img",
-		"rootfs/fscheckpoint.pb",
-		"rootfs/multitar.img",
-		"rootfs/pages.img",
-		"rootfs/pages_meta.img",
+	for _, tc := range []struct {
+		name string
+		// durable are the durable-dir bundle files in the layout.
+		durable []string
+	}{
+		{name: "one bundle", durable: []string{"fs/fscheckpoint.pb", "fs/multitar.img", "fs/pages.img", "fs/pages_meta.img"}},
+		{name: "a bundle per volume", durable: []string{
+			"fs/cache/fscheckpoint.pb", "fs/cache/multitar.img",
+			"fs/data/fscheckpoint.pb", "fs/data/multitar.img", "fs/data/pages.img",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotFiles := slices.Concat([]string{"checkpoint.img"}, tc.durable, []string{
+				"pages.img",
+				"pages_meta.img",
+				"rootfs/fscheckpoint.pb",
+				"rootfs/multitar.img",
+				"rootfs/pages.img",
+				"rootfs/pages_meta.img",
+			})
+			if got := durableSnapshotFiles(snapshotFiles); !slices.Equal(got, tc.durable) {
+				t.Errorf("durableSnapshotFiles() = %v, want %v", got, tc.durable)
+			}
+		})
 	}
+}
 
-	got := durableSnapshotFiles(snapshotFiles)
-	want := []string{
-		"fs/fscheckpoint.pb",
-		"fs/multitar.img",
-		"fs/pages.img",
-		"fs/pages_meta.img",
+// A checkpoint that wrote per-volume bundles carries the layout with a rule
+// that keeps it off workers without it. One with no durable-dir bundle, or an
+// old one bundle, carries nothing.
+func TestSnapshotAttributes(t *testing.T) {
+	perVolume := []*ateworkerpb.AttributeEntry{{
+		Key:              "worker.durable_fs_layout",
+		Value:            "per_volume",
+		CompatibleValues: []*ateworkerpb.CompatibleValue{{Value: "", Fidelity: ateworkerpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}},
+	}}
+	for _, tc := range []struct {
+		name  string
+		files []string
+		want  []*ateworkerpb.AttributeEntry
+	}{
+		{name: "memory only, no durable dirs", files: []string{"checkpoint.img", "pages.img", "rootfs/fscheckpoint.pb", "rootfs/pages.img"}},
+		{name: "one bundle written by an older worker", files: []string{"checkpoint.img", "fs/fscheckpoint.pb", "fs/pages.img"}},
+		{name: "a bundle per volume", files: []string{"checkpoint.img", "fs/data/fscheckpoint.pb", "fs/data/pages.img", "rootfs/fscheckpoint.pb"}, want: perVolume},
+		{name: "a VOLUMES checkpoint per volume", files: []string{"fs/data/fscheckpoint.pb", "fs/logs/fscheckpoint.pb"}, want: perVolume},
+		{name: "nothing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, snapshotAttributes(tc.files), protocmp.Transform()); diff != "" {
+				t.Errorf("snapshotAttributes() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("durableSnapshotFiles() = %v, want %v", got, want)
+	// The worker reads both layouts, so it restores an old snapshot in full.
+	wantRegistered := []*ateletpb.AttributeEntry{{
+		Key:              "worker.durable_fs_layout",
+		Value:            "per_volume",
+		CompatibleValues: []*ateletpb.CompatibleValue{{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}},
+	}}
+	if diff := cmp.Diff(wantRegistered, registeredAttributes(), protocmp.Transform()); diff != "" {
+		t.Errorf("registeredAttributes() mismatch (-want +got):\n%s", diff)
 	}
 }
 
 func TestListSnapshotFilesWithFSSubdir(t *testing.T) {
-	checkpointDir := t.TempDir()
-	for _, sub := range []string{"fs", "rootfs"} {
-		if err := os.MkdirAll(filepath.Join(checkpointDir, sub), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, rel := range []string{
-		"checkpoint.img",
-		"pages.img",
-		"pages_meta.img",
-		"rootfs/fscheckpoint.pb",
-		"rootfs/multitar.img",
-		"rootfs/pages.img",
-		"rootfs/pages_meta.img",
-		"fs/fscheckpoint.pb",
-		"fs/multitar.img",
-		"fs/pages.img",
-		"fs/pages_meta.img",
+	for _, tc := range []struct {
+		name string
+		// fs are the durable-dir bundle files the layout writes, sorted.
+		fs []string
+	}{
+		{name: "one bundle", fs: []string{"fs/fscheckpoint.pb", "fs/multitar.img", "fs/pages.img", "fs/pages_meta.img"}},
+		{name: "a bundle per volume", fs: []string{
+			"fs/cache/fscheckpoint.pb", "fs/cache/multitar.img",
+			"fs/data/fscheckpoint.pb", "fs/data/multitar.img", "fs/data/pages.img", "fs/data/pages_meta.img",
+		}},
 	} {
-		if err := os.WriteFile(filepath.Join(checkpointDir, rel), []byte("data"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+		t.Run(tc.name, func(t *testing.T) {
+			checkpointDir := t.TempDir()
+			others := []string{
+				"checkpoint.img",
+				"pages.img",
+				"pages_meta.img",
+				"rootfs/fscheckpoint.pb",
+				"rootfs/multitar.img",
+				"rootfs/pages.img",
+				"rootfs/pages_meta.img",
+			}
+			for _, rel := range slices.Concat(others, tc.fs) {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(checkpointDir, rel)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(checkpointDir, rel), []byte("data"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	got, err := listSnapshotFiles(checkpointDir)
-	if err != nil {
-		t.Fatalf("listSnapshotFiles() = %v", err)
-	}
-	want := []string{
-		"checkpoint.img",
-		"fs/fscheckpoint.pb",
-		"fs/multitar.img",
-		"fs/pages.img",
-		"fs/pages_meta.img",
-		"pages.img",
-		"pages_meta.img",
-		"rootfs/fscheckpoint.pb",
-		"rootfs/multitar.img",
-		"rootfs/pages.img",
-		"rootfs/pages_meta.img",
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("listSnapshotFiles() = %v, want %v", got, want)
+			got, err := listSnapshotFiles(checkpointDir)
+			if err != nil {
+				t.Fatalf("listSnapshotFiles() = %v", err)
+			}
+			want := slices.Sorted(slices.Values(slices.Concat(others, tc.fs)))
+			if !slices.Equal(got, want) {
+				t.Errorf("listSnapshotFiles() = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
@@ -275,6 +313,64 @@ func TestFSRestoreArgs(t *testing.T) {
 			t.Errorf("fsRestoreArgs(VOLUMES) = %v, want %v", gotVolumes, wantVolumes)
 		}
 	})
+}
+
+// A worker that writes a bundle per volume restores both layouts at every
+// fidelity.
+func TestFSRestoreArgsLayouts(t *testing.T) {
+	const (
+		volumes = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		rootfs  = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		memory  = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	)
+	for _, tc := range []struct {
+		name string
+		// manifests are the bundles in the checkpoint, by directory, and
+		// emptyDirs directories under fs/ that hold no bundle.
+		manifests []string
+		emptyDirs []string
+		// wantDurable are the durable-dir bundle dirs restored, after rootfs/
+		// at ROOTFS and MEMORY.
+		wantDurable []string
+	}{
+		{name: "one bundle", manifests: []string{"rootfs", "fs"}, wantDurable: []string{"fs"}},
+		{name: "a bundle per volume", manifests: []string{"rootfs", "fs/data", "fs/cache"}, wantDurable: []string{"fs/cache", "fs/data"}},
+		{name: "a volume dir without a bundle is skipped", manifests: []string{"rootfs", "fs/data"}, emptyDirs: []string{"fs/cache"}, wantDurable: []string{"fs/data"}},
+		{name: "no durable dirs", manifests: []string{"rootfs"}},
+	} {
+		for _, fidelity := range []ateworkerpb.SnapshotFidelity{volumes, rootfs, memory} {
+			t.Run(tc.name+"/"+fidelity.String(), func(t *testing.T) {
+				checkpointDir := t.TempDir()
+				for _, dir := range tc.manifests {
+					if err := os.MkdirAll(filepath.Join(checkpointDir, dir), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(checkpointDir, dir, "fscheckpoint.pb"), []byte("manifest"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, dir := range tc.emptyDirs {
+					if err := os.MkdirAll(filepath.Join(checkpointDir, dir), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var want []string
+				if fidelity != volumes {
+					want = append(want, "--fs-restore-image-path", filepath.Join(checkpointDir, "rootfs"))
+				}
+				for _, dir := range tc.wantDurable {
+					want = append(want, "--fs-restore-image-path", filepath.Join(checkpointDir, dir))
+				}
+				got, err := fsRestoreArgs(checkpointDir, fidelity)
+				if err != nil {
+					t.Fatalf("fsRestoreArgs() = %v", err)
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("fsRestoreArgs() = %v, want %v", got, want)
+				}
+			})
+		}
+	}
 }
 
 func TestFSRestoreContainers(t *testing.T) {

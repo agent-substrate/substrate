@@ -213,6 +213,19 @@ func ValidateSandboxClass(fldPath *field.Path, value string) field.ErrorList {
 	return field.ErrorList{field.NotSupported(fldPath, value, sandboxclass.All())}
 }
 
+// ValidateCompatibleValues requires that no entry of compatible, the values
+// of an AttributeEntry's compatible_values, equals value, the entry's own
+// value. fldPath is the entry's path.
+func ValidateCompatibleValues(fldPath *field.Path, value string, compatible []string) field.ErrorList {
+	var errs field.ErrorList
+	for i, v := range compatible {
+		if v == value {
+			errs = append(errs, field.Invalid(fldPath.Child("compatible_values").Index(i).Child("value"), v, "must differ from the attribute's own value"))
+		}
+	}
+	return errs
+}
+
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	if dir == "" {
 		return nil // required is enforced by tags

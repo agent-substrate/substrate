@@ -41,15 +41,16 @@ type Constraints struct {
 	SandboxClass string
 
 	// RequiredRuntime, when it names a runtime, restricts placement to
-	// workers whose DefaultRuntime or RestorableRuntimes can restore a
-	// snapshot stamped with it. Prepared once per Schedule, since Applies
-	// asks it of every candidate.
+	// workers whose DefaultRuntime or RestorableRuntimes restore a snapshot
+	// stamped with it at the requirement's least fidelity. Prepared once per
+	// Schedule, since Applies asks it of every candidate.
 	RequiredRuntime hardware.Requirement
 
 	// SnapshotRuntime is the runtime of the snapshot the actor restores from,
 	// or the zero Requirement when it starts on a worker's default runtime.
-	// Unlike RequiredRuntime it is never relaxed: it picks the worker runtime
-	// the actor runs under, and so the overhead it is booked with.
+	// Unlike RequiredRuntime it is never relaxed: it keeps out workers that
+	// cannot restore the snapshot at all, and it picks the worker runtime the
+	// actor runs under, and so the overhead it is booked with.
 	SnapshotRuntime hardware.Requirement
 
 	// TemplateSelector and ActorSelector must both match the worker's labels.
@@ -71,10 +72,17 @@ type Constraints struct {
 // the constraints at all.
 var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 
+// ErrNoRestoringWorker is returned by Schedule when some workers meet every
+// other constraint, but none of them can restore the snapshot of
+// SnapshotRuntime at any fidelity.
+var ErrNoRestoringWorker = errors.New("no worker can restore the snapshot")
+
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
 	// Schedule returns a worker that meets constraints and has room.
-	// Returns ErrNoCapacity when no worker that meets constraints has room.
+	// Returns ErrNoRestoringWorker when only SnapshotRuntime keeps every
+	// worker out, and ErrNoCapacity when no other worker that meets
+	// constraints has room.
 	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
 
 	// Applies reports whether worker satisfies non-capacity constraints. Capacity
@@ -127,8 +135,19 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	}
 
 	var candidates []candidate
+	// restores and refused record whether a worker that meets the other
+	// constraints can, or cannot, restore the snapshot.
+	var restores, refused bool
 	for _, worker := range workers {
-		if !s.Applies(worker, constraints) {
+		if !s.appliesBase(worker, constraints) {
+			continue
+		}
+		if !constraints.SnapshotRuntime.WorkerRestores(worker.GetStatus()) {
+			refused = true
+			continue
+		}
+		restores = true
+		if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
 			continue
 		}
 		booking, ok := Booking(worker, constraints)
@@ -141,6 +160,9 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	}
 
 	if len(candidates) == 0 {
+		if refused && !restores {
+			return nil, ErrNoRestoringWorker
+		}
 		return nil, ErrNoCapacity
 	}
 	if len(candidates) == 1 {
@@ -233,6 +255,13 @@ func Registered(worker *ateapi.Worker) bool {
 }
 
 func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool {
+	return s.appliesBase(worker, constraints) &&
+		constraints.SnapshotRuntime.WorkerRestores(worker.GetStatus()) &&
+		constraints.RequiredRuntime.WorkerMatches(worker.GetStatus())
+}
+
+// appliesBase is Applies without the runtime constraints.
+func (s *scheduler) appliesBase(worker *ateapi.Worker, constraints Constraints) bool {
 	if !Registered(worker) {
 		return false
 	}
@@ -246,10 +275,6 @@ func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool
 	}
 
 	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, worker.GetNodeName()) {
-		return false
-	}
-
-	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
 		return false
 	}
 

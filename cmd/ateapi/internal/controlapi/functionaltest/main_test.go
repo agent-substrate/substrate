@@ -128,6 +128,9 @@ type FakeAteletServer struct {
 	KeepCheckpointLocal bool
 	// checkpointed is each actor's last checkpointed snapshot, by UID.
 	checkpointed map[string]*ateletpb.Snapshot
+	// runtimes is the runtime each actor's last Run or Restore named, by
+	// UID, which Checkpoint reports as the snapshot's stamp.
+	runtimes map[string]*ateletpb.ActorSandboxRuntime
 
 	RestoreCalled  bool
 	RestoreRequest *ateletpb.RestoreRequest
@@ -263,6 +266,7 @@ func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*
 	if f.FailRun != nil {
 		return nil, f.FailRun
 	}
+	f.recordRuntime(req.GetActorUid(), req.GetSandboxRuntime())
 
 	// The worker process every test Worker registers, see reportWorkerCapacity.
 	return &ateletpb.RunResponse{WorkerEpoch: reportedEpoch}, nil
@@ -289,15 +293,32 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 			return nil, err
 		}
 	}
+	snap := proto.CloneOf(req.GetSnapshot())
+	snap.SandboxRuntime = proto.CloneOf(f.runtimes[req.GetActorUid()])
+	report := &ateletpb.SnapshotReport{Snapshot: snap}
+	immediate := req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
 	if f.KeepCheckpointLocal {
-		report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
 		state := &ateletpb.ActorSnapshotState{LatestLocal: report}
-		if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+		if immediate {
 			state.LatestDurable = proto.CloneOf(report)
 		}
 		return &ateletpb.CheckpointResponse{State: state}, nil
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	// Reported as atelet does without a local copy kept: durable after an
+	// immediate upload, local until a deferred one.
+	if immediate {
+		return &ateletpb.CheckpointResponse{State: &ateletpb.ActorSnapshotState{LatestDurable: report}}, nil
+	}
+	return &ateletpb.CheckpointResponse{State: &ateletpb.ActorSnapshotState{LatestLocal: report}}, nil
+}
+
+// recordRuntime records rt as the runtime actor uid runs under. Call with
+// f.Lock held.
+func (f *FakeAteletServer) recordRuntime(uid string, rt *ateletpb.ActorSandboxRuntime) {
+	if f.runtimes == nil {
+		f.runtimes = map[string]*ateletpb.ActorSandboxRuntime{}
+	}
+	f.runtimes[uid] = proto.CloneOf(rt)
 }
 
 func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -312,6 +333,7 @@ func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreReq
 	if f.FailRestore != nil {
 		return nil, f.FailRestore
 	}
+	f.recordRuntime(req.GetActorUid(), req.GetSandboxRuntime())
 	if f.RestoreWorkerEpoch != nil {
 		return &ateletpb.RestoreResponse{WorkerEpoch: f.RestoreWorkerEpoch()}, nil
 	}

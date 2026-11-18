@@ -212,15 +212,11 @@ message VersionedSandboxCompat {
   // +k8s:maxLength=64
   string schema_version = 1;
 
-  // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
-  // hardware features after masking (e.g. "architecture", "cpu_features").
-  // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value (except
-  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
-  // subset of the worker's); keys only the worker has are ignored. Bump
-  // schema_version when a key's meaning changes or older snapshots must no
-  // longer match.
+  // Key-value compatibility attributes defined by this schema version. atelet
+  // writes the host attributes, such as "architecture", "cpu_features" and
+  // "sandbox_bundle_hash". The worker adds its own, whose keys start with
+  // "worker.". The control plane's VersionedSandboxCompat says how they are
+  // matched.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -232,6 +228,8 @@ message VersionedSandboxCompat {
 }
 
 // AttributeEntry is a single key-value compatibility attribute.
+//
+// +k8s:customValidation # no compatible_values entry for value itself
 message AttributeEntry {
   // Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
   //
@@ -244,6 +242,40 @@ message AttributeEntry {
   // +k8s:required
   // +k8s:maxLength=256
   string value = 2;
+
+  // Restore limits for when the other side has a different value for key.
+  // On a worker runtime the other side is the snapshot. On a snapshot it is
+  // the worker. A value of "" stands for the other side lacking key.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=value
+  repeated CompatibleValue compatible_values = 3;
+}
+
+// CompatibleValue mirrors the control plane's CompatibleValue.
+message CompatibleValue {
+  // The other side's value. "" stands for the other side lacking the key.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  string value = 1;
+
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=4 # keep this in sync with the CompatibleFidelity enum
+  CompatibleFidelity fidelity = 2;
+}
+
+// CompatibleFidelity mirrors the control plane's CompatibleFidelity.
+enum CompatibleFidelity {
+  COMPATIBLE_FIDELITY_UNSPECIFIED = 0;
+  COMPATIBLE_FIDELITY_NONE = 1;
+  COMPATIBLE_FIDELITY_VOLUMES = 2;
+  COMPATIBLE_FIDELITY_ROOTFS = 3;
+  COMPATIBLE_FIDELITY_MEMORY = 4;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 // WorkerResources is what a worker can supply. It mirrors the control plane's
@@ -1009,6 +1041,16 @@ message Snapshot {
   //
   // +k8s:required
   ObjectStorage object = 4;
+
+  // In SnapshotReport: the snapshot's stamp, which says what its guest needs
+  // from the worker that restores it. It is atelet's host attributes for the
+  // runtime the actor ran under, plus the snapshot_attributes the worker
+  // returned for the checkpoint, so each snapshot of an actor may carry a
+  // different one. atelet records it in the snapshot's manifest. Requests
+  // leave it unset.
+  //
+  // +k8s:optional
+  ActorSandboxRuntime sandbox_runtime = 5;
 }
 
 // SnapshotReport is a snapshot atelet holds or has uploaded, and when.
@@ -1135,6 +1177,7 @@ message CheckpointRequest {
   // workload.
   //
   // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(sandbox_runtime)=+k8s:forbidden # TODO: get rid of beta prefix
   Snapshot snapshot = 8;
 
   // When the snapshot becomes durable.
@@ -1200,6 +1243,7 @@ message RestoreRequest {
   // snapshot and detached the actor before its report of the upload landed.
   //
   // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(sandbox_runtime)=+k8s:forbidden # TODO: get rid of beta prefix
   Snapshot snapshot = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
@@ -1258,6 +1302,7 @@ message PromoteSnapshotRequest {
   // it is, or will be, uploaded.
   //
   // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(sandbox_runtime)=+k8s:forbidden # TODO: get rid of beta prefix
   Snapshot snapshot = 6;
 }
 

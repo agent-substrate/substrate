@@ -138,20 +138,15 @@ func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 			ctx := context.Background()
 			st := newTestPersistence(t)
 			seedSuspendTemplate(t, ctx, st, &ateapi.SnapshotConfig{PreferredFidelity: tc.preferred})
-			w, _ := newWireCaptureWorkflow(t, st)
+			w, atelet := newWireCaptureWorkflow(t, st)
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
-			wantRuntime := &ateapi.ActorSandboxRuntime{
-				SandboxClass: "gvisor",
-				Version: &ateapi.VersionedSandboxCompat{
-					SchemaVersion: "v1",
-					Attributes: []*ateapi.AttributeEntry{
-						{Key: "architecture", Value: "amd64"},
-					},
-				},
-			}
+			// The snapshot is stamped with what atelet's Checkpoint returns,
+			// which differs from the assignment's runtime here.
+			wantRuntime := testRuntime("amd64", "checkpointed")
+			atelet.checkpointStamp = toAteletSandboxRuntime(wantRuntime)
 			assignment := wireTestAssignment()
-			assignment.SandboxRuntime = wantRuntime
+			assignment.SandboxRuntime = testSandboxRuntime()
 			created := storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),

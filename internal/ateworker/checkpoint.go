@@ -44,10 +44,11 @@ const checkpointDoneFile = ".checkpoint-done.json"
 type checkpointRecord struct {
 	// BootID is the node's boot ID when the checkpoint finished. The worker
 	// does not sync the snapshot files, so after a reboot they may be torn.
-	BootID            string                       `json:"boot_id"`
-	Fidelity          ateworkerpb.SnapshotFidelity `json:"fidelity"`
-	SnapshotFiles     []string                     `json:"snapshot_files,omitempty"`
-	DataSnapshotFiles []string                     `json:"data_snapshot_files,omitempty"`
+	BootID             string                        `json:"boot_id"`
+	Fidelity           ateworkerpb.SnapshotFidelity  `json:"fidelity"`
+	SnapshotFiles      []string                      `json:"snapshot_files,omitempty"`
+	DataSnapshotFiles  []string                      `json:"data_snapshot_files,omitempty"`
+	SnapshotAttributes []*ateworkerpb.AttributeEntry `json:"snapshot_attributes,omitempty"`
 }
 
 // RecordCheckpoint writes the completion marker into checkpointDir so a retry
@@ -55,10 +56,11 @@ type checkpointRecord struct {
 // finished CheckpointWorkloadResponse.
 func RecordCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.SnapshotFidelity, resp *ateworkerpb.CheckpointWorkloadResponse) error {
 	b, err := json.Marshal(checkpointRecord{
-		BootID:            bootID,
-		Fidelity:          fidelity,
-		SnapshotFiles:     resp.GetSnapshotFiles(),
-		DataSnapshotFiles: resp.GetDataSnapshotFiles(),
+		BootID:             bootID,
+		Fidelity:           fidelity,
+		SnapshotFiles:      resp.GetSnapshotFiles(),
+		DataSnapshotFiles:  resp.GetDataSnapshotFiles(),
+		SnapshotAttributes: resp.GetSnapshotAttributes(),
 	})
 	if err != nil {
 		return err
@@ -109,7 +111,8 @@ func ReuseCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.Snapshot
 		}
 	}
 	return &ateworkerpb.CheckpointWorkloadResponse{
-		SnapshotFiles:     rec.SnapshotFiles,
-		DataSnapshotFiles: rec.DataSnapshotFiles,
+		SnapshotFiles:      rec.SnapshotFiles,
+		DataSnapshotFiles:  rec.DataSnapshotFiles,
+		SnapshotAttributes: rec.SnapshotAttributes,
 	}
 }

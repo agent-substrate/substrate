@@ -154,7 +154,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 | `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview** (`GoldenEgressPolicy` gate). Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
-The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a microVM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-physical-capacity) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
+The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a microVM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-physical-capacity) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is recorded on the actor's assignment, and each snapshot is stamped with what its guest needs (`sandboxRuntime`: the sandbox class and compatibility attributes), so later resumes prefer workers that restore it in full.
 
 ### Golden Egress Policy (`goldenEgressPolicy`)
 
@@ -511,36 +511,45 @@ a `Snapshot` with the following fields:
   records the copy as `PENDING`, and atelet uploads it in the background. A
   tag's snapshot always has one, and the tag can seed actors only once it is
   `COMPLETED`.
-- `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
-  guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
-  when the checkpoint is taken. A resume that restores memory state
-  (`SNAPSHOT_FIDELITY_MEMORY`) first schedules onto
-  an eligible worker whose `status.sandboxClasses` entry for the snapshot's
-  `sandboxClass` has a `defaultRuntime` or `restorableRuntimes` entry whose
-  `version` is compatible with `sandboxRuntime.version` (same schema version, and every
-  attribute recorded on the snapshot present on the worker with the same
-  value, except `cpu_features`, whose hexadecimal bitmask on the snapshot must be
-  a bitwise subset of the worker's; attributes only the worker reports are
-  ignored). When no compatible worker has
-  capacity:
-  - A durable snapshot — the actor's own, a `sourceTag` clone, or the
-    template's golden snapshot a new actor starts from — falls back to any eligible
-    worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
-    the snapshot's rootfs and volume data while booting the guest fresh under the
-    `defaultRuntime` of that class on the new worker.
-  - A local checkpoint first tries compatible workers on its attached node.
-    If that fails, `ResumeActor` checks capacity without the node and runtime
-    restrictions. When that capacity exists, it detaches the checkpoint and
-    retries placement. Detach uploads it if needed, deletes the local files,
-    and releases the binding. The retry prefers compatible workers before
-    using the durable fallback above. A detach error leaves the actor attached,
-    unless its node was deleted. See [`ResumeActor`](#resumeactor) for that
-    case.
+- `sandboxRuntime`: The snapshot's stamp, recorded once the checkpoint
+  returns. atelet writes the host attributes of the runtime the guest ran
+  under, and the worker adds its own attributes for the snapshot, whose keys
+  start with `worker.`. Each snapshot carries its own, so two generations of
+  an actor may differ. Each `defaultRuntime` and `restorableRuntimes` entry in
+  a Worker's `status.sandboxClasses` carries attributes the same way. A worker
+  runtime restores a snapshot of its `sandboxClass` under the same schema
+  version at a fidelity decided by every key either side has:
+  - An equal value limits nothing. So does `cpu_features` when the
+    snapshot's hexadecimal bitmask is a bitwise subset of the worker's.
+  - A different value, or a key on one side only, limits the restore to the
+    lower of the `compatibleValues` fidelities each side gives for the other
+    side's value. `""` stands for a missing key. With neither, the restore
+    drops to `ROOTFS`.
+  - `COMPATIBLE_FIDELITY_NONE` means the worker cannot restore the snapshot.
 
-  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
-  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime-version placement constraint.
-  On gVisor, such a restore runs under the worker's default `runsc`, which may
-  not be the version that wrote its files (see the
+  The restore recovers at most the snapshot's fidelity, and only its volumes
+  under a replaced template. A resume first schedules onto an eligible worker
+  that restores all of that. When none has capacity:
+  - A durable snapshot — the actor's own, a `sourceTag` clone, or the
+    template's golden snapshot a new actor starts from — falls back to a
+    worker that restores less of it, the highest fidelity first. A restore
+    without memory state boots the guest fresh under the `defaultRuntime` of
+    that class on the new worker.
+  - A local checkpoint first tries workers on its attached node that restore
+    all of it. If that fails, `ResumeActor` checks capacity without the node
+    and runtime restrictions. When that capacity exists, it detaches the
+    checkpoint and retries placement. Detach uploads it if needed, deletes the
+    local files, and releases the binding. The retry prefers workers that
+    restore all of it before using the durable fallback above. A detach error
+    leaves the actor attached, unless its node was deleted. See
+    [`ResumeActor`](#resumeactor) for that case.
+
+  A resume never places an actor on a worker that cannot restore its
+  snapshot. When no eligible worker can, it fails with `FAILED_PRECONDITION`
+  and the actor stays `SUSPENDED`, as it does for a snapshot without
+  `sandboxRuntime`. On gVisor, a restore without
+  memory state runs under the worker's default `runsc`, which may not be the
+  version that wrote its files (see the
   [Version Skew Policy](version-skew-policy.md#sandboxconfig)). A snapshot that
   records a sandbox class always restores on a worker of that class. Because a
   `ROOTFS` restore reuses the container's rootfs upper layer over the template's

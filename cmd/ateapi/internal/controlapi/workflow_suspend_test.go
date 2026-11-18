@@ -155,9 +155,6 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	}
 	assignment := wireTestAssignment()
 	assignment.SandboxRuntime = wantRuntime
-	// Seed the assigned worker with a different current default_runtime to
-	// verify the snapshot is stamped from WorkerAssignment.sandbox_runtime
-	// rather than the worker's latest registration.
 	worker := seedRuntimeWorker(t, ctx, persistence, assignment.GetWorkerPod(), assignment.GetNodeName(), testRuntime("arm64", "v2-hash"))
 	assignment.Worker = &ateapi.ObjectRef{Name: worker.GetMetadata().GetName()}
 	assignment.WorkerPodUid = worker.GetWorkerPodUid()
@@ -187,8 +184,83 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	if uri.String() != want {
 		t.Errorf("snapshot URI = %q, want %q", uri, want)
 	}
-	if diff := cmp.Diff(wantRuntime, inProgressSnap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Errorf("Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
+	// The stamp comes from the checkpoint, not from the assignment, whose
+	// runtime carries the worker's rules.
+	if got := inProgressSnap.GetSandboxRuntime(); got != nil {
+		t.Errorf("Snapshot.SandboxRuntime = %v once marked, want none until the checkpoint returns a stamp", got)
+	}
+}
+
+// TestSuspendActor_CheckpointStamp verifies the snapshot is stamped with what
+// atelet's Checkpoint returns, not with the assignment's runtime, and that a
+// Checkpoint without a stamp fails the suspend and leaves it for a retry.
+func TestSuspendActor_CheckpointStamp(t *testing.T) {
+	// stamp differs from the assignment's runtime by a worker key, as a
+	// worker that restored an older guest shape stamps it.
+	assigned := testSandboxRuntime()
+	stamp := proto.CloneOf(assigned)
+	stamp.Version.Attributes = append(stamp.Version.Attributes, &ateapi.AttributeEntry{
+		Key: "worker.layout", Value: "per_volume",
+		CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}},
+	})
+	for _, mode := range suspendModes {
+		t.Run(mode.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			assignment := wireTestAssignment()
+			assignment.SandboxRuntime = assigned
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: suspendTestTemplateRef(),
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+					AssignedNode:     assignment.GetNodeName(),
+					WorkerAssignment: assignment,
+				},
+			})
+			seedWireWorker(t, ctx, persistence, assignmentOf(actor))
+
+			// An atelet that returns no stamp fails the suspend, which keeps the
+			// actor and its assignment for a retry.
+			atelet.mu.Lock()
+			atelet.checkpointStamp = nil
+			atelet.mu.Unlock()
+			_, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+			if got := apierror.Code(err); got != codes.Internal {
+				t.Fatalf("SuspendActor without a stamp = %v (code %v), want Internal", err, got)
+			}
+			st := mustReadActor(t, ctx, persistence, actorRef).GetStatus()
+			if st.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDING || st.GetCrash() != nil || st.GetWorkerAssignment() == nil {
+				t.Fatalf("after a Checkpoint without a stamp, actor = %v, want SUSPENDING with its assignment", st)
+			}
+			pending := snapshotAtLatestGeneration(st)
+			if pending.GetSandboxRuntime() != nil {
+				t.Errorf("Snapshot.SandboxRuntime = %v, want none", pending.GetSandboxRuntime())
+			}
+
+			// The retry re-sends the same snapshot, and atelet answers it from
+			// the committed snapshot with its stamp.
+			atelet.mu.Lock()
+			atelet.checkpointStamp = toAteletSandboxRuntime(stamp)
+			atelet.mu.Unlock()
+			finished, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+			if err != nil {
+				t.Fatalf("SuspendActor retry: %v", err)
+			}
+			if got := atelet.checkpointRequest().GetSnapshot().GetSnapshotUuid(); got != pending.GetUuid() {
+				t.Errorf("retried Checkpoint names snapshot %q, want %q", got, pending.GetUuid())
+			}
+			latest := snapshotAtLatestGeneration(finished.GetStatus())
+			if latest.GetUuid() != pending.GetUuid() {
+				t.Fatalf("retry finalized snapshot %v, want %v", latest, pending)
+			}
+			if diff := cmp.Diff(stamp, latest.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Errorf("Snapshot.SandboxRuntime mismatch, want atelet's stamp (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -647,12 +719,20 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 					newDurableSnapshot(3, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", pausing.Name(), pausing.String(), pending),
 				}
 			})
-			atelet.checkpointState = &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
-				SnapshotUuid: "snap-2",
-				Generation:   2,
-				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-				Object:       &ateletpb.ObjectStorage{SnapshotUri: paused.String()},
-			}}}
+			atelet.checkpointState = &ateletpb.ActorSnapshotState{
+				LatestLocal: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+					SnapshotUuid: "snap-3",
+					Generation:   3,
+					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:       &ateletpb.ObjectStorage{SnapshotUri: pausing.String()},
+				}},
+				LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+					SnapshotUuid: "snap-2",
+					Generation:   2,
+					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:       &ateletpb.ObjectStorage{SnapshotUri: paused.String()},
+				}},
+			}
 
 			stored, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 			if err != nil {
@@ -713,7 +793,7 @@ func TestSnapshotLocationChange_LeavesNothingBehind(t *testing.T) {
 		}
 	})
 
-	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, suspendSync, nil)
+	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, suspendSync, nil, nil)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -1598,14 +1678,20 @@ func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 			return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()}}
 		},
 	}, {
+		// atelet reports the snapshot it took durable, and a local copy of
+		// another one, which keeps the actor off its node.
 		name: "uuid mismatch",
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
-			return localReport(variant(req, func(snap *ateletpb.Snapshot) { snap.SnapshotUuid = "another-snapshot" }))
+			st := localReport(variant(req, func(snap *ateletpb.Snapshot) { snap.SnapshotUuid = "another-snapshot" }))
+			st.LatestDurable = &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()}
+			return st
 		},
 	}, {
 		name: "generation mismatch",
 		state: func(req *ateletpb.CheckpointRequest) *ateletpb.ActorSnapshotState {
-			return localReport(variant(req, func(snap *ateletpb.Snapshot) { snap.Generation = req.GetSnapshot().GetGeneration() - 1 }))
+			st := localReport(variant(req, func(snap *ateletpb.Snapshot) { snap.Generation = req.GetSnapshot().GetGeneration() - 1 }))
+			st.LatestDurable = &ateletpb.SnapshotReport{Snapshot: req.GetSnapshot()}
+			return st
 		},
 	}, {
 		name: "uri mismatch",

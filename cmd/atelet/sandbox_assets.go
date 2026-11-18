@@ -106,6 +106,12 @@ type sandboxAssetsRecord struct {
 	// is knowable from the manifest alone. Empty in the on-node record written at
 	// Run/Restore.
 	Fidelity string `json:"fidelity,omitempty"`
+	// SandboxRuntime is the runtime the actor ran under. In the on-node
+	// record written at Run/Restore, it is the host attributes of the runtime
+	// the request named. In the snapshot manifest, it is the snapshot's stamp:
+	// those plus the worker's attributes for the checkpoint. Empty in a record
+	// or manifest an earlier release wrote.
+	SandboxRuntime *recordedRuntime `json:"sandboxRuntime,omitempty"`
 	// BootID is the node's boot ID when atelet wrote this local copy of the
 	// snapshot. Not every file of a local copy is synced to disk, so one
 	// written before the node last rebooted may be torn and is deleted on

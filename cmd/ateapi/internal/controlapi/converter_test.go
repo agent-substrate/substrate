@@ -147,3 +147,26 @@ func TestSnapshotReportFromAtelet(t *testing.T) {
 		})
 	}
 }
+
+// TestCompatibleFidelityToAtelet verifies each restore fidelity above NONE maps
+// to atelet's level, and anything else to UNSPECIFIED.
+func TestCompatibleFidelityToAtelet(t *testing.T) {
+	tests := []struct {
+		name string
+		in   ateapi.CompatibleFidelity
+		want ateletpb.SnapshotFidelity
+	}{
+		{"memory", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"rootfs", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_ROOTFS, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+		{"volumes", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"none", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{"unspecified", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_UNSPECIFIED, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compatibleFidelityToAtelet(tt.in); got != tt.want {
+				t.Errorf("compatibleFidelityToAtelet(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
