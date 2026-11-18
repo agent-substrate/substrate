@@ -14,24 +14,21 @@
 
 -- +goose Up
 
--- tag_name and tag_uid are set for snapshots a tag owns, and NULL for
--- snapshots with another origin. A tag cannot be deleted while it owns
--- snapshots.
+-- Every snapshot is owned by the tag in tag_name and tag_uid. A tag cannot
+-- be deleted while it owns snapshots.
 CREATE TABLE external_volume_snapshots (
     atespace  text NOT NULL,
     name      text NOT NULL,
     uid       text NOT NULL,
     version   bigint NOT NULL,
-    tag_name  text,
-    tag_uid   text,
+    tag_name  text NOT NULL,
+    tag_uid   text NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name),
     CONSTRAINT external_volume_snapshots_atespace_fk
         FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT,
     CONSTRAINT external_volume_snapshots_tag_fk
-        FOREIGN KEY (atespace, tag_name) REFERENCES tags(atespace, name) ON DELETE RESTRICT,
-    CONSTRAINT external_volume_snapshots_tag_check
-        CHECK ((tag_name IS NULL) = (tag_uid IS NULL))
+        FOREIGN KEY (atespace, tag_name) REFERENCES tags(atespace, name) ON DELETE RESTRICT
 );
 
 -- Finds a tag's snapshots, and backs the check that a deleted tag owns none.

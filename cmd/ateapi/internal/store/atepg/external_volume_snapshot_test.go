@@ -154,24 +154,6 @@ func TestUpdateExternalVolumeSnapshot_DeletedDuringUpdate(t *testing.T) {
 	}
 }
 
-// TestDeleteAtespace_BlockedBySnapshotWithoutTag checks the atespace foreign
-// key on its own. The store only creates snapshots that a tag owns, and a tag
-// that owns snapshots blocks the atespace first, so the row is written
-// directly, with the NULL tag columns the schema allows for other origins.
-func TestDeleteAtespace_BlockedBySnapshotWithoutTag(t *testing.T) {
-	s := setupPostgresPersistence(t)
-	ctx := t.Context()
-	createTestAtespace(t, s, "team-a")
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO external_volume_snapshots (atespace, name, uid, version, proto)
-		VALUES ('team-a', 'snap', '7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f', 1, '')`); err != nil {
-		t.Fatalf("inserting a snapshot without a tag: %v", err)
-	}
-	if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
-		t.Errorf("DeleteAtespace with a snapshot = %v, want ErrFailedPrecondition", err)
-	}
-}
-
 // TestMarkTagForDeletion_SnapshotCreatedConcurrently records a snapshot for the
 // tag in a transaction that holds the tag FOR SHARE, as
 // CreateExternalVolumeSnapshot does, and commits only once marking the tag

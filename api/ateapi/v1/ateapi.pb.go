@@ -2746,8 +2746,6 @@ func (x *ExternalVolumeSnapshot) GetStatus() *ExternalVolumeSnapshotStatus {
 
 // ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot came to
 // exist. Exactly one member is set.
-//
-// (-- An imported member, for snapshots a user registers, is planned. --)
 type ExternalVolumeSnapshotOrigin struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// tag_capture is set by the server when a tag captured the snapshot. The

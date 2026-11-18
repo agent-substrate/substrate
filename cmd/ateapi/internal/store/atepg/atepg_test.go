@@ -30,7 +30,7 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	createTestActorTemplate(t, s, "team-a", "t1")
-	createTestTag(t, s, "team-a", "v1")
+	tag := createTestTag(t, s, "team-a", "v1")
 	if _, err := s.CreateActor(ctx, &ateapi.Actor{
 		Metadata: &ateapi.ResourceMetadata{Name: "a1", Atespace: "team-a"},
 		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
@@ -57,8 +57,8 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 		t.Fatalf("inserting assignment: %v", err)
 	}
 	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO external_volume_snapshots (atespace, name, uid, version, proto)
-		VALUES ('team-a', 'snap', 'uid-2', 1, $1)`, bad); err != nil {
+		INSERT INTO external_volume_snapshots (atespace, name, uid, version, tag_name, tag_uid, proto)
+		VALUES ('team-a', 'snap', 'uid-2', 1, 'v1', $2, $1)`, bad, tag.GetMetadata().GetUid()); err != nil {
 		t.Fatalf("inserting external volume snapshot: %v", err)
 	}
 
