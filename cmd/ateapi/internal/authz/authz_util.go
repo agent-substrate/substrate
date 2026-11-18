@@ -80,6 +80,8 @@ const (
 	RelationCanUseTag               = "can_use_tag"
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
 
+	RelationCanListExternalVolumeSnapshots = "can_list_external_volume_snapshots"
+
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
 )
@@ -141,6 +143,12 @@ func ActorTemplateObject(atespace, name string) string {
 // TagObject formats a tag as an OpenFGA object string.
 func TagObject(atespace, name string) string {
 	return "tag:" + atespacedID(atespace, name)
+}
+
+// ExternalVolumeSnapshotObject formats an external volume snapshot as an
+// OpenFGA object string.
+func ExternalVolumeSnapshotObject(atespace, name string) string {
+	return "external_volume_snapshot:" + atespacedID(atespace, name)
 }
 
 // atespacedID formats the object ID of an atespaced resource as

@@ -28,10 +28,10 @@ import (
 )
 
 // createTestTag creates tagName over its own copy of an actor's
-// external snapshot, already finalized.
-func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *ateapi.Tag {
+// external snapshot, already finalized, with opts applied.
+func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string, opts ...func(*ateapi.Tag)) *ateapi.Tag {
 	t.Helper()
-	tag, err := s.CreateTag(context.Background(), &ateapi.Tag{
+	input := &ateapi.Tag{
 		Metadata: &ateapi.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
 		Scope:    ateapi.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapi.TagStatus{
@@ -45,7 +45,11 @@ func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *a
 				},
 			},
 		},
-	})
+	}
+	for _, opt := range opts {
+		opt(input)
+	}
+	tag, err := s.CreateTag(context.Background(), input)
 	if err != nil {
 		t.Fatalf("CreateTag(%s/%s) failed: %v", tagAtespace, tagName, err)
 	}
@@ -96,5 +100,29 @@ func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	})
 	if !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)
+	}
+}
+
+// TestDeleteTag_UnknownForeignKey checks that DeleteTag reports a foreign key
+// other than external_volume_snapshots_tag_fk as an error of its own, even
+// when its name starts with that one.
+func TestDeleteTag_UnknownForeignKey(t *testing.T) {
+	pool := migratedPool(t, "unknown-tag-fk")
+	s, err := NewPersistence(t.Context(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-a', 'u1', 1, '');
+		INSERT INTO tags (atespace, name, uid, version, proto) VALUES ('team-a', 'v1', 'u2', 1, '');
+		CREATE TABLE tag_refs (atespace text, tag_name text,
+			CONSTRAINT external_volume_snapshots_tag_fkey FOREIGN KEY (atespace, tag_name) REFERENCES tags(atespace, name));
+		INSERT INTO tag_refs VALUES ('team-a', 'v1')`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.DeleteTag(t.Context(), resources.TagRef{Atespace: "team-a", Name: "v1"}, store.DeletePreconditions{})
+	if err == nil || errors.Is(err, store.ErrFailedPrecondition) {
+		t.Errorf("DeleteTag = %v, want an error other than ErrFailedPrecondition", err)
 	}
 }

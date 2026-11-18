@@ -121,7 +121,7 @@ one **atespace**.
 | Delete the atespace | ✅ | | ✅ | | |
 | Get access policies | ✅ | ✅ | ✅ (its own) | ✅ (its own) | ✅ (its own) |
 | Create, update, delete access policies | ✅ | | ✅ (its own) | | |
-| Get and list actors, actor templates, tags, egress policies | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Get and list actors, actor templates, tags, external volume snapshots, egress policies | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Create, update, delete actors and actor templates | ✅ | | ✅ | ✅ | |
 | Resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
 | Create, update, delete egress policies | ✅ | | ✅ | ✅ | |
@@ -201,6 +201,15 @@ viewer, and a global role holds the same role in every atespace. So
 | `UpdateTag` (including publishing) | `can_update`, the tag | Editor of its atespace |
 | `DeleteTag` | `can_delete`, the tag | Editor of its atespace |
 | `ListTags` | `can_list_tags`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
+
+### External volume snapshots
+
+The API only reads external volume snapshots.
+
+| RPC | Permission, on | Allowed for |
+|---|---|---|
+| `GetExternalVolumeSnapshot` | `can_get`, the snapshot | Viewer of its atespace |
+| `ListExternalVolumeSnapshots` | `can_list_external_volume_snapshots`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
 
 ### Workers
 

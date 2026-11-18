@@ -30,7 +30,7 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	createTestActorTemplate(t, s, "team-a", "t1")
-	createTestTag(t, s, "team-a", "v1")
+	tag := createTestTag(t, s, "team-a", "v1")
 	if _, err := s.CreateActor(ctx, &ateapi.Actor{
 		Metadata: &ateapi.ResourceMetadata{Name: "a1", Atespace: "team-a"},
 		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
@@ -56,6 +56,11 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `INSERT INTO worker_assignments (actor_uid, worker_name, proto) VALUES ('uid-1', 'w1', $1)`, bad); err != nil {
 		t.Fatalf("inserting assignment: %v", err)
 	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO external_volume_snapshots (atespace, name, uid, version, tag_name, tag_uid, proto)
+		VALUES ('team-a', 'snap', 'uid-2', 1, 'v1', $2, $1)`, bad, tag.GetMetadata().GetUid()); err != nil {
+		t.Fatalf("inserting external volume snapshot: %v", err)
+	}
 
 	opts := store.ListOptions{PageSize: 10}
 	tests := []struct {
@@ -70,6 +75,8 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 		{"actor templates, all atespaces", func() error { _, err := s.ListActorTemplates(ctx, "", opts); return err }, "actor template team-a/t1"},
 		{"tags", func() error { _, err := s.ListTags(ctx, "team-a", opts); return err }, "tag team-a/v1"},
 		{"tags, all atespaces", func() error { _, err := s.ListTags(ctx, "", opts); return err }, "tag team-a/v1"},
+		{"external volume snapshots", func() error { _, err := s.ListExternalVolumeSnapshots(ctx, "team-a", opts); return err }, "external volume snapshot team-a/snap"},
+		{"external volume snapshots, all atespaces", func() error { _, err := s.ListExternalVolumeSnapshots(ctx, "", opts); return err }, "external volume snapshot team-a/snap"},
 		{"workers", func() error { _, err := s.ListWorkers(ctx, opts); return err }, "worker w1"},
 		{"worker assignments", func() error { _, err := s.ListWorkerAssignments(ctx, "w1", opts); return err }, "actor uid-1"},
 	}

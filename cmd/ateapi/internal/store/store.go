@@ -171,13 +171,43 @@ type Interface interface {
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the tag's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
-	// write wins, or mutate's error.
+	// write wins, ErrFailedPrecondition, leaving the tag unchanged, if the tag
+	// owns ExternalVolumeSnapshots, even when it is already marked, or mutate's
+	// error. The snapshot check runs before mutate.
 	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
-	// Deletes and returns a tag. Returns ErrNotFound if missing, or
+	// Deletes and returns a tag. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
-	// tag the caller observed.
+	// tag the caller observed, or ErrFailedPrecondition if the tag still owns
+	// ExternalVolumeSnapshots.
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapi.Tag, error)
+
+	// CreateExternalVolumeSnapshot stores a new snapshot and returns it with
+	// server-assigned metadata. The input is not mutated.
+	//
+	// Returns ErrAlreadyExists if the name is taken, or ErrFailedPrecondition
+	// if origin.tag_capture.tag does not name a stored tag with
+	// origin.tag_capture.tag_uid, or names one that is being deleted or has no
+	// PENDING durable snapshot.
+	CreateExternalVolumeSnapshot(ctx context.Context, snapshot *ateapi.ExternalVolumeSnapshot) (*ateapi.ExternalVolumeSnapshot, error)
+
+	// Fetches a snapshot by reference. Returns ErrNotFound if missing.
+	GetExternalVolumeSnapshot(ctx context.Context, snapshotRef resources.ExternalVolumeSnapshotRef) (*ateapi.ExternalVolumeSnapshot, error)
+
+	// Lists snapshots in one atespace, or all atespaces when empty.
+	ListExternalVolumeSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapi.ExternalVolumeSnapshot], error)
+
+	// UpdateExternalVolumeSnapshot performs a read-modify-write on the
+	// snapshot as UpdateTag does.
+	//
+	// Returns ErrPreconditionRequired if the precondition omits either guard,
+	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
+	// precondition no longer holds or the snapshot changed between the read
+	// and the write, or mutate's error with nothing written. Changing
+	// metadata.atespace, metadata.name, driver_name or origin returns
+	// ErrImmutableField; edits to the other metadata fields are discarded.
+	// The store does not validate status.
+	UpdateExternalVolumeSnapshot(ctx context.Context, snapshotRef resources.ExternalVolumeSnapshotRef, precondition Precondition, mutate func(toUpdate *ateapi.ExternalVolumeSnapshot) error) (*ateapi.ExternalVolumeSnapshot, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
