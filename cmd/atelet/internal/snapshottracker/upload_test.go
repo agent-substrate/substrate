@@ -99,10 +99,10 @@ func TestTrackerUploadsLatestLocalSnapshot(t *testing.T) {
 }
 
 // A deferred checkpoint during an older snapshot's upload keeps that snapshot
-// until the upload ends: LocalSnapshotsToKeep names it beside the new one. The
-// upload's end deletes it and schedules the new snapshot's upload, which the
-// older upload does not cover, an upload delay after the older upload
-// succeeded.
+// until the upload ends: localSnapshotsKept names it beside the new one. The
+// upload's end lets a prune delete it, and schedules the new snapshot's
+// upload, which the older upload does not cover, an upload delay after the
+// older upload succeeded.
 func TestTrackerCheckpointDuringUpload(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
@@ -117,8 +117,8 @@ func TestTrackerCheckpointDuringUpload(t *testing.T) {
 	done := startUpload(t, tr, store)
 
 	st := tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s2", "s1"}) {
-		t.Errorf("LocalSnapshotsToKeep = %v, want [s2 s1]: s1 is being uploaded", keep)
+	if keep := localSnapshotsKept(tr); !slices.Equal(keep, []string{"s2", "s1"}) {
+		t.Errorf("localSnapshotsKept = %v, want [s2 s1]: s1 is being uploaded", keep)
 	}
 	if got := uuidOf(st.GetUploading()); got != "s1" {
 		t.Errorf("uploading = %q, want s1", got)
@@ -130,9 +130,10 @@ func TestTrackerCheckpointDuringUpload(t *testing.T) {
 	stepTo(tr, tr.clock.Now().Add(10*time.Minute))
 	store.release <- nil
 	waitClosed(t, done, "the upload of s1")
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
-		t.Errorf("s1 after its upload: stat = %v, want it deleted", err)
-	}
+	eventually(t, "s1 is pruned once its upload ended", func() bool {
+		_, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"))
+		return os.IsNotExist(err)
+	})
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s2")); err != nil {
 		t.Errorf("s2 after the upload of s1: %v, want it kept", err)
 	}
@@ -152,8 +153,8 @@ func TestTrackerCheckpointDuringUpload(t *testing.T) {
 
 // An immediate checkpoint makes the actor's newest snapshot durable, drops the
 // older local snapshot, cancels any older upload in progress, and waits for it
-// to stop before returning. The upload then deletes the older snapshot's local
-// copy, though the checkpoint holds the actor.
+// to stop before returning. A prune deletes the older snapshot's local copy
+// once the checkpoint ends.
 func TestTrackerImmediateCheckpointDuringUpload(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -204,20 +205,22 @@ func TestTrackerImmediateCheckpointDuringUpload(t *testing.T) {
 			if st.GetLatestLocal() != nil || st.GetUploadDueTime() != nil || st.GetUploading() != nil {
 				t.Errorf("state = %v, want nothing local, due, or uploading", st)
 			}
-			if keep := tr.LocalSnapshotsToKeep(trackedActorUID); len(keep) != 0 {
-				t.Errorf("LocalSnapshotsToKeep = %v, want none", keep)
+			if keep := localSnapshotsKept(tr); len(keep) != 0 {
+				t.Errorf("localSnapshotsKept = %v, want none", keep)
 			}
 			if got := st.GetLatestDurable(); uuidOf(got) != "s2" || !timeOf(got.GetDurableCompleteTime()).Equal(s2.UploadTime) {
 				t.Errorf("latest_durable = %v, want s2 uploaded at %v", got, s2.UploadTime)
 			}
-			if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
-				t.Errorf("s1 once CommitDurable returned: stat = %v, want it deleted", err)
+			if got := pruneList(); !slices.Equal(got, []string{"s1"}) {
+				t.Errorf("state file lists %v to prune once CommitDurable returned, want [s1]", got)
 			}
 			tr.CommitLocal(trackedActorUID, testRef("s2", 2, s2.CommitTime))
 			endCheckpoint()
-			if inMemory(tr) {
-				t.Error("entry stayed in memory after the checkpoint ended, want it dropped")
-			}
+			eventually(t, "s1 is pruned once the checkpoint ended", func() bool {
+				_, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"))
+				return os.IsNotExist(err)
+			})
+			eventually(t, "the entry is dropped once the prune ended", func() bool { return !inMemory(tr) })
 
 			// The next deferred checkpoint is due a full delay after it was taken.
 			s3Time := tr.clock.Now()
@@ -230,8 +233,8 @@ func TestTrackerImmediateCheckpointDuringUpload(t *testing.T) {
 }
 
 // CommitPromoted cancels an older snapshot's upload in progress and waits for
-// it to stop before returning. The upload deletes the older snapshot's local
-// copy before CommitPromoted returns, though the promote holds the actor.
+// it to stop before returning. A prune deletes the older snapshot's local copy
+// once the promote ends.
 func TestTrackerCommitPromotedCancelsOlderUpload(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
@@ -251,7 +254,6 @@ func TestTrackerCommitPromotedCancelsOlderUpload(t *testing.T) {
 	if err != nil || alreadyDurable {
 		t.Fatalf("BeginPromote = (%v, %v), want (false, nil)", alreadyDurable, err)
 	}
-	defer endPromote()
 	s2.UploadTime = s2.CommitTime.Add(time.Second)
 
 	stateCh := make(chan *ateletpb.ActorSnapshotState, 1)
@@ -277,9 +279,14 @@ func TestTrackerCommitPromotedCancelsOlderUpload(t *testing.T) {
 	if uuidOf(st.GetLatestDurable()) != "s2" || uuidOf(st.GetLatestLocal()) != "s2" || st.GetUploading() != nil || st.GetUploadDueTime() != nil {
 		t.Errorf("state = %v, want s2 durable and local with nothing uploading or due", st)
 	}
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
-		t.Errorf("s1 once CommitPromoted returned: stat = %v, want it deleted", err)
+	if got := pruneList(); !slices.Equal(got, []string{"s1"}) {
+		t.Errorf("state file lists %v to prune once CommitPromoted returned, want [s1]", got)
 	}
+	endPromote()
+	eventually(t, "s1 is pruned once the promote ended", func() bool {
+		_, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"))
+		return os.IsNotExist(err)
+	})
 }
 
 // A failed background upload is retried once the retry delay has passed, and
@@ -376,8 +383,8 @@ func TestTrackerForgetCancelsUpload(t *testing.T) {
 	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
 		t.Errorf("state file after Forget: stat = %v, want none", err)
 	}
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
-		t.Errorf("s1 after Forget: stat = %v, want the canceled upload to delete it", err)
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); err != nil {
+		t.Errorf("s1 after Forget: stat = %v, want it left for Terminate to delete with the actor's directory", err)
 	}
 	if got, want := recordedErrorTypes(t, reader), []string{codes.Canceled.String()}; !slices.Equal(got, want) {
 		t.Errorf("recorded upload error types = %v, want %v", got, want)
@@ -567,7 +574,7 @@ func TestTrackerStartKeepsUploadBackoff(t *testing.T) {
 	uploadNow(t, tr, store, errors.New("boom"))
 	retryAt := tr.clock.Now().Add(testRetryDelay)
 
-	end, err := tr.BeginStart(t.Context(), trackedActorUID)
+	_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 	if err != nil {
 		t.Fatalf("BeginStart: %v", err)
 	}
@@ -602,7 +609,10 @@ func TestTrackerStartAndCheckpointDoNotWaitForUpload(t *testing.T) {
 		name  string
 		begin func(context.Context, string) (func(), error)
 	}{
-		{"BeginStart", tr.BeginStart},
+		{"BeginStart", func(ctx context.Context, uid string) (func(), error) {
+			_, end, err := tr.BeginStart(ctx, uid, "")
+			return end, err
+		}},
 		{"BeginCheckpoint deferred", beginCheckpoint(ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)},
 		{"BeginCheckpoint immediate", beginCheckpoint(ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)},
 	} {
@@ -822,8 +832,8 @@ func TestTrackerRetriesUploadingWhenLatestLocalHasNoObject(t *testing.T) {
 	s2 := testRef("s2", 2, tr.clock.Now())
 	s2.Snapshot.Object = nil
 	tr.CommitLocal(trackedActorUID, s2)
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s2", "s1"}) {
-		t.Errorf("LocalSnapshotsToKeep during upload = %v, want [s2 s1]", keep)
+	if keep := localSnapshotsKept(tr); !slices.Equal(keep, []string{"s2", "s1"}) {
+		t.Errorf("localSnapshotsKept during upload = %v, want [s2 s1]", keep)
 	}
 
 	store.release <- errors.New("boom")
@@ -842,8 +852,8 @@ func TestTrackerRetriesUploadingWhenLatestLocalHasNoObject(t *testing.T) {
 	s3 := testRef("s3", 3, tr.clock.Now())
 	s3.Snapshot.Object = nil
 	st = tr.CommitLocal(trackedActorUID, s3)
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s3", "s1"}) {
-		t.Errorf("LocalSnapshotsToKeep during backoff = %v, want [s3 s1]", keep)
+	if keep := localSnapshotsKept(tr); !slices.Equal(keep, []string{"s3", "s1"}) {
+		t.Errorf("localSnapshotsKept during backoff = %v, want [s3 s1]", keep)
 	}
 	if uuidOf(st.GetUploading()) != "s1" || !timeOf(st.GetUploadDueTime()).Equal(retryAt) {
 		t.Errorf("state after s3 = %v, want s1 still uploading and due at %v", st, retryAt)
@@ -853,9 +863,10 @@ func TestTrackerRetriesUploadingWhenLatestLocalHasNoObject(t *testing.T) {
 	if got, want := store.uploads(), []string{"s1", "s1"}; !slices.Equal(got, want) {
 		t.Errorf("uploads = %v, want %v", got, want)
 	}
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
-		t.Errorf("s1 after retry succeeded: stat = %v, want it deleted", err)
-	}
+	eventually(t, "s1 is pruned once its retry succeeded", func() bool {
+		_, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"))
+		return os.IsNotExist(err)
+	})
 	st = tr.State(trackedActorUID)
 	if uuidOf(st.GetLatestDurable()) != "s1" || uuidOf(st.GetLatestLocal()) != "s3" || st.GetUploading() != nil || st.GetUploadDueTime() != nil {
 		t.Errorf("state after retry = %v, want s1 durable, s3 local, and no upload left", st)
@@ -912,6 +923,9 @@ func TestTrackerClearsIdleUploadingWhenSuperseded(t *testing.T) {
 			if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
 				t.Errorf("state file after %s = %+v, want Uploading cleared", tc.name, rec)
 			}
+			if !tc.keepS1 {
+				processNextPrune(t, tr) // s1 was listed when s2 superseded it
+			}
 			_, err := os.Stat(s1Dir)
 			switch {
 			case tc.keepS1 && err != nil:
@@ -942,8 +956,8 @@ func TestTrackerCommitLocalDropsFailedUploading(t *testing.T) {
 	if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
 		t.Errorf("state file after CommitLocal(s2) = %+v, want Uploading cleared", rec)
 	}
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s2"}) {
-		t.Errorf("LocalSnapshotsToKeep = %v, want [s2]", keep)
+	if keep := localSnapshotsKept(tr); !slices.Equal(keep, []string{"s2"}) {
+		t.Errorf("localSnapshotsKept = %v, want [s2]", keep)
 	}
 
 	store2 := newFakeSnapshotStore()
@@ -954,9 +968,9 @@ func TestTrackerCommitLocalDropsFailedUploading(t *testing.T) {
 	}
 }
 
-// A superseded local copy stays on disk while a Run or Restore of the actor is
-// in progress, since a Restore may be reading it in place. It is left for the
-// actor's next checkpoint to prune.
+// A superseded local copy stays on disk while a Run, Restore, Checkpoint, or
+// PromoteSnapshot of the actor is in progress, since a Restore may be reading
+// it in place. It is listed for a prune, which runs once the RPC ends.
 func TestTrackerKeepsSupersededCopyWhileHeld(t *testing.T) {
 	t.Run("upload ends", func(t *testing.T) {
 		store := newFakeSnapshotStore()
@@ -970,19 +984,20 @@ func TestTrackerKeepsSupersededCopyWhileHeld(t *testing.T) {
 		done := startUpload(t, tr, store)
 		tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 
-		end, err := tr.BeginStart(t.Context(), trackedActorUID)
+		_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 		if err != nil {
 			t.Fatalf("BeginStart: %v", err)
 		}
 		store.release <- nil
 		waitClosed(t, done, "the upload of s1")
-		end()
 		if _, err := os.Stat(s1Dir); err != nil {
 			t.Errorf("s1 after its upload ended during a Restore: stat = %v, want it kept", err)
 		}
-		if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s2"}) {
-			t.Errorf("LocalSnapshotsToKeep = %v, want [s2], so the next checkpoint prunes s1", keep)
+		if got := readSnapshotState(trackedActorUID).Prune; !slices.Equal(got, []string{"s1"}) {
+			t.Errorf("state file lists %v to prune, want [s1]", got)
 		}
+		end()
+		eventually(t, "s1 is pruned once the Restore ends", func() bool { _, err := os.Stat(s1Dir); return err != nil })
 	})
 
 	t.Run("worker clears a superseded Uploading", func(t *testing.T) {
@@ -998,26 +1013,26 @@ func TestTrackerKeepsSupersededCopyWhileHeld(t *testing.T) {
 		processNext(t, tr, opUpload) // s1's upload fails, and s1 waits in Uploading to retry.
 		tr.CommitDurable(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 
-		end, err := tr.BeginStart(t.Context(), trackedActorUID)
+		_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 		if err != nil {
 			t.Fatalf("BeginStart: %v", err)
 		}
 		processNext(t, tr, opUpload)
-		end()
-		if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
-			t.Errorf("state file = %+v, want Uploading cleared", rec)
+		if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil || !slices.Equal(rec.Prune, []string{"s1"}) {
+			t.Errorf("state file = %+v, want Uploading cleared and s1 listed to prune", rec)
 		}
 		if _, err := os.Stat(s1Dir); err != nil {
 			t.Errorf("s1 after a worker cleared it during a Restore: stat = %v, want it kept", err)
 		}
+		end()
 	})
 }
 
 // While Terminate holds the actor, no upload worker clears a superseded
-// Uploading snapshot or deletes its local copy: Terminate prunes the actor's
-// local snapshots once Forget drops it. If the terminate fails before Forget,
-// its end lets a worker clear the snapshot, which deletes the copy before
-// releasing the actor's lock.
+// Uploading snapshot and no prune deletes its local copy: Terminate prunes the
+// actor's local snapshots once Forget drops it. If the terminate fails before
+// Forget, its end lets a worker clear the snapshot, and a prune deletes the
+// copy afterwards.
 func TestTrackerTerminateHoldsOffSupersededUploadingCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1059,37 +1074,15 @@ func TestTrackerTerminateHoldsOffSupersededUploadingCleanup(t *testing.T) {
 			}
 			end()
 			if run := tr.beginDueWork(trackedActorUID, opUpload); run != nil {
-				t.Error("beginDueWork left work to run after releasing the actor's lock, want s1 deleted under it")
+				t.Error("beginDueWork left work to run after releasing the actor's lock, want Uploading cleared under it")
 				run()
 			}
 			if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
 				t.Errorf("state file once the terminate failed = %+v, want Uploading cleared", rec)
 			}
+			processNextPrune(t, tr) // queued once Uploading no longer kept s1
 			if _, err := os.Stat(s1Dir); !os.IsNotExist(err) {
 				t.Errorf("s1 once the terminate failed: stat = %v, want it deleted", err)
-			}
-		})
-	}
-}
-
-// A Run or Restore in progress may read an older local copy in place;
-// Checkpoint and PromoteSnapshot do not.
-func TestLocalInUse(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		hold holdKind
-		want bool
-	}{
-		{name: "nothing in progress", hold: holdNone, want: false},
-		{name: "Run or Restore", hold: holdStart, want: true},
-		{name: "deferred Checkpoint", hold: holdCheckpoint, want: false},
-		{name: "immediate Checkpoint or PromoteSnapshot", hold: holdDurable, want: false},
-		{name: "Terminate", hold: holdTerminate, want: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := &actorSnapshots{actorUID: trackedActorUID, hold: tc.hold}
-			if got := a.localInUse(); got != tc.want {
-				t.Errorf("localInUse() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -1168,9 +1161,10 @@ func TestTrackerResumesUploadingAfterRestart(t *testing.T) {
 		store2.release <- nil
 		waitClosed(t, done, "the resumed upload of s1")
 
-		if _, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1")); !os.IsNotExist(err) {
-			t.Errorf("s1 after resumed upload: stat = %v, want it deleted", err)
-		}
+		eventually(t, "s1 is pruned once its resumed upload ended", func() bool {
+			_, err := os.Stat(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"))
+			return os.IsNotExist(err)
+		})
 		st := after.State(trackedActorUID)
 		if uuidOf(st.GetLatestDurable()) != "s1" || st.GetUploading() != nil {
 			t.Errorf("state after s1 finished = %v, want s1 durable and uploading nil", st)
@@ -1239,9 +1233,10 @@ func TestTrackerResumesUploadingAfterRestart(t *testing.T) {
 		if got := store2.uploads(); len(got) != 0 {
 			t.Errorf("uploads after restart = %v, want none", got)
 		}
-		if _, err := os.Stat(s1Dir); !os.IsNotExist(err) {
-			t.Errorf("s1 after startup cleanup: stat = %v, want it deleted", err)
-		}
+		eventually(t, "s1 is pruned after the startup cleanup", func() bool {
+			_, err := os.Stat(s1Dir)
+			return os.IsNotExist(err)
+		})
 	})
 }
 

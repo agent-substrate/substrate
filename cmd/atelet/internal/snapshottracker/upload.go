@@ -24,10 +24,9 @@ import (
 // beginUploadLocked begins a background upload of the actor's nextUploadTarget,
 // under a context derived from ctx, and returns the func that runs it once the
 // caller releases the actor's lock. Any superseded snapshot in a.Uploading is
-// replaced in the same state-file save, and its local copy removed (see
-// removeSupersededLocalCopyLocked).
+// replaced in the same state-file save; a prune deletes its local copy.
 func (t *Tracker) beginUploadLocked(ctx context.Context, a *actorSnapshots) func() {
-	superseded, _ := a.clearSupersededUploading()
+	a.clearSupersededUploading()
 	target := *a.nextUploadTarget()
 	wasUploading := sameUUID(a.Uploading, &target)
 	opCtx, op := t.beginOpLocked(ctx, a, opUpload, target)
@@ -37,9 +36,6 @@ func (t *Tracker) beginUploadLocked(ctx context.Context, a *actorSnapshots) func
 	if !wasUploading {
 		t.saveLocked(a)
 	}
-	if superseded != nil {
-		t.removeSupersededLocalCopyLocked(a.actorUID, *superseded)
-	}
 	actorUID := a.actorUID
 	return func() {
 		t.backgroundUpload(opCtx, actorUID, op)
@@ -48,17 +44,11 @@ func (t *Tracker) beginUploadLocked(ctx context.Context, a *actorSnapshots) func
 
 // cleanupSupersededUploadingLocked clears a.Uploading when no upload is
 // running and a newer commit has superseded it, so backgroundUpload will never
-// run for it. It saves the change and removes the local copy kept for that
-// upload (see removeSupersededLocalCopyLocked) without releasing the actor's
-// lock, so no Terminate can begin in between.
+// run for it, and saves the change. The caller queues the actor again, which
+// queues the prune of the local copy kept for that upload.
 func (t *Tracker) cleanupSupersededUploadingLocked(a *actorSnapshots) {
-	superseded, cleared := a.clearSupersededUploading()
-	if !cleared {
-		return
-	}
-	t.saveLocked(a)
-	if superseded != nil {
-		t.removeSupersededLocalCopyLocked(a.actorUID, *superseded)
+	if a.clearSupersededUploading() {
+		t.saveLocked(a)
 	}
 }
 
@@ -114,9 +104,9 @@ func uploadAllowance(size, bytesPerSecond int64) time.Duration {
 
 // backgroundUpload runs op, a background upload of the actor's nextUploadTarget
 // when it began, on a worker. Once the upload succeeds or a newer snapshot
-// replaces target, it removes target's local copy if LatestLocal moved on (see
-// removeSupersededLocalCopyLocked); when the upload fails and LatestLocal
-// cannot replace target, it keeps target in Uploading to retry.
+// replaces target, Uploading is cleared, and a prune deletes target's local
+// copy if LatestLocal moved on; when the upload fails and LatestLocal cannot
+// replace target, it keeps target in Uploading to retry.
 func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *actorOp) {
 	defer close(op.done)
 	target := op.target
@@ -124,8 +114,8 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 	logOp(ctx, actorUID, op.kind, target, uploaded, true, elapsed, err)
 
 	t.lock(actorUID)
+	defer t.unlock(actorUID)
 	a := t.endOpLocked(actorUID, op)
-	removeOld := false
 	switch {
 	case err == nil:
 		if t.recordUploadLocked(a, target, uploaded) {
@@ -135,7 +125,6 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 		a.uploadingFailed = false
 		t.succeededLocked(a)
 		t.queueReportLocked(a)
-		removeOld = a.localSuperseded(&target)
 	case !a.uploadNeeded(target):
 		// A newer snapshot became durable while the upload ran, as an
 		// immediate checkpoint or a promote makes one, so the failure costs
@@ -144,13 +133,11 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 		a.uploadingFailed = false
 		t.saveLocked(a)
 		t.requeueLocked(a)
-		removeOld = a.localSuperseded(&target)
 	default:
 		if t.ctx.Err() == nil {
 			a.uploadingFailed = true
-			if superseded, cleared := a.clearSupersededUploading(); cleared {
+			if a.clearSupersededUploading() {
 				t.saveLocked(a)
-				removeOld = superseded != nil
 			}
 			if _, ok := t.nextDueLocked(a); ok {
 				t.backOffLocked(a)
@@ -158,10 +145,6 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 		}
 		t.requeueLocked(a)
 	}
-	if removeOld {
-		t.removeSupersededLocalCopyLocked(actorUID, target)
-	}
-	t.unlock(actorUID)
 }
 
 // recordUploadLocked records that an upload of target succeeded, and reports
@@ -179,19 +162,4 @@ func (t *Tracker) recordUploadLocked(a *actorSnapshots, target SnapshotRef, uplo
 	}
 	a.uploadSucceeded(now)
 	return true
-}
-
-// removeSupersededLocalCopyLocked deletes the local copy of target, an upload's
-// snapshot that a newer snapshot superseded, once no upload needs it: the copy
-// was kept only for the upload. It leaves the copy while a Run or Restore in
-// progress may use it (see localInUse), and deletes it under the actor's lock
-// so that none begins reading it meanwhile. Best-effort: the actor's next
-// checkpoint, detach, or terminate prunes a copy left behind.
-func (t *Tracker) removeSupersededLocalCopyLocked(actorUID string, target SnapshotRef) {
-	if t.localInUseLocked(actorUID) {
-		return
-	}
-	if err := removeLocalCheckpoint(t.ctx, actorUID, target.uuid()); err != nil {
-		slog.WarnContext(t.ctx, "Failed to delete a superseded local checkpoint", slog.String("actorUID", actorUID), slog.Any("err", err))
-	}
 }

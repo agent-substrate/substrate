@@ -325,6 +325,18 @@ func newTestTracker(t *testing.T, store Store) *Tracker {
 	return tr
 }
 
+// localSnapshotsKept returns the tracked actor's local snapshots atelet still
+// needs, under the actor's lock.
+func localSnapshotsKept(tr *Tracker) []string {
+	tr.lock(trackedActorUID)
+	defer tr.unlock(trackedActorUID)
+	a := tr.findLocked(trackedActorUID)
+	if a == nil {
+		return nil
+	}
+	return localSnapshotsToKeep(a)
+}
+
 // stepTo advances the tracker's fake clock to at, unless it is there already,
 // so the background work due by then starts.
 func stepTo(tr *Tracker, at time.Time) {
@@ -485,28 +497,28 @@ func TestTrackerState(t *testing.T) {
 	}
 }
 
-// LocalSnapshotsToKeep names the latest local snapshot. CommitDurable drops an
+// localSnapshotsKept names the latest local snapshot. CommitDurable drops an
 // older local snapshot, which the durable one supersedes, but keeps a local
 // copy of the durable snapshot itself.
 func TestTrackerCommitDurableDropsOlderLocal(t *testing.T) {
 	useActorDir(t)
 	tr := newTracker(t)
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); keep != nil {
-		t.Errorf("LocalSnapshotsToKeep for an untracked actor = %v, want nil", keep)
+	if keep := localSnapshotsKept(tr); keep != nil {
+		t.Errorf("localSnapshotsKept for an untracked actor = %v, want nil", keep)
 	}
 
 	t0 := time.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s1"}) {
-		t.Errorf("LocalSnapshotsToKeep = %v, want [s1]", keep)
+	if keep := localSnapshotsKept(tr); !slices.Equal(keep, []string{"s1"}) {
+		t.Errorf("localSnapshotsKept = %v, want [s1]", keep)
 	}
 	s2 := testRef("s2", 2, t0.Add(time.Minute))
 	tr.CommitDurable(trackedActorUID, s2)
 	if st := newTracker(t).State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s2" {
 		t.Errorf("state from the file = %v, want no local snapshot and s2 durable", st)
 	}
-	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); len(keep) != 0 {
-		t.Errorf("LocalSnapshotsToKeep after CommitDurable = %v, want none", keep)
+	if keep := localSnapshotsKept(tr); len(keep) != 0 {
+		t.Errorf("localSnapshotsKept after CommitDurable = %v, want none", keep)
 	}
 
 	tr.CommitLocal(trackedActorUID, s2)
@@ -578,7 +590,7 @@ func TestTrackerCommitPromotedKeepsDetachSchedule(t *testing.T) {
 			tr.CommitLocal(trackedActorUID, paused)
 			want := tr.clock.Now().Add(testDetachDelay)
 			if started {
-				end, err := tr.BeginStart(t.Context(), trackedActorUID)
+				_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 				if err != nil {
 					t.Fatalf("beginStart: %v", err)
 				}
@@ -966,7 +978,7 @@ func TestTrackerNotStartedSince(t *testing.T) {
 		return func(_ *testing.T, tr *Tracker) { tr.CommitDurable(trackedActorUID, r) }
 	}
 	start := func(t *testing.T, tr *Tracker) {
-		end, err := tr.BeginStart(t.Context(), trackedActorUID)
+		_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 		if err != nil {
 			t.Fatalf("BeginStart: %v", err)
 		}
@@ -1053,8 +1065,8 @@ func TestTrackerCommitsSkipOlderGenerations(t *testing.T) {
 		if !proto.Equal(got, st) {
 			t.Errorf("CommitLocal(%v) = %v, want unchanged %v", stale.Snapshot, got, st)
 		}
-		if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s3"}) {
-			t.Errorf("LocalSnapshotsToKeep after CommitLocal(%v) = %v, want [s3]", stale.Snapshot, keep)
+		if keep := localSnapshotsKept(tr); !slices.Equal(keep, []string{"s3"}) {
+			t.Errorf("localSnapshotsKept after CommitLocal(%v) = %v, want [s3]", stale.Snapshot, keep)
 		}
 	}
 

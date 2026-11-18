@@ -383,8 +383,11 @@ groups:
               stability: development
               value: cleanup
               brief: >
-                Checkpoint. atelet removes superseded local snapshots, unmounts
-                external volumes, and resets the actor directories on the node.
+                Checkpoint. atelet unmounts external volumes and resets the
+                actor directories on the node. Superseded local snapshots are
+                removed by a background prune after the response, not here;
+                a prune still due when the next Checkpoint begins runs then,
+                inside total with no phase of its own.
             - id: total
               stability: development
               value: total
