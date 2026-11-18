@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -1102,6 +1103,85 @@ func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
 					t.Errorf("network authorization rules = %v, want %v", got, wantRules)
 				}
 			})
+		})
+	}
+}
+
+func TestRenderAgentgatewayOTLPEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		kind     bool
+		override string
+		want     string
+	}{
+		{name: "default", want: "http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"},
+		{name: "kind", kind: true, want: "http://opentelemetry-collector.otel-system.svc:4317"},
+		{name: "custom", override: "http://collector.example.com:4317", want: "http://collector.example.com:4317"},
+		{name: "kind custom", kind: true, override: "http://collector.example.com:4317", want: "http://collector.example.com:4317"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterAgentgateway, Kind: tc.kind}}
+			if tc.override != "" {
+				root := t.TempDir()
+				if err := os.CopyFS(filepath.Join(root, installDir), os.DirFS(e.Cfg.Path(installDir))); err != nil {
+					t.Fatal(err)
+				}
+				e.Cfg.Root = root
+				data, err := os.ReadFile(e.otelConfigPath())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var cm corev1.ConfigMap
+				if err := yaml.Unmarshal(data, &cm); err != nil {
+					t.Fatal(err)
+				}
+				cm.Data[otelEndpointKey] = tc.override
+				data, err = yaml.Marshal(cm)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(e.otelConfigPath(), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manifest, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, deployments := dataPlaneWorkloads(t, manifest)
+			router := deployments["atenet-router"].Spec.Template.Spec.Containers[0]
+			i := slices.IndexFunc(router.Env, func(v corev1.EnvVar) bool { return v.Name == "AGENTGATEWAY_OTLP_ADDRESS" })
+			if i < 0 || router.Env[i].ValueFrom == nil || router.Env[i].ValueFrom.ConfigMapKeyRef == nil {
+				t.Fatal("AGENTGATEWAY_OTLP_ADDRESS does not read a ConfigMap key")
+			}
+			ref := router.Env[i].ValueFrom.ConfigMapKeyRef
+			if ref.Name != otelConfigMap || ref.Key != otelEndpointKey {
+				t.Fatalf("OTLP address reads %s[%s], want %s[%s]", ref.Name, ref.Key, otelConfigMap, otelEndpointKey)
+			}
+			var endpoint string
+			for _, doc := range strings.Split(string(manifest), "\n---\n") {
+				var cm corev1.ConfigMap
+				if err := yaml.Unmarshal([]byte(doc), &cm); err != nil {
+					t.Fatal(err)
+				}
+				if cm.Kind == "ConfigMap" && cm.Name == ref.Name {
+					endpoint = cm.Data[ref.Key]
+				}
+			}
+			if endpoint != tc.want {
+				t.Errorf("OTLP address = %q, want %q", endpoint, tc.want)
+			}
+			var gateway struct {
+				FrontendPolicies struct {
+					Tracing struct{ Host string }
+				}
+			}
+			if err := yaml.Unmarshal([]byte(agentgatewayRouterConfig(t, manifest).Data["config.yaml"]), &gateway); err != nil {
+				t.Fatal(err)
+			}
+			if got := gateway.FrontendPolicies.Tracing.Host; got != "$AGENTGATEWAY_OTLP_ADDRESS" {
+				t.Errorf("tracing host = %q, want $AGENTGATEWAY_OTLP_ADDRESS", got)
+			}
 		})
 	}
 }

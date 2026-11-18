@@ -20,19 +20,3 @@ resources:
 
 components:
   - ../components/agentgateway
-
-patches:
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: atenet-router
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: agentgateway
-              env:
-              - name: AGENTGATEWAY_OTLP_ADDRESS
-                value: opentelemetry-collector.otel-system.svc:4317

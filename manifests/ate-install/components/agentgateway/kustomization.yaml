@@ -48,7 +48,10 @@ patches:
           - /etc/agentgateway/config.yaml
           env:
           - name: AGENTGATEWAY_OTLP_ADDRESS
-            value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+            valueFrom:
+              configMapKeyRef:
+                name: ate-otel-config
+                key: OTEL_EXPORTER_OTLP_ENDPOINT
           ports:
           - name: http
             containerPort: 8080
