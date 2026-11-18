@@ -73,6 +73,10 @@ type SandboxNetworkConfig struct {
 	// DNSPolicy supplies the egress policy the actor's DNS queries are checked
 	// against. Nil refuses every query.
 	DNSPolicy dns.PolicySource
+
+	// DNSExchanger, when set, receives the actor's DNS queries for the egress
+	// PEP to decide and resolve. DNSPolicy is then not consulted.
+	DNSExchanger dns.Exchanger
 }
 
 // SetupSandboxNetwork creates isolated networking with fixed sandbox addresses.
@@ -471,7 +475,8 @@ type SandboxSession struct {
 
 // ServeSandbox builds a sandbox's network and serves egress and DNS from its
 // gateway namespace. A nil server leaves that unserved, which fails closed.
-// DNS queries are checked against the policy cfg.DNSPolicy supplies.
+// DNS queries are checked against the policy cfg.DNSPolicy supplies, or sent
+// to cfg.DNSExchanger when it is set.
 func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, resolver *dns.Relay) (_ *SandboxSession, retErr error) {
 	network, err := SetupSandboxNetwork(ctx, cfg)
 	if err != nil {
@@ -485,7 +490,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	if resolver != nil {
-		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy)
+		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy, cfg.DNSExchanger)
 		if err != nil {
 			return nil, err
 		}

@@ -69,6 +69,11 @@ type Result struct {
 	// MetadataKey lookup) that reads dynamic metadata rather than headers. Nil
 	// for handlers that route by header mutation alone.
 	DynamicMetadata *structpb.Struct
+
+	// Immediate, when set, is the response the dataplane sends in place of
+	// forwarding the request, for a handler that answers the request itself.
+	// Response and DynamicMetadata are not used.
+	Immediate *extprocv3.ProcessingResponse
 }
 
 // resume returns the resume label for the route-duration metric, defaulting an

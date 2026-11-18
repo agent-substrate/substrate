@@ -194,6 +194,13 @@ func serveLoopback(t *testing.T, relay *Relay) (*Server, net.Addr, net.Addr) {
 // policy supplies.
 func serveLoopbackWithPolicy(t *testing.T, relay *Relay, policy PolicySource) (*Server, net.Addr, net.Addr) {
 	t.Helper()
+	return serveLoopbackWith(t, relay, policy, nil)
+}
+
+// serveLoopbackWith runs the relay on loopback sockets with the given policy
+// and exchanger.
+func serveLoopbackWith(t *testing.T, relay *Relay, policy PolicySource, exchanger Exchanger) (*Server, net.Addr, net.Addr) {
+	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +214,7 @@ func serveLoopbackWithPolicy(t *testing.T, relay *Relay, policy PolicySource) (*
 		dialer:      *relay.dialer,
 		udp:         pc,
 		tcpListener: lis,
-	}, policy)
+	}, policy, exchanger)
 	if err != nil {
 		pc.Close()
 		t.Fatal(err)

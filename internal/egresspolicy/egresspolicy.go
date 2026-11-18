@@ -159,6 +159,24 @@ func Compile(policy *ateapi.EgressPolicy) (*Policy, []error) {
 // A policy with no rules can authorize nothing.
 func (p *Policy) RuleCount() int { return len(p.rules) }
 
+// AllowsHostname reports whether a rule of any kind names hostname, on any
+// port. It is the check for a DNS query: an actor may resolve the names its
+// policy lets it reach.
+func (p *Policy) AllowsHostname(hostname string) bool {
+	name, ok := NormalizeHostname(hostname)
+	if !ok {
+		return false
+	}
+	for _, rule := range p.rules {
+		for _, pattern := range rule.patterns {
+			if pattern.Matches(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
 }
@@ -441,18 +459,24 @@ func lowerASCII(s string) string {
 	return string(b)
 }
 
-// DNSEgressPolicyEnforceInAtunnel is the --dns-egress-policy mode that
-// enforces an Actor's EgressPolicy on DNS queries in the worker DNS relay.
-const DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
+// Modes of the --dns-egress-policy flag.
+const (
+	// DNSEgressPolicyEnforceInAtunnel enforces an Actor's EgressPolicy on DNS
+	// queries in the worker DNS relay.
+	DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
+	// DNSEgressPolicyEnforceInPEP sends DNS queries to the egress PEP over
+	// DNS over HTTPS (RFC 8484). The PEP enforces policy and resolves.
+	DNSEgressPolicyEnforceInPEP = "enforce-in-pep"
+)
 
 // ValidateDNSEgressPolicy checks the --dns-egress-policy flag value.
 func ValidateDNSEgressPolicy(mode string) error {
 	switch mode {
 	case "":
 		return errors.New("--dns-egress-policy is required")
-	case DNSEgressPolicyEnforceInAtunnel:
+	case DNSEgressPolicyEnforceInAtunnel, DNSEgressPolicyEnforceInPEP:
 		return nil
 	default:
-		return fmt.Errorf("unsupported --dns-egress-policy %q (must be %q)", mode, DNSEgressPolicyEnforceInAtunnel)
+		return fmt.Errorf("unsupported --dns-egress-policy %q (must be %q or %q)", mode, DNSEgressPolicyEnforceInAtunnel, DNSEgressPolicyEnforceInPEP)
 	}
 }
