@@ -30,6 +30,8 @@ short native metric names, identifying thresholds).
 import json
 import re
 
+from nighthawk_common import spec as spec_mod
+
 # Statistic carrying client-measured end-to-end request latency.
 LATENCY_STAT_ID = "benchmark_http_client.request_to_response"
 
@@ -69,8 +71,6 @@ def parse_output_textproto(text: str, desc_path: str) -> dict:
     # dependencies installed.
     from google.protobuf import json_format
     from google.protobuf import text_format
-
-    import spec as spec_mod
 
     # Drop the client's leading "goo.gle/debugproto" marker line(s).
     lines = text.splitlines()

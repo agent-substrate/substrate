@@ -21,9 +21,9 @@ preserving_proto_field_name=True) produces from a real session output
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import output as output_mod
+from nighthawk_common import output as output_mod
 
 
 def benchmark_result(

@@ -248,6 +248,12 @@ spec:
         args:
         - -c
         - /etc/nighthawk/nighthawk.yaml
+        - --concurrency
+        - "8"
+        resources:
+          requests:
+            cpu: "6"
+            memory: "2Gi"
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

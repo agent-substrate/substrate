@@ -2,7 +2,7 @@ module go.ate.dev/substrate/hack/tools/kind
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 tool sigs.k8s.io/kind
 

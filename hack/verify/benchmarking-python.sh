@@ -32,6 +32,7 @@ SUITES=(
   "benchmarking test_result_store.py"
   "benchmarking/analysis ."
   "benchmarking/automation ."
+  "benchmarking/evaluate unit_tests"
   "benchmarking/locust unit_tests"
   "benchmarking/nighthawk-ingress tests"
   "benchmarking/workloads/manifests/sweperf ."

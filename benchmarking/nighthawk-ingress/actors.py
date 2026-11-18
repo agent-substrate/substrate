@@ -30,7 +30,6 @@ from common import ateapi_pb2
 from common import ateapi_pb2_grpc
 from common.ateapi_channel import CA_FILE, CRED_BUNDLE, SERVER_NAME, ateapi_channel
 
-import spec as spec_mod
 
 ATEAPI_HOST = "api.ate-system.svc.cluster.local:443"
 TOKEN_FILE = "/run/ateapi-token/token"
