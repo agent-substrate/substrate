@@ -241,6 +241,24 @@ func (a *AgentClient) WaitProcess(ctx context.Context, containerID, execID strin
 	return resp.GetStatus(), nil
 }
 
+// GetOOMEvent blocks until the agent reports a container in the sandbox being
+// OOM-killed, and returns the killed container's id. The kata-agent answers
+// only once a kill has happened — this is how the kata shim consumes guest
+// OOMs (one long-blocked call, re-issued after every event) — so callers
+// should run it on their own goroutine in a loop and treat an error as the
+// watch ending: tearing down closes the connection and fails the in-flight
+// call, as does the VM dying. Mirrors grpc.AgentService/GetOOMEvent. Safe to
+// call alongside the other RPCs over the same client: ttrpc multiplexes
+// concurrent calls over the one connection.
+func (a *AgentClient) GetOOMEvent(ctx context.Context) (*agentpb.OOMEvent, error) {
+	resp := &agentpb.OOMEvent{}
+	req := &agentpb.GetOOMEventRequest{}
+	if err := a.client.Call(ctx, "grpc.AgentService", "GetOOMEvent", req, resp); err != nil {
+		return nil, fmt.Errorf("agent GetOOMEvent: %w", err)
+	}
+	return resp, nil
+}
+
 // ReadStdout reads up to max bytes from the container process's stdout. It is a
 // unary RPC (NOT a server stream): each call returns whatever bytes the agent has
 // buffered (up to max), so callers loop until it returns an error — the agent
