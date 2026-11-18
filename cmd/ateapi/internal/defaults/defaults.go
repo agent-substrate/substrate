@@ -36,8 +36,12 @@ func Apply(m proto.Message) {
 		applyActorTemplateDefaults(v)
 	case *ateapi.Atespace:
 		applyAtespaceDefaults(v)
+	case *ateapi.CsiDriverConfig:
+		applyCsiDriverConfigDefaults(v)
 	case *ateapi.EgressPolicy:
 		applyEgressPolicyDefaults(v)
+	case *ateapi.ExternalVolumeClass:
+		applyExternalVolumeClassDefaults(v)
 	case *ateapi.Tag:
 		applyTagDefaults(v)
 	case *ateapi.Worker:
@@ -99,6 +103,8 @@ func applyActorDefaults(*ateapi.Actor) {}
 
 func applyAtespaceDefaults(*ateapi.Atespace) {}
 
+func applyCsiDriverConfigDefaults(*ateapi.CsiDriverConfig) {}
+
 func applyEgressPolicyDefaults(p *ateapi.EgressPolicy) {
 	applyEgressRuleDefaults(p.GetRules())
 }
@@ -116,6 +122,8 @@ func applyEgressRuleDefaults(rules []*ateapi.EgressRule) {
 		}
 	}
 }
+
+func applyExternalVolumeClassDefaults(*ateapi.ExternalVolumeClass) {}
 
 func applyTagDefaults(*ateapi.Tag) {}
 

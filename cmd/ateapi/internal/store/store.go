@@ -217,6 +217,44 @@ type Interface interface {
 	// precondition does not describe the policy the caller observed.
 	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.AccessPolicy, error)
 
+	// Stores a new ExternalVolumeClass and returns the stored resource with
+	// server-assigned metadata (uid, version, timestamps). The input is not
+	// mutated. Returns ErrAlreadyExists if the name is taken.
+	CreateExternalVolumeClass(ctx context.Context, class *ateapi.ExternalVolumeClass) (*ateapi.ExternalVolumeClass, error)
+
+	// Fetches an ExternalVolumeClass by name. Returns ErrNotFound if missing.
+	GetExternalVolumeClass(ctx context.Context, name string) (*ateapi.ExternalVolumeClass, error)
+
+	// Lists ExternalVolumeClasses.
+	ListExternalVolumeClasses(ctx context.Context, opts ListOptions) (ListResponse[*ateapi.ExternalVolumeClass], error)
+
+	// Removes an ExternalVolumeClass and returns the deleted resource. Returns
+	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
+	// precondition does not describe the class the caller observed.
+	DeleteExternalVolumeClass(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.ExternalVolumeClass, error)
+
+	// Stores a new CsiDriverConfig and returns the stored resource with
+	// server-assigned metadata. Returns ErrAlreadyExists if metadata.name or
+	// driver_name is taken.
+	CreateCsiDriverConfig(ctx context.Context, config *ateapi.CsiDriverConfig) (*ateapi.CsiDriverConfig, error)
+
+	// Fetches a CsiDriverConfig by metadata.name. Returns ErrNotFound if missing.
+	GetCsiDriverConfig(ctx context.Context, name string) (*ateapi.CsiDriverConfig, error)
+
+	// Fetches a CsiDriverConfig by driver_name. Returns ErrNotFound if missing.
+	GetCsiDriverConfigByDriverName(ctx context.Context, driverName string) (*ateapi.CsiDriverConfig, error)
+
+	// Lists CsiDriverConfigs ordered by metadata.name.
+	ListCsiDriverConfigs(ctx context.Context, opts ListOptions) (ListResponse[*ateapi.CsiDriverConfig], error)
+
+	// UpdateCsiDriverConfig updates a CsiDriverConfig via guarded
+	// read-modify-write and returns the stored config with advanced metadata.
+	UpdateCsiDriverConfig(ctx context.Context, name string, precondition Precondition, mutate func(toUpdate *ateapi.CsiDriverConfig) error) (*ateapi.CsiDriverConfig, error)
+
+	// Removes a CsiDriverConfig and returns the deleted resource. Returns
+	// ErrFailedPrecondition if an ExternalVolumeClass references its driver_name.
+	DeleteCsiDriverConfig(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.CsiDriverConfig, error)
+
 	// Stores a new ActorTemplate and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
 	// mutated. Returns ErrAlreadyExists if the (atespace, name) is taken.

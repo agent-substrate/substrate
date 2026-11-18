@@ -43,8 +43,8 @@ const workerHostDir = nodepath.BasePath
 
 // csiHostpathControllerService fronts the hostpath driver's Envoy sidecar,
 // which terminates mTLS on the TCP endpoint ateapi dials and forwards to the
-// driver's unix socket. The CSIDriverConfig applied later names this Service
-// in both its controllerEndpoint and its TLS server name.
+// driver's unix socket. The CsiDriverConfig registered for this driver names
+// this Service in both its controllerEndpoint and its TLS server name.
 const csiHostpathControllerService = `
 apiVersion: v1
 kind: Service
@@ -141,19 +141,15 @@ func (e *Env) SetupCSI(ctx context.Context, driver string) error {
 	return nil
 }
 
-// ensureCSIPrerequisites brings up what either driver needs before it can
-// register: the ate CRDs, because each driver registers itself with a
-// CSIDriverConfig, and the podcertificate controller, because the driver
-// controllers are issued serving certificates from it.
+// ensureCSIPrerequisites brings up what either driver needs before its pods
+// start: the ate-system namespace and the podcertificate controller, which
+// issues serving certificates to the driver controllers.
 //
 // deploy ate-system has already done all of this by the time it calls SetupCSI.
 // It is repeated because `setup csi` also runs on its own, against a cluster
 // where none of it need be present; every step is an apply or a wait that
 // returns immediately when the work is already done.
 func (e *Env) ensureCSIPrerequisites(ctx context.Context) error {
-	if err := e.EnsureCRDs(ctx); err != nil {
-		return err
-	}
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
@@ -262,24 +258,6 @@ spec:
 		if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, "default", name, e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 			return err
 		}
-	}
-
-	log.Infof("Creating the hostpath.csi.k8s.io CSIDriverConfig...")
-	if err := e.applyInline(ctx, `
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
-metadata:
-  name: hostpath.csi.k8s.io
-spec:
-  driverName: hostpath.csi.k8s.io
-  controllerEndpoint: tcp://csi-hostpath-controller.default.svc.cluster.local:50051
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-hostpath/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    serverName: csi-hostpath-controller.default.svc
-`); err != nil {
-		return err
 	}
 
 	// The image cache directories under workerHostDir were just wiped, so
@@ -450,22 +428,6 @@ spec:
               path: trust-bundle.pem
 `
 
-// csiNFSDriverConfig registers the NFS driver; its serverName is the one DNS name servicednssigner issues, <service>.<namespace>.svc.
-const csiNFSDriverConfig = `
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
-metadata:
-  name: nfs.csi.k8s.io
-spec:
-  driverName: nfs.csi.k8s.io
-  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc
-`
-
 func (e *Env) setupCSINFS(ctx context.Context) error {
 	log.Step("setup_csi_nfs")
 
@@ -551,17 +513,7 @@ spec:
 	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, "kube-system", "csi-nfs-controller", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
 	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, "kube-system", "csi-nfs-node", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
-		return err
-	}
-
-	log.Infof("Creating the nfs.csi.k8s.io CSIDriverConfig...")
-	if err := e.applyInline(ctx, csiNFSDriverConfig); err != nil {
-		return err
-	}
-
-	log.Infof("Restarting the atelet DaemonSet (if present)...")
-	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
+	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, "kube-system", "csi-nfs-node", e.Cfg.WaitTimeout(BootstrapTimeout))
 }
 
 // checkNFSDSupport verifies the host kernel can serve NFS. The in-cluster NFS

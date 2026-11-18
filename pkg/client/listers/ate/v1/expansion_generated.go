@@ -16,10 +16,6 @@
 
 package v1
 
-// CSIDriverConfigListerExpansion allows custom methods to be added to
-// CSIDriverConfigLister.
-type CSIDriverConfigListerExpansion interface{}
-
 // SandboxConfigListerExpansion allows custom methods to be added to
 // SandboxConfigLister.
 type SandboxConfigListerExpansion interface{}

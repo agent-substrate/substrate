@@ -37,7 +37,6 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
-	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -159,17 +158,12 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
 	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
-	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
-	csiDriverConfigLister := substrateInformerFactory.Ate().V1().CSIDriverConfigs().Lister()
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ateletFactory.Start(ctx.Done())
-	substrateInformerFactory.Start(ctx.Done())
 	scFactory.Start(ctx.Done())
 
 	ateletFactory.WaitForCacheSync(ctx.Done())
-	substrateInformerFactory.WaitForCacheSync(ctx.Done())
 	scFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
@@ -223,7 +217,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	service := controlapi.NewRPCService(
 		persistence,
 		wc,
-		csiDriverConfigLister,
 		scLister,
 		dialer,
 		instruments,

@@ -26,10 +26,6 @@ type FakeAteV1 struct {
 	*testing.Fake
 }
 
-func (c *FakeAteV1) CSIDriverConfigs() v1.CSIDriverConfigInterface {
-	return newFakeCSIDriverConfigs(c)
-}
-
 func (c *FakeAteV1) SandboxConfigs() v1.SandboxConfigInterface {
 	return newFakeSandboxConfigs(c)
 }

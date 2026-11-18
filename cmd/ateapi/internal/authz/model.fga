@@ -65,10 +65,33 @@ type global
     define can_list_actor_templates: viewer
     define can_list_tags: viewer
 
+    # --- Volume Infrastructure ---
+    define can_create_external_volume_class: owner
+    define can_list_external_volume_classes: viewer
+    define can_create_csi_driver_config: owner
+    define can_list_csi_driver_configs: viewer or atelet
+
     # --- Policy Governance ---
     define can_create_access_policy: owner
     define can_get_access_policy: viewer
     define can_update_access_policy: owner
+
+# Global-scoped; inherits its roles from global.
+type external_volume_class
+  relations
+    define parent_global: [global]
+
+    define can_get: viewer from parent_global
+    define can_delete: owner from parent_global
+
+# Global-scoped; inherits its roles from global.
+type csi_driver_config
+  relations
+    define parent_global: [global]
+
+    define can_get: viewer from parent_global or atelet from parent_global
+    define can_update: owner from parent_global
+    define can_delete: owner from parent_global
 
 type atespace
   relations

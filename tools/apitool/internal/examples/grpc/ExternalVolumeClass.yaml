@@ -11,16 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
 metadata:
-  name: hostpath.csi.k8s.io
-spec:
-  driverName: hostpath.csi.k8s.io
-  controllerEndpoint: tcp://csi-hostpath-controller.default.svc.cluster.local:50051
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-hostpath/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    serverName: csi-hostpath-controller.default.svc
+  name: csi-nfs
+  uid: 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+  version: "1"
+  createTime: "2026-06-01T00:00:00Z"
+  updateTime: "2026-06-01T00:00:00Z"
+driverName: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.default.svc.cluster.local
+  share: /

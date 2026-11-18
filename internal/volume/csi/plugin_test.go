@@ -20,6 +20,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -804,12 +805,12 @@ func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 			defer cleanup()
 
 			cfg := driverConfig(endpoint, nil)
-			cfg.Spec.NodeSocketOverride = endpoint
-			plugin, err := newCSIPlugin(t.Context(), &mockLister{cfg: cfg}, mockDriverName, isController, tlsPaths{})
+			cfg.NodeSocketOverride = endpoint
+			plugin, err := newCSIPlugin(t.Context(), &mockGetter{cfg: cfg}, mockDriverName, isController, tlsPaths{})
 			if err != nil {
 				t.Fatalf("newCSIPlugin failed: %v", err)
 			}
-			defer plugin.client.Close()
+			defer plugin.Close()
 
 			if isController && !plugin.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME) {
 				t.Errorf("expected PUBLISH_UNPUBLISH_VOLUME to be true")
@@ -818,5 +819,45 @@ func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 				t.Errorf("expected STAGE_UNSTAGE_VOLUME to be true")
 			}
 		})
+	}
+}
+
+func TestPlugin_CloseAndNewCSIPluginFromConfig(t *testing.T) {
+	var nilPlugin *Plugin
+	if err := nilPlugin.Close(); err != nil {
+		t.Fatalf("nilPlugin.Close() = %v, want nil", err)
+	}
+	if err := (&Plugin{}).Close(); err != nil {
+		t.Fatalf("emptyPlugin.Close() = %v, want nil", err)
+	}
+
+	ctx := t.Context()
+	if _, err := NewCSIPlugin(ctx, nil, mockDriverName, true); err == nil || !strings.Contains(err.Error(), "missing csiDriverConfigGetter") {
+		t.Fatalf("NewCSIPlugin(nil getter) error = %v, want missing csiDriverConfigGetter", err)
+	}
+	if _, err := NewCSIPlugin(ctx, &mockGetter{}, "other-driver", true); err == nil || !strings.Contains(err.Error(), "failed to retrieve CsiDriverConfig") {
+		t.Fatalf("NewCSIPlugin(missing driver) error = %v, want failed to retrieve CsiDriverConfig", err)
+	}
+	if _, err := NewCSIPluginFromConfig(ctx, nil, mockDriverName, true); err == nil || !strings.Contains(err.Error(), "missing CsiDriverConfig") {
+		t.Fatalf("NewCSIPluginFromConfig(nil) error = %v, want missing CsiDriverConfig", err)
+	}
+
+	endpoint, cleanup := startMockCSIDriver(t, &mockCSIDriver{})
+	defer cleanup()
+
+	cfg := driverConfig(endpoint, nil)
+	cfg.NodeSocketOverride = endpoint
+	plugin, err := NewCSIPluginFromConfig(ctx, cfg, mockDriverName, false)
+	if err != nil {
+		t.Fatalf("NewCSIPluginFromConfig() error = %v", err)
+	}
+	if got, err := plugin.DriverName(ctx); err != nil || got != mockDriverName {
+		t.Fatalf("DriverName() = (%q, %v), want %q", got, err, mockDriverName)
+	}
+	if err := plugin.Close(); err != nil {
+		t.Fatalf("plugin.Close() error = %v", err)
+	}
+	if _, err := plugin.DriverName(ctx); err == nil {
+		t.Fatal("DriverName() after Close() succeeded, want error")
 	}
 }

@@ -189,7 +189,7 @@ func TestBuild_RealCRDs(t *testing.T) {
 			t.Errorf("%s has no fields", c.Kind)
 		}
 	}
-	if diff := cmp.Diff([]string{"CSIDriverConfig", "SandboxConfig", "WorkerPool"}, kinds); diff != "" {
+	if diff := cmp.Diff([]string{"SandboxConfig", "WorkerPool"}, kinds); diff != "" {
 		t.Errorf("kinds mismatch (-want +got):\n%s", diff)
 	}
 }

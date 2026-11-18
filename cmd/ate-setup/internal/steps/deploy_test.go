@@ -170,18 +170,18 @@ func TestMissingCRDsLeavesPresentOnesAlone(t *testing.T) {
 		obj.SetName(name)
 		return obj
 	}
-	crds := []*unstructured.Unstructured{crd("workerpools.ate.dev"), crd("sandboxconfigs.ate.dev"), crd("csidriverconfigs.ate.dev")}
-	present := map[string]bool{"workerpools.ate.dev": true, "sandboxconfigs.ate.dev": true}
+	crds := []*unstructured.Unstructured{crd("workerpools.ate.dev"), crd("sandboxconfigs.ate.dev")}
+	present := map[string]bool{"workerpools.ate.dev": true}
 	missing, err := missingCRDs(crds, func(name string) (bool, error) { return present[name], nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(missing) != 1 || missing[0].GetName() != "csidriverconfigs.ate.dev" {
+	if len(missing) != 1 || missing[0].GetName() != "sandboxconfigs.ate.dev" {
 		var names []string
 		for _, m := range missing {
 			names = append(names, m.GetName())
 		}
-		t.Errorf("missingCRDs = %v, want only csidriverconfigs.ate.dev", names)
+		t.Errorf("missingCRDs = %v, want only sandboxconfigs.ate.dev", names)
 	}
 }
 

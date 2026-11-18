@@ -24,7 +24,7 @@ type CreateVolumeRequest struct {
 	Name string
 	// CapacityBytes is the requested size in bytes.
 	CapacityBytes int64
-	// Parameters are the driver-specific parameters from the StorageClass.
+	// Parameters are the driver-specific parameters from the volume's class.
 	Parameters map[string]string
 }
 

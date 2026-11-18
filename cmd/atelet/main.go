@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/signal"
@@ -343,8 +344,6 @@ func main() {
 		}
 	}
 
-	csiDriverConfigGetter := &directCSIDriverConfigGetter{client: ateClient}
-
 	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
 		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", trustbundle.EgressCTB).String()
 	})
@@ -400,6 +399,8 @@ func main() {
 	}
 	defer ateapiConn.Close()
 	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
+	controlService := ateapi.NewControlClient(ateapiConn)
+	csiDriverConfigGetter := &ateapiCSIDriverConfigGetter{control: controlService}
 
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
@@ -541,7 +542,7 @@ func main() {
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
 		workers: workerService,
-		control: ateapi.NewControlClient(ateapiConn),
+		control: controlService,
 	})
 	go func() {
 		if err := workerFacingSrv.Serve(workerFacingLis); err != nil {
@@ -706,13 +707,45 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 	return done
 }
 
-// directCSIDriverConfigGetter retrieves CSIDriverConfig via direct API call rather than a cluster-wide watch informer.
-type directCSIDriverConfigGetter struct {
-	client versioned.Interface
+type csiDriverConfigListClient interface {
+	ListCsiDriverConfigs(ctx context.Context, in *ateapi.ListCsiDriverConfigsRequest, opts ...grpc.CallOption) (*ateapi.ListCsiDriverConfigsResponse, error)
 }
 
-func (g *directCSIDriverConfigGetter) Get(name string) (*atev1.CSIDriverConfig, error) {
-	return g.client.AteV1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+// ateapiCSIDriverConfigGetter resolves CsiDriverConfig from ate-api-server.
+type ateapiCSIDriverConfigGetter struct {
+	control csiDriverConfigListClient
+}
+
+func (g *ateapiCSIDriverConfigGetter) Get(ctx context.Context, driverName string) (*ateapi.CsiDriverConfig, error) {
+	if g.control == nil {
+		return nil, errors.New("missing csiDriverConfigGetter")
+	}
+	for pageToken := ""; ; {
+		resp, err := g.control.ListCsiDriverConfigs(ctx, &ateapi.ListCsiDriverConfigsRequest{
+			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
+		})
+		if err != nil {
+			switch status.Code(err) {
+			case codes.Unavailable:
+				return nil, apierror.Unavailable("while listing CsiDriverConfigs from ate-api-server: %w", err)
+			case codes.Canceled, codes.DeadlineExceeded:
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, fmt.Errorf("while listing CsiDriverConfigs from ate-api-server: %w", ctxErr)
+				}
+				return nil, apierror.Unavailable("while listing CsiDriverConfigs from ate-api-server: %w", err)
+			}
+			return nil, fmt.Errorf("while listing CsiDriverConfigs from ate-api-server: %w", err)
+		}
+		for _, cfg := range resp.GetCsiDriverConfigs() {
+			if cfg.GetDriverName() == driverName {
+				return cfg, nil
+			}
+		}
+		if pageToken = resp.GetNextPageToken(); pageToken == "" {
+			break
+		}
+	}
+	return nil, status.Errorf(codes.NotFound, "CsiDriverConfig for driver %q not found", driverName)
 }
 
 // Atelet is a service that allows controlling workloads on individual
@@ -751,7 +784,9 @@ type Atelet struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
+	csiPlugins            map[string]csiNodePluginSlot
 	csiDriverConfigGetter csi.CSIDriverConfigGetter
+	clock                 clock.PassiveClock
 	systemInfoVolumes     *systemInfoVolumeRefresher
 
 	// snapshots tracks each actor's snapshots on this node.
@@ -821,8 +856,9 @@ func NewService(
 		pluginSocket:          pluginSocket,
 		snapshotScratchDir:    ateletpath.SnapshotScratchDir,
 		instruments:           instruments,
-		volumePlugins:         volumePlugins,
+		volumePlugins:         maps.Clone(volumePlugins),
 		csiDriverConfigGetter: csiDriverConfigGetter,
+		clock:                 clock.RealClock{},
 		systemInfoVolumes:     systemInfoVolumes,
 		snapshots:             snapshots,
 		workerActorJWTs:       newWorkerActorJWTs(workers),

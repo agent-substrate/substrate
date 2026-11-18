@@ -34,45 +34,43 @@ In Kubernetes, volumes are reconciled asynchronously via standard Kubernetes obj
 
 ---
 
-## 2. Dynamic CSI Driver Discovery (`CSIDriverConfig`)
+## 2. Dynamic CSI Driver Discovery (`CsiDriverConfig`)
 
-To discover and communicate with CSI drivers, Substrate uses dynamic discovery driven by the cluster-scoped **`CSIDriverConfig`** Custom Resource Definition (CRD).
+Substrate discovers and connects to CSI drivers through the global-scoped **`CsiDriverConfig`** resource (`ateapi.CsiDriverConfig`), stored in the control plane and managed with `kubectl ate --preview`.
 
-### The `CSIDriverConfig` Resource
+### The `CsiDriverConfig` Resource
 
-`CSIDriverConfig` defines the gRPC connection parameters for a specific CSI driver. It bridges the Kubernetes `StorageClass` (referenced in the `ActorTemplate`) to the network endpoint of the CSI Controller service and the local socket path of the CSI Node plugin.
+`CsiDriverConfig` defines the gRPC connection settings for a specific CSI driver (`driverName`). It connects the Kubernetes `StorageClass` referenced in the `ActorTemplate` (`provisioner` matching `driverName`) to the network endpoint of the CSI Controller service and the local socket path of the CSI Node plugin.
 
 ```yaml
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
 metadata:
-  name: nfs.csi.k8s.io
-spec:
-  driverName: nfs.csi.k8s.io
-  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
+controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
+nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
+tls:
+  enabled: true
+  usePodIdentity: true
+  serverName: csi-nfs-controller.kube-system.svc
 ```
 
-### Specification (`CSIDriverConfigSpec`)
+### Fields (`ateapi.CsiDriverConfig`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `driverName` | `string` | **Required.** The standard CSI driver name (e.g. `nfs.csi.k8s.io`, `hostpath.csi.k8s.io`, `pd.csi.storage.gke.io`). Matches the `provisioner` field on the referenced Kubernetes `StorageClass`. |
-| `controllerEndpoint` | `string` | **Required.** The gRPC endpoint for the CSI Controller service. Must be a valid URI starting with `tcp://`, `dns:///`, or `unix://` (e.g., `tcp://csi-controller.kube-system.svc:50051` or `dns:///csi-svc.default.svc:9000`). |
-| `nodeSocketOverride` | `string` | **Optional.** Override for the CSI Node service Unix domain socket on worker nodes. Must begin with `unix://`. If omitted, Substrate defaults to `unix:///var/lib/kubelet/plugins/<driverName>/csi.sock`. |
-| `tls` | `*CSIDriverTLSConfig` | **Optional.** Configures TLS or mTLS for the gRPC connection to the `controllerEndpoint`. |
+| `metadata.name` | `string` | **Required.** Unique DNS-1123 label (no dots) for this `CsiDriverConfig` resource (e.g. `csi-nfs`). Dotted names such as `nfs.csi.k8s.io` are rejected. |
+| `driverName` | `string` | **Required.** Immutable CSI driver name (DNS-1123 subdomain with an optional `substrate.io/` prefix, e.g. `nfs.csi.k8s.io`, `hostpath.csi.k8s.io`, `pd.csi.storage.gke.io`). Must be unique across `CsiDriverConfig` resources and match the `provisioner` field on the referenced Kubernetes `StorageClass`. |
+| `controllerEndpoint` | `string` | **Required.** The gRPC endpoint for the CSI Controller service. Must be `tcp://<host>:<port>` or `dns://[<authority>]/<host>:<port>` (e.g. `tcp://csi-controller.kube-system.svc:50051` or `dns:///csi-svc.default.svc:9000`). |
+| `nodeSocketOverride` | `string` | **Optional.** Clean absolute `unix://` socket URI for the CSI Node service on worker nodes. When omitted, `atelet` defaults to `unix:///var/lib/kubelet/plugins/<driverName>/csi.sock`. |
+| `tls` | `CsiDriverTlsConfig` | **Optional.** Configures TLS or mTLS for the gRPC connection to `controllerEndpoint`. |
 
-#### TLS / mTLS Configuration (`spec.tls`)
+#### TLS / mTLS Configuration (`tls`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `enabled` | `bool` | **Required.** Enables TLS/mTLS for the gRPC connection. |
-| `usePodIdentity` | `bool` | **Optional.** When `true`, reuses Substrate's SPIFFE Pod Identity certificates for mutual TLS (mTLS) with dynamic CA trust bundle verification and rotation. Must be `true` when `enabled` is `true`. |
-| `serverName` | `string` | **Required.** Expected server name (SAN) for TLS certificate verification when TLS is enabled. |
+| `enabled` | `bool` | **Optional.** Enables TLS/mTLS for the controller gRPC connection (defaults to `false`). When `false`, `usePodIdentity` and `serverName` must be unset. |
+| `usePodIdentity` | `bool` | **Optional.** When `true`, uses Substrate's SPIFFE Pod Identity certificates for mutual TLS (mTLS) with dynamic CA trust bundle verification and rotation. Must be `true` when `enabled` is `true`, and forbidden when `false`. |
+| `serverName` | `string` | **Optional.** Expected server name (SAN) for TLS certificate verification. Required when `enabled` is `true`, and forbidden when `false`. |
 
 > [!NOTE]
 > For details on exposing CSI controller endpoints over the network and configuring CSI node DaemonSets with required mount propagations, see the [CSI Driver Deployment Guide](csi-deployment.md).
@@ -103,7 +101,7 @@ volumes:
 
 * `name`: Unique DNS-label-compliant volume name.
 * `external.template.capacityBytes`: The requested volume size in bytes (e.g. `1073741824` for 1Gi).
-* `external.template.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
+* `external.template.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CsiDriverConfig`.
 
 #### `containers[].volumeMounts[]`
 
@@ -139,21 +137,20 @@ mountOptions:
   - nfsvers=4.1
 ```
 
-### Step 2: Register the CSIDriverConfig
+### Step 2: Register the CsiDriverConfig
+
+Register the `CsiDriverConfig` through the ate API with `kubectl ate --preview create csi-driver-config -f -`:
 
 ```yaml
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
 metadata:
-  name: nfs.csi.k8s.io
-spec:
-  driverName: nfs.csi.k8s.io
-  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
+controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
+nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
+tls:
+  enabled: true
+  usePodIdentity: true
+  serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ### Step 3: Define WorkerPool and ActorTemplate
