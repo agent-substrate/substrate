@@ -25,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/protoredact"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -122,6 +123,11 @@ func formatProtoCompact(v any) string {
 	msg, ok := v.(proto.Message)
 	if !ok || msg == nil {
 		return "<nil>"
+	}
+	// protojson ignores the debug_redact option, so mask the labeled fields
+	// before rendering the message into the log line.
+	if masked, changed := protoredact.Redacted(msg); changed {
+		msg = masked
 	}
 	b, err := (protojson.MarshalOptions{Multiline: false}).Marshal(msg)
 	if err != nil {
