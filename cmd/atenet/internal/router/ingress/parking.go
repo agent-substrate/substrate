@@ -110,6 +110,16 @@ func (c ParkedRequestConfig) Normalized() ParkedRequestConfig {
 	return c
 }
 
+// ResumeBudget is the total time a resume keeps retrying: Budget when parking is
+// enabled, the fail-fast budget otherwise. The resumer and the Envoy ext_proc
+// timeout both derive from it, so they cannot disagree.
+func (c ParkedRequestConfig) ResumeBudget() time.Duration {
+	if c.Enabled() {
+		return c.Budget
+	}
+	return failFastResumeBudget
+}
+
 // Validate rejects retry parameters that would make parking misbehave rather
 // than merely differ: a factor below 1 shrinks delays toward zero and turns
 // the parked retry loop into a hot loop against the control plane.
