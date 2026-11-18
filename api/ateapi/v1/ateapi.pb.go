@@ -2664,13 +2664,13 @@ type ExternalVolumeSnapshot struct {
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// driver_name is the CSI driver that took the snapshot. The snapshot handle
 	// means something only to that driver. Must be a DNS subdomain, optionally
-	// prefixed with `substrate.io/`, of at most 63 characters (per the CSI
-	// spec's driver-name syntax). Immutable.
+	// prefixed with `substrate.io/`, of at most 63 characters, like
+	// `ExternalVolumeStatus.volume_type`. Immutable.
 	//
 	// +k8s:required
 	// +k8s:maxLength=63
 	// +k8s:immutable
-	// +k8s:customValidation # CSI driver name syntax
+	// +k8s:customValidation # same syntax as ExternalVolumeStatus.volume_type
 	DriverName string `protobuf:"bytes,2,opt,name=driver_name,json=driverName,proto3" json:"driver_name,omitempty"`
 	// origin records how the snapshot came to exist. It is fixed at creation.
 	//
@@ -2746,8 +2746,6 @@ func (x *ExternalVolumeSnapshot) GetStatus() *ExternalVolumeSnapshotStatus {
 
 // ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot came to
 // exist. Exactly one member is set.
-//
-// (-- An imported member, for snapshots a user registers, is planned. --)
 type ExternalVolumeSnapshotOrigin struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// tag_capture is set by the server when a tag captured the snapshot. The
@@ -2821,8 +2819,9 @@ type TagVolumeSnapshotOrigin struct {
 	SourceVolumeName string `protobuf:"bytes,3,opt,name=source_volume_name,json=sourceVolumeName,proto3" json:"source_volume_name,omitempty"`
 	// source_volume_id is the CSI volume handle of the volume the snapshot was
 	// captured from. Its format is the storage system's own, so it is only
-	// bounded and checked for control characters, like
-	// `ExternalVolumeStatus.storage_volume_id`.
+	// bounded and checked for the control characters that
+	// `ExternalVolumeStatus.storage_volume_id` rejects. Tab, LF and CR are
+	// allowed.
 	//
 	// +k8s:required
 	// +k8s:maxLength=256
@@ -2902,7 +2901,8 @@ type ExternalVolumeSnapshotStatus struct {
 	// snapshot_id is the snapshot handle returned by the storage system. It is
 	// empty until the storage system returns it, and does not change once set.
 	// Its format is the storage system's own, so it is only bounded and checked
-	// for control characters, like `ExternalVolumeStatus.storage_volume_id`.
+	// for the control characters that `ExternalVolumeStatus.storage_volume_id`
+	// rejects. Tab, LF and CR are allowed.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=256

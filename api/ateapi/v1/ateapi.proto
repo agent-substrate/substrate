@@ -1152,13 +1152,13 @@ message ExternalVolumeSnapshot {
 
   // driver_name is the CSI driver that took the snapshot. The snapshot handle
   // means something only to that driver. Must be a DNS subdomain, optionally
-  // prefixed with `substrate.io/`, of at most 63 characters (per the CSI
-  // spec's driver-name syntax). Immutable.
+  // prefixed with `substrate.io/`, of at most 63 characters, like
+  // `ExternalVolumeStatus.volume_type`. Immutable.
   //
   // +k8s:required
   // +k8s:maxLength=63
   // +k8s:immutable
-  // +k8s:customValidation # CSI driver name syntax
+  // +k8s:customValidation # same syntax as ExternalVolumeStatus.volume_type
   string driver_name = 2;
 
   // origin records how the snapshot came to exist. It is fixed at creation.
@@ -1176,8 +1176,6 @@ message ExternalVolumeSnapshot {
 
 // ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot came to
 // exist. Exactly one member is set.
-//
-// (-- An imported member, for snapshots a user registers, is planned. --)
 message ExternalVolumeSnapshotOrigin {
   // tag_capture is set by the server when a tag captured the snapshot. The
   // tag owns the snapshot.
@@ -1213,8 +1211,9 @@ message TagVolumeSnapshotOrigin {
 
   // source_volume_id is the CSI volume handle of the volume the snapshot was
   // captured from. Its format is the storage system's own, so it is only
-  // bounded and checked for control characters, like
-  // `ExternalVolumeStatus.storage_volume_id`.
+  // bounded and checked for the control characters that
+  // `ExternalVolumeStatus.storage_volume_id` rejects. Tab, LF and CR are
+  // allowed.
   //
   // +k8s:required
   // +k8s:maxLength=256
@@ -1233,7 +1232,8 @@ message ExternalVolumeSnapshotStatus {
   // snapshot_id is the snapshot handle returned by the storage system. It is
   // empty until the storage system returns it, and does not change once set.
   // Its format is the storage system's own, so it is only bounded and checked
-  // for control characters, like `ExternalVolumeStatus.storage_volume_id`.
+  // for the control characters that `ExternalVolumeStatus.storage_volume_id`
+  // rejects. Tab, LF and CR are allowed.
   //
   // +k8s:optional
   // +k8s:maxLength=256
