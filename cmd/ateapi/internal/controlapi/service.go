@@ -22,6 +22,7 @@ import (
 	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
@@ -51,6 +52,7 @@ type RPCService struct {
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
+	actorIDCAPool  localca.Pool
 }
 
 var _ ateapi.ControlServer = (*RPCService)(nil)
@@ -85,6 +87,7 @@ func NewRPCService(
 	objectStorePlugin objectstore.ControlProviderClient,
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
+	actorIDCAPool localca.Pool,
 	snapshotLocation string,
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
@@ -100,6 +103,7 @@ func NewRPCService(
 		objectStorePlugin:     objectStorePlugin,
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
+		actorIDCAPool:         actorIDCAPool,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation

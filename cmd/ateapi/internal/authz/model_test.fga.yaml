@@ -401,6 +401,7 @@ tests:
           can_get: true
           can_get_egress_policy: true
           can_mint_actor_jwt: true
+          can_mint_actor_certificate: true
           can_update: false
           can_delete: false
           can_create_egress_policy: false
@@ -429,6 +430,7 @@ tests:
           can_update_egress_policy: false
           can_delete_egress_policy: false
           can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
           can_resume: false
           can_suspend: false
       - user: user:sys-atelet
@@ -454,6 +456,7 @@ tests:
           can_resume: false
           can_suspend: false
           can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
       - user: user:sys-api-server-sidecar
         object: atespace:space-1
         assertions:
@@ -564,11 +567,14 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
       - user: user:bob # Atespace editor
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
       - user: user:sys-router
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
