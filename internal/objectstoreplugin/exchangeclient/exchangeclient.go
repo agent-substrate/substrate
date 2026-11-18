@@ -71,7 +71,6 @@ type Config struct {
 type Source struct {
 	exchange exchangepb.CredentialExchangeClient
 	conn     io.Closer
-	pool     *transportPool
 	// newClient builds the storage client a token is used through.
 	newClient func(ctx context.Context, tok credential.Token) (objectstorage.ObjectStorage, error)
 	now       func() time.Time
@@ -113,10 +112,7 @@ func newSource(exchange exchangepb.CredentialExchangeClient, newClient func(cont
 }
 
 func newPoolSource(exchange exchangepb.CredentialExchangeClient, base *http.Transport) *Source {
-	pool := newTransportPool(base)
-	s := newSource(exchange, pool.newClient)
-	s.pool = pool
-	return s
+	return newSource(exchange, newTransportPool(base).newClient)
 }
 
 // transportPool spreads GCS requests round-robin across a fixed set of
@@ -148,12 +144,6 @@ func (p *transportPool) RoundTrip(req *http.Request) (*http.Response, error) {
 	return p.transports[i].RoundTrip(req)
 }
 
-func (p *transportPool) closeIdleConnections() {
-	for _, t := range p.transports {
-		t.CloseIdleConnections()
-	}
-}
-
 // newClient builds a client that authenticates with tok alone over p. It
 // outlives the request that built it, so it must not carry that request's
 // cancellation.
@@ -169,12 +159,8 @@ func (p *transportPool) newClient(ctx context.Context, tok credential.Token) (ob
 	return objectstorage.NewGCSClient(bg, option.WithoutAuthentication(), option.WithHTTPClient(&http.Client{Transport: rt}))
 }
 
-// Close closes idle GCS connections in the shared transport pool and closes
-// the connection to the exchange.
+// Close closes the connection to the exchange.
 func (s *Source) Close() error {
-	if s.pool != nil {
-		s.pool.closeIdleConnections()
-	}
 	if s.conn == nil {
 		return nil
 	}
