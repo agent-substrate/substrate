@@ -38,6 +38,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 func TestRegisterFlags(t *testing.T) {
@@ -203,7 +204,7 @@ func startTunnel(t *testing.T, cfg Config) *Tunnel {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tunnel, err := Start(ctx, cfg, "http://169.254.17.2:80")
+	tunnel, err := Start(ctx, cfg, "http://169.254.17.2:80", noop.Meter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +285,7 @@ func TestStartErrors(t *testing.T) {
 			tc.edit(t, &cfg)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			_, err := Start(ctx, cfg, "http://169.254.17.2:80")
+			_, err := Start(ctx, cfg, "http://169.254.17.2:80", noop.Meter{})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Start error = %v, wantErr = %v", err, tc.wantErr)
 			}
@@ -292,7 +293,7 @@ func TestStartErrors(t *testing.T) {
 	}
 
 	t.Run("bad upstream", func(t *testing.T) {
-		_, err := Start(context.Background(), testConfig(t), "http://[::1")
+		_, err := Start(context.Background(), testConfig(t), "http://[::1", noop.Meter{})
 		if err == nil {
 			t.Fatalf("Start error = %v, want an error", err)
 		}
