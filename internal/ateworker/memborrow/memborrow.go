@@ -105,14 +105,13 @@ func (l *Ledger) Return(n int64) {
 	l.returned = make(chan struct{})
 }
 
-// Tight reports whether a snapshot that borrowed lent bytes should flush to
-// disk now instead of staying in page cache. Without a pod memory limit it
+// Tight reports whether a snapshot whose whole write was borrowed should flush
+// to disk now instead of staying in page cache. Without a pod memory limit it
 // returns false and lets the kernel flush lazily. When it returns false, the
 // returned channel is closed if Wait blocks an incoming actor so the caller
 // can wake up and re-check immediately.
-func (l *Ledger) Tight(lent int64) (bool, <-chan struct{}) {
-	// Nothing was lent when the snapshot started, so the pod had no spare room.
-	if l == nil || lent <= 0 {
+func (l *Ledger) Tight() (bool, <-chan struct{}) {
+	if l == nil {
 		return true, nil
 	}
 	limit, unreclaimable, err := l.podMemory()

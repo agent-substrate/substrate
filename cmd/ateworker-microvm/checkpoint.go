@@ -429,10 +429,8 @@ func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, chec
 			written = append(written, p)
 		}
 	}
-	// Pass nil for flush so write-out starts right away: microVM preserves
-	// restore dirs and runs EvictWithRetries after restore, which can only drop
-	// clean pages. Waiting to flush leaves dirty pages in cache and slows the
-	// next snapshot in balance_dirty_pages.
+	// Pass nil for flush so write-out starts right away. Left dirty, the
+	// snapshot slows the next one's write.
 	if err := snapshotcache.StartWriteback(written, nil, func() { s.borrow.Return(borrowed) }); err != nil {
 		s.borrow.Return(borrowed)
 		slog.WarnContext(ctx, "Failed to start snapshot writeback", slog.String("id", actorUID), slog.Any("err", err))
