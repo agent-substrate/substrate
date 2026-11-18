@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -35,7 +36,9 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -52,11 +55,9 @@ const (
 	// DefaultSandboxClasses is the default value of --sandbox-classes.
 	DefaultSandboxClasses = "gvisor,microvm"
 
-	// Keep defaultKataVersion at 4.1.0 or later. Cloud Hypervisor's restore
-	// handshake hangs against virtiofsd v1.13.3 (bundled through Kata 4.0.0),
-	// and Kata 4.1.0 is the first release with virtiofsd v1.14.0's vhost-user
-	// snapshot-restore (REPLY_ACK) fix.
-	defaultKataVersion            = "4.3.1"
+	// Keep defaultKataVersion at 4.4.0 or later: 4.4.0 is the first release
+	// shipping kata-static-substrate.
+	defaultKataVersion            = "4.4.0"
 	defaultCloudHypervisorVersion = "v53.0"
 	defaultMicroVMReleaseBaseURL  = "https://github.com"
 
@@ -72,7 +73,7 @@ const (
 
 	kataSharePrefix      = "opt/kata/share/kata-containers/"
 	kataKernelSymlink    = "opt/kata/share/kata-containers/vmlinux.container"
-	kataRootfsSymlink    = "opt/kata/share/kata-containers/kata-containers.img"
+	kataRootfsImage      = "opt/kata/share/kata-containers/kata-containers-substrate.img"
 	kataLibexecVirtiofsd = "opt/kata/libexec/virtiofsd"
 
 	maxMicroVMAssetBytes int64 = 8 << 30
@@ -196,69 +197,165 @@ func (e *Env) applyMicroVMSandboxConfig(ctx context.Context, prep *microVMPrepar
 	}
 
 	log.Infof("Applying microvm SandboxConfig from %s...", microvmSandboxConfigTemplate)
-	rendered, err := render.Template(
+	obj, sc, err := renderMicroVMSandboxConfig(
 		e.Cfg.Manifest("sandboxconfig-microvm.yaml.tmpl"),
-		map[string]string{
-			"BUCKET_SCHEME":     e.microVMBucketScheme(),
-			"ASSET_BUCKET_NAME": prep.bucket,
-		},
-		nil,
+		e.microVMBucketScheme(),
+		prep.bucket,
 	)
 	if err != nil {
 		return err
 	}
-	if err := e.Kube.ApplyBytes(ctx, rendered); err != nil {
+	existing, err := e.existingMicroVMSandboxConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if err := filterMicroVMSandboxConfigVersions(obj, sc, existing, e.microVMArches()); err != nil {
+		return err
+	}
+	if err := e.Kube.Apply(ctx, []*unstructured.Unstructured{obj}); err != nil {
 		return err
 	}
 	log.Infof("Done. Installed cluster-wide microvm SandboxConfig.")
 	return nil
 }
 
-// loadMicroVMAssetDigests reads the expected per-architecture SHA-256 digests
-// for microvmAssets from the default version of sandboxconfig-microvm.yaml.tmpl.
-func loadMicroVMAssetDigests(tmplPath string) (map[string]map[string]string, error) {
+func renderMicroVMSandboxConfig(tmplPath, scheme, bucket string) (*unstructured.Unstructured, *atev1.SandboxConfig, error) {
 	rendered, err := render.Template(
 		tmplPath,
 		map[string]string{
-			"BUCKET_SCHEME":     "gs",
-			"ASSET_BUCKET_NAME": "placeholder",
+			"BUCKET_SCHEME":     scheme,
+			"ASSET_BUCKET_NAME": bucket,
 		},
 		nil,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	objs, err := kube.DecodeManifestBytes(rendered)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(objs) != 1 {
-		return nil, fmt.Errorf("%s decoded to %d objects, want 1", tmplPath, len(objs))
+		return nil, nil, fmt.Errorf("%s decoded to %d objects, want 1", tmplPath, len(objs))
 	}
 	var sc atev1.SandboxConfig
 	if err := k8sruntime.DefaultUnstructuredConverter.FromUnstructured(objs[0].Object, &sc); err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", tmplPath, err)
+		return nil, nil, fmt.Errorf("decoding %s: %w", tmplPath, err)
+	}
+	return objs[0], &sc, nil
+}
+
+func (e *Env) existingMicroVMSandboxConfig(ctx context.Context) (*atev1.SandboxConfig, error) {
+	u, err := e.Kube.Dynamic.Resource(atev1.GroupVersion.WithResource("sandboxconfigs")).Get(ctx, microvmSandboxConfigName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("while reading existing SandboxConfig %s: %w", microvmSandboxConfigName, err)
+	}
+	var sc atev1.SandboxConfig
+	if err := k8sruntime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &sc); err != nil {
+		return nil, fmt.Errorf("decoding existing SandboxConfig %s: %w", microvmSandboxConfigName, err)
+	}
+	return &sc, nil
+}
+
+// filterMicroVMSandboxConfigVersions drops non-default versions unless existing
+// already has matching assets for every arch in arches, preserving Disabled
+// state. Fresh clusters get only defaultVersion without staging older releases.
+func filterMicroVMSandboxConfigVersions(obj *unstructured.Unstructured, sc *atev1.SandboxConfig, existing *atev1.SandboxConfig, arches []string) error {
+	filtered := sc.Spec.Versions[:0]
+	for _, v := range sc.Spec.Versions {
+		if v.Name != sc.Spec.DefaultVersion {
+			ev := findMatchingVersion(existing, &v, arches)
+			if ev == nil {
+				continue
+			}
+			if ev.State != nil && *ev.State == atev1.SandboxVersionStateDisabled {
+				disabled := atev1.SandboxVersionStateDisabled
+				v.State = &disabled
+			}
+		}
+		filtered = append(filtered, v)
+	}
+	sc.Spec.Versions = filtered
+	spec, err := k8sruntime.DefaultUnstructuredConverter.ToUnstructured(&sc.Spec)
+	if err != nil {
+		return fmt.Errorf("encoding SandboxConfig spec: %w", err)
+	}
+	obj.Object["spec"] = spec
+	return nil
+}
+
+func findMatchingVersion(existing *atev1.SandboxConfig, want *atev1.SandboxVersionConfig, arches []string) *atev1.SandboxVersionConfig {
+	if existing == nil {
+		return nil
+	}
+	for i := range existing.Spec.Versions {
+		ev := &existing.Spec.Versions[i]
+		if ev.Name == want.Name && assetsMatch(ev.Assets, want.Assets, arches) {
+			return ev
+		}
+	}
+	return nil
+}
+
+func assetsMatch(got, want map[string]map[string]atev1.AssetFile, arches []string) bool {
+	for _, arch := range arches {
+		if len(want[arch]) == 0 || !maps.Equal(got[arch], want[arch]) {
+			return false
+		}
+	}
+	return true
+}
+
+// loadMicroVMAssetDigests validates the per-architecture asset URLs and SHA-256
+// digests for every version in sandboxconfig-microvm.yaml.tmpl and returns the
+// expected digests for defaultVersion.
+func loadMicroVMAssetDigests(tmplPath string) (map[string]map[string]string, error) {
+	const (
+		placeholderScheme = "placeholder-scheme"
+		placeholderBucket = "placeholder-bucket"
+	)
+	_, sc, err := renderMicroVMSandboxConfig(tmplPath, placeholderScheme, placeholderBucket)
+	if err != nil {
+		return nil, err
 	}
 	defaultVer, ok := sc.Spec.DefaultVersionConfig()
 	if !ok {
 		return nil, fmt.Errorf("%s has no enabled version matching defaultVersion %q", tmplPath, sc.Spec.DefaultVersion)
 	}
 
+	var defaultDigests map[string]map[string]string
+	for i := range sc.Spec.Versions {
+		ver := &sc.Spec.Versions[i]
+		verDigests, err := microVMVersionAssetDigests(tmplPath, ver, placeholderScheme, placeholderBucket)
+		if err != nil {
+			return nil, err
+		}
+		if ver.Name == defaultVer.Name {
+			defaultDigests = verDigests
+		}
+	}
+	return defaultDigests, nil
+}
+
+func microVMVersionAssetDigests(tmplPath string, ver *atev1.SandboxVersionConfig, scheme, bucket string) (map[string]map[string]string, error) {
 	out := make(map[string]map[string]string, len(microvmArches))
 	for _, arch := range microvmArches {
-		archAssets, ok := defaultVer.Assets[arch]
+		archAssets, ok := ver.Assets[arch]
 		if !ok {
-			return nil, fmt.Errorf("%s default version %q has no assets for arch %q", tmplPath, defaultVer.Name, arch)
+			return nil, fmt.Errorf("%s version %q has no assets for arch %q", tmplPath, ver.Name, arch)
 		}
 		files := make(map[string]string, len(microvmTemplateAssetFiles))
 		for tmplKey, fileName := range microvmTemplateAssetFiles {
 			af, ok := archAssets[tmplKey]
 			if !ok || af.SHA256 == "" {
-				return nil, fmt.Errorf("%s default version %q arch %q missing sha256 for %q", tmplPath, defaultVer.Name, arch, tmplKey)
+				return nil, fmt.Errorf("%s version %q arch %q missing sha256 for %q", tmplPath, ver.Name, arch, tmplKey)
 			}
-			wantSuffix := fmt.Sprintf("/%s/%s/%s", microvmAssetsPrefix, arch, af.SHA256)
-			if !strings.HasSuffix(af.URL, wantSuffix) {
-				return nil, fmt.Errorf("%s default version %q arch %q %q url %q does not end with %q", tmplPath, defaultVer.Name, arch, tmplKey, af.URL, wantSuffix)
+			wantURL := fmt.Sprintf("%s://%s/%s/%s/%s", scheme, bucket, microvmAssetsPrefix, arch, af.SHA256)
+			if af.URL != wantURL {
+				return nil, fmt.Errorf("%s version %q arch %q %q url = %q, want %q", tmplPath, ver.Name, arch, tmplKey, af.URL, wantURL)
 			}
 			files[fileName] = af.SHA256
 		}
@@ -389,9 +486,9 @@ func microvmAssetsNeedAssemble(outDir, wantStamp string, digests map[string]stri
 	return false, false, nil
 }
 
-// assembleMicroVMAssets downloads the Kata static tarball and Cloud Hypervisor
-// binary for arch from releaseBaseURL into outDir, verifies the SHA-256 digests
-// against digests, and writes the .asset-versions stamp last.
+// assembleMicroVMAssets downloads the Kata guest bundle, virtiofsd, and Cloud
+// Hypervisor binary for arch from releaseBaseURL into outDir, verifies the
+// SHA-256 digests against digests, and writes the .asset-versions stamp last.
 func assembleMicroVMAssets(ctx context.Context, releaseBaseURL, outDir, arch, kataVer, chVer string, digests map[string]string) error {
 	chAsset, err := cloudHypervisorAssetName(arch)
 	if err != nil {
@@ -413,10 +510,17 @@ func assembleMicroVMAssets(ctx context.Context, releaseBaseURL, outDir, arch, ka
 	defer func() { _ = os.RemoveAll(workDir) }()
 
 	baseURL := strings.TrimSuffix(releaseBaseURL, "/")
-	kataURL := fmt.Sprintf("%s/kata-containers/kata-containers/releases/download/%s/kata-static-%s-%s.tar.zst",
+	kataSubstrateURL := fmt.Sprintf("%s/kata-containers/kata-containers/releases/download/%s/kata-static-substrate-%s-%s.tar.zst",
 		baseURL, kataVer, kataVer, arch)
-	log.Infof(">> Downloading kata-static %s (%s)...", kataVer, arch)
-	if err := downloadAndExtractKataAssets(ctx, kataURL, workDir, outDir); err != nil {
+	log.Infof(">> Downloading kata-static-substrate %s (%s)...", kataVer, arch)
+	if err := downloadAndExtractKataGuestAssets(ctx, kataSubstrateURL, workDir, outDir); err != nil {
+		return err
+	}
+
+	kataStaticURL := fmt.Sprintf("%s/kata-containers/kata-containers/releases/download/%s/kata-static-%s-%s.tar.zst",
+		baseURL, kataVer, kataVer, arch)
+	log.Infof(">> Downloading virtiofsd from kata-static %s (%s)...", kataVer, arch)
+	if err := downloadAndExtractKataVirtiofsd(ctx, kataStaticURL, workDir, outDir); err != nil {
 		return err
 	}
 
@@ -443,19 +547,28 @@ func assembleMicroVMAssets(ctx context.Context, releaseBaseURL, outDir, arch, ka
 	return nil
 }
 
-func downloadAndExtractKataAssets(ctx context.Context, kataURL, workDir, outDir string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, kataURL, nil)
+func httpGet(ctx context.Context, rawURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("while downloading %s: %w", kataURL, err)
+		return nil, fmt.Errorf("while downloading %s: %w", rawURL, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("while downloading %s: unexpected HTTP status %s", rawURL, resp.Status)
+	}
+	return resp, nil
+}
+
+func downloadAndExtractKataGuestAssets(ctx context.Context, kataURL, workDir, outDir string) error {
+	resp, err := httpGet(ctx, kataURL)
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("while downloading %s: unexpected HTTP status %s", kataURL, resp.Status)
-	}
 
 	links, err := extractKataTarZst(ctx, resp.Body, workDir)
 	if err != nil {
@@ -468,15 +581,14 @@ func downloadAndExtractKataAssets(ctx context.Context, kataURL, workDir, outDir 
 		mode        fs.FileMode
 	}{
 		{archivePath: kataKernelSymlink, outName: "vmlinux", mode: 0o644},
-		// rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateworker-microvm/run.go).
+		// rootfs.img is attached over virtio-pmem and mounted as ext4 with DAX (cmd/ateworker-microvm/run.go).
 		// The image must meet the following requirements:
 		//   - a size that is a multiple of 2 MiB (cloud-hypervisor)
 		//   - partition 1 aligned to the guest page size
-		//   - a filesystem block size equal to the guest page size
-		// The kata-containers.img used here is built for this, and vmlinux.container uses 4 KiB pages.
-		// See https://github.com/kata-containers/kata-containers/blob/main/tools/osbuilder/image-builder/image_builder.sh
-		{archivePath: kataRootfsSymlink, outName: "rootfs.img", mode: 0o644},
-		{archivePath: kataLibexecVirtiofsd, outName: "virtiofsd", mode: 0o755},
+		//   - an ext4 filesystem block size equal to the guest page size
+		// kata-containers-substrate.img is built for this, and vmlinux.container uses 4 KiB pages.
+		// See https://github.com/kata-containers/kata-containers/blob/4.4.0/tools/packaging/guest-image/build_substrate_image.sh
+		{archivePath: kataRootfsImage, outName: "rootfs.img", mode: 0o644},
 	} {
 		resolved := item.archivePath
 		for range 8 {
@@ -500,10 +612,58 @@ func downloadAndExtractKataAssets(ctx context.Context, kataURL, workDir, outDir 
 	return nil
 }
 
+func downloadAndExtractKataVirtiofsd(ctx context.Context, kataURL, workDir, outDir string) error {
+	resp, err := httpGet(ctx, kataURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	tmp := filepath.Join(workDir, "virtiofsd")
+	if err := extractKataVirtiofsd(ctx, resp.Body, tmp); err != nil {
+		return fmt.Errorf("while extracting %s: %w", kataURL, err)
+	}
+	return os.Rename(tmp, filepath.Join(outDir, "virtiofsd"))
+}
+
+// extractKataVirtiofsd decompresses a zstd-compressed kata-static tar stream,
+// writes opt/kata/libexec/virtiofsd to dstPath, and stops reading.
+func extractKataVirtiofsd(ctx context.Context, r io.Reader, dstPath string) error {
+	// Concurrency 1 disables background read-ahead so zr.Close returns
+	// immediately after virtiofsd without draining more of the HTTP body.
+	zr, err := zstd.NewReader(bufio.NewReader(r), zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return fmt.Errorf("creating zstd reader: %w", err)
+	}
+	defer zr.Close()
+
+	tr := tar.NewReader(zr)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return fmt.Errorf("missing %s in kata archive", kataLibexecVirtiofsd)
+		}
+		if err != nil {
+			return err
+		}
+
+		raw := strings.TrimPrefix(strings.TrimPrefix(hdr.Name, "./"), "/")
+		if strings.TrimPrefix(path.Clean(raw), "/") != kataLibexecVirtiofsd {
+			continue
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			return fmt.Errorf("%s in kata archive has tar type %q, want regular file", kataLibexecVirtiofsd, hdr.Typeflag)
+		}
+		return writeStreamToFile(dstPath, 0o755, tr)
+	}
+}
+
 // extractKataTarZst decompresses a zstd-compressed tar stream, writes regular
-// files under opt/kata/share/kata-containers/ and opt/kata/libexec/virtiofsd
-// into workDir, and returns a map of symlink paths to their cleaned archive
-// targets.
+// files under opt/kata/share/kata-containers/ into workDir, and returns a map
+// of symlink paths to their cleaned archive targets.
 func extractKataTarZst(ctx context.Context, r io.Reader, workDir string) (map[string]string, error) {
 	zr, err := zstd.NewReader(bufio.NewReader(r))
 	if err != nil {
@@ -527,14 +687,14 @@ func extractKataTarZst(ctx context.Context, r io.Reader, workDir string) (map[st
 		}
 
 		raw := strings.TrimPrefix(strings.TrimPrefix(hdr.Name, "./"), "/")
-		if !strings.HasPrefix(raw, kataSharePrefix) && raw != kataLibexecVirtiofsd {
+		if !strings.HasPrefix(raw, kataSharePrefix) {
 			continue
 		}
 		name := strings.TrimPrefix(path.Clean(raw), "/")
 		if !filepath.IsLocal(filepath.FromSlash(name)) {
 			return nil, fmt.Errorf("tar entry %q escapes the extraction directory", hdr.Name)
 		}
-		if !strings.HasPrefix(name, kataSharePrefix) && name != kataLibexecVirtiofsd {
+		if !strings.HasPrefix(name, kataSharePrefix) {
 			continue
 		}
 
@@ -581,18 +741,11 @@ func writeStreamToFile(dstPath string, mode fs.FileMode, r io.Reader) error {
 }
 
 func downloadToFile(ctx context.Context, url, dstPath string, mode fs.FileMode) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := httpGet(ctx, url)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("while downloading %s: %w", url, err)
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("while downloading %s: unexpected HTTP status %s", url, resp.Status)
-	}
 	return writeStreamToFile(dstPath, mode, resp.Body)
 }
 

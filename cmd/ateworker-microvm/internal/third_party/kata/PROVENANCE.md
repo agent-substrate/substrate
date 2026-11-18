@@ -5,10 +5,12 @@ and used by `cmd/ateworker-microvm`. The upstream `LICENSE` in this directory co
 everything under it.
 
 - **Upstream:** github.com/kata-containers/kata-containers
-- **Version:** tag `3.31.0`. The microVM demo's runtime assets track a newer kata
-  (see `cmd/ate-setup/internal/steps/microvm.go` `defaultKataVersion`, currently `4.3.1`); the four
-  vendored `.proto` files are byte-identical between `3.31.0` and `4.3.1` (verified
-  2026-10-23), so the generated Go needs no re-vendor.
+- **Version:** tag `3.31.0`. The microVM runtime assets track a newer kata
+  (see `cmd/ate-setup/internal/steps/microvm.go` `defaultKataVersion`, currently `4.4.0`). Upstream
+  `oci.proto`, `types.proto` and `csi.proto` are byte-identical between `3.31.0` and `4.4.0`.
+  `agent.proto` differs only in `RemoveContainerRequest`: 4.4.0 reserves its `timeout` field.
+  ateworker never calls `RemoveContainer`, so the generated Go needs no re-vendor (verified
+  2026-11-17).
 - **License:** Apache-2.0 — `./LICENSE` is the upstream license verbatim (mirrored to
   `LICENSES/third_party/kata/LICENSE` by `hack/update/licenses.sh`); the per-file
   copyright headers (HyperHQ, Ant Group, Intel, Databricks) are retained verbatim in
