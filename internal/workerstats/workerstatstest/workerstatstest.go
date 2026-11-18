@@ -19,6 +19,10 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"testing"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/workerstats"
@@ -35,6 +39,44 @@ type Recorder struct {
 func NewEmitter() (*workerstats.UsageEmitter, *Recorder) {
 	rec := &Recorder{}
 	return workerstats.NewUsageEmitter(nil, rec, workerstats.Pool{}), rec
+}
+
+// NewCPUCounter returns a counter backed by a manual reader under scope.
+func NewCPUCounter(t *testing.T, scope string) (*workerstats.CPUCounter, *sdkmetric.ManualReader) {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	counter, err := workerstats.NewCPUCounter(mp.Meter(scope), workerstats.Pool{Namespace: "ns", Name: "pool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counter, reader
+}
+
+// CPUSeconds collects the actor CPU counter, returning zero before any Add.
+func CPUSeconds(t *testing.T, reader *sdkmetric.ManualReader) float64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	var total float64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != workerstats.CPUTimeMetric {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[float64])
+			if !ok {
+				t.Fatalf("CPU metric has data %T, want Sum[float64]", m.Data)
+			}
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+		}
+	}
+	return total
 }
 
 // Kinds is the ate.stats.kind of each record, in order.
