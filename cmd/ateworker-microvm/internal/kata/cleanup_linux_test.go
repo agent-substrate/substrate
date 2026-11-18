@@ -59,27 +59,16 @@ func TestIsSandboxProcess(t *testing.T) {
 	}
 }
 
-func TestCleanupSandboxStateOpts_AbsentAndPresentDirs(t *testing.T) {
+func TestCleanupSandboxDirs_AbsentAndPresentDirs(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
-	sharedBase := filepath.Join(tmp, "shared-sandboxes")
-	vmBase := filepath.Join(tmp, "vc-vm")
-	fakeMountinfo := filepath.Join(tmp, "mountinfo")
-	if err := os.WriteFile(fakeMountinfo, []byte("22 26 0:20 / /sys rw - sysfs sysfs rw\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(fakeMountinfo): %v", err)
-	}
-
 	const id = "actor-clean"
-	sharedDir := filepath.Join(sharedBase, id)
-	vmDir := filepath.Join(vmBase, id)
+	sharedDir := filepath.Join(tmp, "shared-sandboxes", id)
+	vmDir := filepath.Join(tmp, "vc-vm", id)
 	dirs := []string{sharedDir, vmDir}
 
-	// 1. Neither directory exists: cleanupSandboxDirs is a two-lstat no-op.
-	cleanupSandboxDirs(ctx, id, dirs, CleanupOptions{CgroupKilled: false})
-
-	// 2. Create leftover sandbox directories and leaf subdirectories; verify
-	// fast cleanup skips descending into unmounted leaf dirs (rootfs, durable,
-	// csi, system-info, volumes/<name>) and removes both sandbox directories.
+	// Unmounted leaf dirs (rootfs, durable, csi, system-info, volumes/<name>)
+	// hold no mounts, and both dirs are removed.
 	for _, sub := range []string{
 		filepath.Join(sharedDir, "shared", "c_main", "rootfs", "etc"),
 		filepath.Join(sharedDir, "shared", "c_main", "volumes", "agent", "bin"),
@@ -96,49 +85,61 @@ func TestCleanupSandboxStateOpts_AbsentAndPresentDirs(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	pts, err := sandboxMountsUnderStatx(sharedDir)
+	pts, err := sandboxMountsUnder(sharedDir)
 	if err != nil {
-		t.Fatalf("sandboxMountsUnderStatx(sharedDir): %v", err)
+		t.Fatalf("sandboxMountsUnder(sharedDir): %v", err)
 	}
 	if len(pts) != 0 {
-		t.Fatalf("sandboxMountsUnderStatx(sharedDir) = %v, want empty", pts)
+		t.Fatalf("sandboxMountsUnder(sharedDir) = %v, want empty", pts)
 	}
 
-	cleanupSandboxDirs(ctx, id, dirs, CleanupOptions{CgroupKilled: true})
+	cleanupSandboxDirs(ctx, id, dirs, true)
 	for _, d := range dirs {
 		if _, err := os.Stat(d); !os.IsNotExist(err) {
 			t.Errorf("expected %q to be removed, stat err = %v", d, err)
 		}
 	}
+}
 
-	// 3. Verify unmountAndRemoveMountinfo also cleans up directories.
-	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(sharedDir): %v", err)
+func TestCleanupSandboxDirs_KeepsDirWhenMountsUnknown(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode 0 dir")
 	}
-	unmountAndRemoveMountinfo(ctx, []string{sharedDir}, fakeMountinfo)
-	if _, err := os.Stat(sharedDir); !os.IsNotExist(err) {
-		t.Errorf("expected %q to be removed by unmountAndRemoveMountinfo, stat err = %v", sharedDir, err)
+	ctx := context.Background()
+	const id = "actor-unreadable"
+	sharedDir := filepath.Join(t.TempDir(), id)
+	unreadable := filepath.Join(sharedDir, "shared")
+	if err := os.MkdirAll(unreadable, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+
+	cleanupSandboxDirs(ctx, id, []string{sharedDir}, true)
+	if _, err := os.Stat(sharedDir); err != nil {
+		t.Errorf("Stat(%q) = %v, want the dir left in place", sharedDir, err)
 	}
 }
 
-func TestCleanupSandboxStateOpts_DetachesMountsBeforeRemove(t *testing.T) {
+func TestCleanupSandboxDirs_DetachesMountsBeforeRemove(t *testing.T) {
 	roottest.Require(t, "mount/unmount")
 
 	ctx := context.Background()
 	tmp := t.TempDir()
-	sharedBase := filepath.Join(tmp, "shared-sandboxes")
-	vmBase := filepath.Join(tmp, "vc-vm")
-
 	const id = "actor-mounted"
-	sharedDir := filepath.Join(sharedBase, id)
-	vmDir := filepath.Join(vmBase, id)
+	sharedDir := filepath.Join(tmp, "shared-sandboxes", id)
+	vmDir := filepath.Join(tmp, "vc-vm", id)
 	dirs := []string{sharedDir, vmDir}
 
-	// Simulate atelet's durable-dir volume source on the host, bind-mounted into
-	// the sandbox's shared tree, plus a container rootfs bind mount.
+	// Simulate atelet's durable-dir volume source on the host, bind-mounted
+	// twice (stacked) into the sandbox's shared tree, plus container rootfs and
+	// image volume bind mounts.
 	durableSrc := filepath.Join(tmp, "atelet-durable")
 	rootfsSrc := filepath.Join(tmp, "bundle-rootfs")
-	for _, d := range []string{durableSrc, rootfsSrc} {
+	volumeSrc := filepath.Join(tmp, "image-volume")
+	for _, d := range []string{durableSrc, rootfsSrc, volumeSrc} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", d, err)
 		}
@@ -150,32 +151,42 @@ func TestCleanupSandboxStateOpts_DetachesMountsBeforeRemove(t *testing.T) {
 
 	durableMount := filepath.Join(sharedDir, "shared", "durable")
 	rootfsMount := filepath.Join(sharedDir, "shared", "c_main", "rootfs")
-	for _, d := range []string{durableMount, rootfsMount, vmDir} {
+	volumeMount := filepath.Join(sharedDir, "shared", "c_main", "volumes", "agent")
+	for _, d := range []string{durableMount, rootfsMount, volumeMount, vmDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", d, err)
 		}
 	}
-	if err := unix.Mount(durableSrc, durableMount, "", unix.MS_BIND, ""); err != nil {
-		t.Fatalf("bind mount durable: %v", err)
+	for _, m := range []struct{ src, dst string }{
+		{durableSrc, durableMount},
+		{durableSrc, durableMount},
+		{rootfsSrc, rootfsMount},
+		{volumeSrc, volumeMount},
+	} {
+		if err := unix.Mount(m.src, m.dst, "", unix.MS_BIND, ""); err != nil {
+			t.Fatalf("bind mount %q: %v", m.dst, err)
+		}
+		t.Cleanup(func() { _ = unix.Unmount(m.dst, unix.MNT_DETACH) })
 	}
-	t.Cleanup(func() { _ = unix.Unmount(durableMount, unix.MNT_DETACH) })
-	if err := unix.Mount(rootfsSrc, rootfsMount, "", unix.MS_BIND, ""); err != nil {
-		t.Fatalf("bind mount rootfs: %v", err)
-	}
-	t.Cleanup(func() { _ = unix.Unmount(rootfsMount, unix.MNT_DETACH) })
 
-	pts, err := sandboxMountsUnderStatx(sharedDir)
+	pts, err := sandboxMountsUnder(sharedDir)
 	if err != nil {
-		t.Fatalf("sandboxMountsUnderStatx(sharedDir): %v", err)
+		t.Fatalf("sandboxMountsUnder(sharedDir): %v", err)
 	}
 	slices.Sort(pts)
-	want := []string{durableMount, rootfsMount}
+	want := []string{durableMount, rootfsMount, volumeMount}
 	slices.Sort(want)
 	if !slices.Equal(pts, want) {
-		t.Fatalf("sandboxMountsUnderStatx(sharedDir) = %v, want %v", pts, want)
+		t.Fatalf("sandboxMountsUnder(sharedDir) = %v, want %v", pts, want)
 	}
 
-	cleanupSandboxDirs(ctx, id, dirs, CleanupOptions{CgroupKilled: true})
+	// The first sweep detaches the top durable bind, which uncovers the one
+	// stacked under it, so it leaves sharedDir in place.
+	cleanupSandboxDirs(ctx, id, dirs, true)
+	if _, err := os.Stat(sharedDir); err != nil {
+		t.Fatalf("Stat(%q) after the first sweep = %v, want the dir left in place", sharedDir, err)
+	}
+	cleanupSandboxDirs(ctx, id, dirs, true)
 
 	for _, d := range dirs {
 		if _, err := os.Stat(d); !os.IsNotExist(err) {
@@ -188,14 +199,41 @@ func TestCleanupSandboxStateOpts_DetachesMountsBeforeRemove(t *testing.T) {
 	}
 }
 
+// mountinfoMountsUnder returns the mount points at or below dirs listed in
+// mountinfoPath. It is the scan CleanupSandboxState ran before it used statx,
+// kept as the benchmark baseline.
+func mountinfoMountsUnder(mountinfoPath string, dirs []string) ([]string, error) {
+	b, err := os.ReadFile(mountinfoPath)
+	if err != nil {
+		return nil, err
+	}
+	var points []string
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		mp := fields[4]
+		for _, d := range dirs {
+			if mp == d || strings.HasPrefix(mp, d+"/") {
+				points = append(points, mp)
+				break
+			}
+		}
+	}
+	return points, nil
+}
+
+// BenchmarkCleanupSandboxState compares cleanup against the mountinfo and
+// /proc scans it replaced, on a synthetic 5,000-line mountinfo and a 500-PID
+// /proc tree. "absent" is a teardown whose sandbox dirs are gone and whose
+// cgroup kill succeeded. "present" compares only mount discovery over a
+// sandbox tree with no mounts.
 func BenchmarkCleanupSandboxState(b *testing.B) {
 	ctx := context.Background()
 	tmp := b.TempDir()
-	sharedBase := filepath.Join(tmp, "shared-sandboxes")
-	vmBase := filepath.Join(tmp, "vc-vm")
 
-	// Construct a synthetic 5,000-line mountinfo table representative of a
-	// dense node with hundreds of active sandboxes and long overlay options.
+	// A dense node: hundreds of sandboxes with long overlay options.
 	var sb strings.Builder
 	lowerChain := strings.Repeat("/var/lib/ate/image-cache/layers/sha256/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/fs:", 16)
 	for i := range 5000 {
@@ -207,8 +245,7 @@ func BenchmarkCleanupSandboxState(b *testing.B) {
 		b.Fatalf("WriteFile(mountinfo): %v", err)
 	}
 
-	// Construct a synthetic /proc tree with 500 numeric PID directories
-	// representative of active VMM, virtiofsd, and system processes on a node.
+	// Other actors' VMMs, none of which match the benchmark's sandbox id.
 	fakeProc := filepath.Join(tmp, "proc")
 	for i := range 500 {
 		pidDir := filepath.Join(fakeProc, fmt.Sprintf("%d", 2000+i))
@@ -225,24 +262,56 @@ func BenchmarkCleanupSandboxState(b *testing.B) {
 		}
 	}
 
-	const benchActor = "bench-actor"
-	dirs := []string{filepath.Join(sharedBase, benchActor), filepath.Join(vmBase, benchActor)}
-	opts := CleanupOptions{CgroupKilled: true}
+	const id = "bench-actor"
+	absent := []string{filepath.Join(tmp, "absent", "shared-sandboxes", id), filepath.Join(tmp, "absent", "vc-vm", id)}
+	present := []string{filepath.Join(tmp, "present", "shared-sandboxes", id), filepath.Join(tmp, "present", "vc-vm", id)}
+	for _, sub := range []string{
+		filepath.Join(present[0], "shared", "c_main", "rootfs"),
+		filepath.Join(present[0], "shared", "c_main", "volumes", "agent"),
+		filepath.Join(present[0], "shared", "durable"),
+		filepath.Join(present[0], "shared", "csi"),
+		filepath.Join(present[0], "shared", "system-info"),
+		present[1],
+	} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			b.Fatalf("MkdirAll(%q): %v", sub, err)
+		}
+	}
 
-	b.Run("fast=true", func(b *testing.B) {
+	b.Run("absent/scan", func(b *testing.B) {
 		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			cleanupSandboxDirs(ctx, benchActor, dirs, opts)
+		for b.Loop() {
+			if _, err := mountinfoMountsUnder(mountinfoFile, absent); err != nil {
+				b.Fatal(err)
+			}
+			for _, d := range absent {
+				_ = os.RemoveAll(d)
+			}
+			killOrphanedSandboxProcesses(ctx, id, fakeProc)
 		}
 	})
-
-	b.Run("fast=false", func(b *testing.B) {
+	b.Run("absent/lstat", func(b *testing.B) {
 		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			unmountAndRemoveMountinfo(ctx, dirs, mountinfoFile)
-			killOrphanedSandboxProcesses(ctx, benchActor, fakeProc)
+		for b.Loop() {
+			cleanupSandboxDirs(ctx, id, absent, true)
+		}
+	})
+	b.Run("present/mountinfo", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := mountinfoMountsUnder(mountinfoFile, present); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("present/statx", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			for _, d := range present {
+				if _, err := sandboxMountsUnder(d); err != nil {
+					b.Fatal(err)
+				}
+			}
 		}
 	})
 }

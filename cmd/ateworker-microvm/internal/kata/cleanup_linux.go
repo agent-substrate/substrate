@@ -29,15 +29,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/ocispec"
 )
-
-// CleanupOptions configures CleanupSandboxStateOpts.
-type CleanupOptions struct {
-	// CgroupKilled reports whether the caller has already killed and drained
-	// the actor's cgroup leaf (cgroup.KillActorLeaf), making a /proc scan for
-	// orphaned sandbox processes unnecessary.
-	CgroupKilled bool
-}
 
 // CleanupSandboxState removes leftover host-side state for a sandbox id (the
 // virtio-fs shared sandbox dir and the per-VM runtime dir), lazily unmounting
@@ -56,55 +49,47 @@ type CleanupOptions struct {
 // mount beneath it is known detached; otherwise it is left in place for the
 // next sweep (the stagers tolerate a leftover dir — they unmount stale binds
 // and reuse mountpoints).
-func CleanupSandboxState(ctx context.Context, id string) {
-	CleanupSandboxStateOpts(ctx, id, CleanupOptions{})
-}
-
-// CleanupSandboxStateOpts removes leftover host-side state for a sandbox id
-// using the provided CleanupOptions. It stats the candidate sandbox
-// directories first, discovers mounts beneath existing directories via
-// statx(STATX_MNT_ID) before falling back to /proc/self/mountinfo, and skips
-// the /proc orphan scan when the actor cgroup leaf was already killed or no
-// sandbox directory existed on disk.
-func CleanupSandboxStateOpts(ctx context.Context, id string, opts CleanupOptions) {
+//
+// cgroupKilled reports that cgroup.KillActorLeaf succeeded. cloud-hypervisor
+// and virtiofsd start in the actor's leaf, so the /proc scan for orphans is
+// then skipped. The scan is also skipped when neither dir exists.
+func CleanupSandboxState(ctx context.Context, id string, cgroupKilled bool) {
 	dirs := []string{
 		filepath.Join("/run/kata-containers/shared/sandboxes", id),
 		filepath.Join(vcVMDir, id),
 	}
-	cleanupSandboxDirs(ctx, id, dirs, opts)
+	cleanupSandboxDirs(ctx, id, dirs, cgroupKilled)
 }
 
-// cleanupSandboxDirs unmounts and removes existing candidate sandbox
-// directories in dirs and kills orphaned processes for id when needed.
-func cleanupSandboxDirs(ctx context.Context, id string, dirs []string, opts CleanupOptions) {
-	activeDirs := make([]string, 0, len(dirs))
+// cleanupSandboxDirs unmounts and removes the existing dirs and, unless
+// cgroupKilled or none of dirs exists, kills orphaned processes for id.
+func cleanupSandboxDirs(ctx context.Context, id string, dirs []string, cgroupKilled bool) {
+	var existing []string
 	for _, d := range dirs {
-		if _, err := os.Lstat(d); err == nil || !errors.Is(err, os.ErrNotExist) {
-			activeDirs = append(activeDirs, d)
+		if _, err := os.Lstat(d); !errors.Is(err, os.ErrNotExist) {
+			existing = append(existing, d)
 		}
 	}
-
-	if len(activeDirs) > 0 {
-		unmountAndRemoveStatx(ctx, activeDirs)
-	}
-
-	if opts.CgroupKilled || len(activeDirs) == 0 {
+	if len(existing) == 0 {
 		return
 	}
-	killOrphanedSandboxProcesses(ctx, id, "/proc")
+	unmountAndRemove(ctx, existing)
+	if !cgroupKilled {
+		killOrphanedSandboxProcesses(ctx, id, "/proc")
+	}
 }
 
-// unmountAndRemoveStatx discovers mounts at or beneath each directory in dirs
-// via statx(STATX_MNT_ID), detaches them deepest-first, and removes each
-// directory whose mounts all detached. If statx mount discovery fails for a
-// directory, it falls back to unmountAndRemoveMountinfo for the remaining
-// directories.
-func unmountAndRemoveStatx(ctx context.Context, dirs []string) {
-	for i, d := range dirs {
-		points, err := sandboxMountsUnderStatx(d)
+// unmountAndRemove detaches the mounts at or beneath each of dirs,
+// deepest first, and removes each dir whose mounts all detached.
+func unmountAndRemove(ctx context.Context, dirs []string) {
+	for _, d := range dirs {
+		points, err := sandboxMountsUnder(d)
 		if err != nil {
-			unmountAndRemoveMountinfo(ctx, dirs[i:], "/proc/self/mountinfo")
-			return
+			// Without the mounts there is no telling what RemoveAll would
+			// walk into, so the dir is not provably safe to remove.
+			slog.WarnContext(ctx, "Cannot list mounts; leaving sandbox dir in place",
+				slog.String("dir", d), slog.Any("err", err))
+			continue
 		}
 		sort.Slice(points, func(a, b int) bool { return len(points[a]) > len(points[b]) })
 		removable := true
@@ -112,6 +97,12 @@ func unmountAndRemoveStatx(ctx context.Context, dirs []string) {
 			if err := unix.Unmount(mp, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) && !errors.Is(err, os.ErrNotExist) {
 				slog.WarnContext(ctx, "Failed to unmount leftover sandbox mount",
 					slog.String("mount", mp), slog.Any("err", err))
+				removable = false
+			}
+		}
+		if len(points) > 0 {
+			// Detaching a mount uncovers any mount stacked or hidden under it.
+			if left, err := sandboxMountsUnder(d); err != nil || len(left) > 0 {
 				removable = false
 			}
 		}
@@ -127,204 +118,125 @@ func unmountAndRemoveStatx(ctx context.Context, dirs []string) {
 	}
 }
 
-// statxAt queries STATX_TYPE and STATX_MNT_ID for path relative to dirfd
-// without following symlinks or forcing a remote filesystem sync.
+// statxAt queries the file type and mount-root attribute of path relative to
+// dirfd without following symlinks or forcing a remote filesystem sync.
+//
+// STATX_ATTR_MOUNT_ROOT needs Linux 5.8. This package already needs
+// mount_setattr (5.12), and the image cache's overlay mount needs 6.7 or 6.6.23.
 func statxAt(dirfd int, path string) (unix.Statx_t, error) {
 	var sx unix.Statx_t
-	err := unix.Statx(dirfd, path, unix.AT_SYMLINK_NOFOLLOW|unix.AT_STATX_DONT_SYNC, unix.STATX_TYPE|unix.STATX_MNT_ID, &sx)
-	if err != nil {
-		return sx, err
-	}
-	if sx.Mask&unix.STATX_MNT_ID == 0 {
-		return sx, unix.ENOSYS
-	}
-	return sx, nil
+	err := unix.Statx(dirfd, path, unix.AT_SYMLINK_NOFOLLOW|unix.AT_STATX_DONT_SYNC, unix.STATX_TYPE, &sx)
+	return sx, err
 }
 
-// isMountRoot reports whether sx represents a mount root, either via
-// STATX_ATTR_MOUNT_ROOT or by crossing a mount ID boundary from parentMntID.
-func isMountRoot(sx unix.Statx_t, parentMntID uint64) bool {
-	if sx.Attributes_mask&unix.STATX_ATTR_MOUNT_ROOT != 0 && sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
-		return true
-	}
-	return sx.Mnt_id != parentMntID
+// sandboxLeafMountDirs match, relative to the sandbox dir, the mountpoints
+// that BindIntoShare, stageSystemInfoVolumes and the rootfs binds create under
+// SharedDir. Nothing else is mounted beneath them.
+var sandboxLeafMountDirs = []string{
+	filepath.Join("shared", ocispec.ShareDurable),
+	filepath.Join("shared", ocispec.ShareCSI),
+	filepath.Join("shared", ocispec.ShareSystemInfo),
+	filepath.Join("shared", "*", "rootfs"),
+	filepath.Join("shared", "*", ocispec.ShareVolumes, "*"),
 }
 
-// isSandboxLeafMountDir reports whether name (or a child of volumes/) is a
-// leaf mountpoint directory under SharedDir(id) that never contains nested
-// host mounts when unmounted.
-func isSandboxLeafMountDir(name string, inVolumesDir bool) bool {
-	if inVolumesDir {
-		return true
-	}
-	switch name {
-	case "rootfs", "durable", "csi", "system-info":
-		return true
-	default:
-		return false
-	}
-}
-
-// sandboxMountsUnderStatx discovers mount points at or below dir by comparing
-// STATX_MNT_ID (and STATX_ATTR_MOUNT_ROOT) across directory boundaries instead
-// of reading and scanning /proc/self/mountinfo.
-func sandboxMountsUnderStatx(dir string) ([]string, error) {
-	dir = filepath.Clean(dir)
-	dirSx, err := statxAt(unix.AT_FDCWD, dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
-			return nil, nil
+// isSandboxLeafMountDir reports whether rel, relative to the sandbox dir,
+// matches sandboxLeafMountDirs.
+func isSandboxLeafMountDir(rel string) bool {
+	for _, pattern := range sandboxLeafMountDirs {
+		if ok, _ := filepath.Match(pattern, rel); ok {
+			return true
 		}
+	}
+	return false
+}
+
+// sandboxMountsUnder lists the mount points at or below dir using
+// STATX_ATTR_MOUNT_ROOT, without reading /proc/self/mountinfo.
+func sandboxMountsUnder(dir string) ([]string, error) {
+	dir = filepath.Clean(dir)
+	sx, err := statxAt(unix.AT_FDCWD, dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
-
 	var points []string
-	if dirSx.Attributes_mask&unix.STATX_ATTR_MOUNT_ROOT != 0 {
-		if dirSx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
-			points = append(points, dir)
-		}
-	} else if parentDir := filepath.Dir(dir); parentDir != dir {
-		parentSx, err := statxAt(unix.AT_FDCWD, parentDir)
-		if err != nil {
-			return nil, err
-		}
-		if dirSx.Mnt_id != parentSx.Mnt_id {
-			points = append(points, dir)
-		}
+	if sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
+		points = append(points, dir)
 	}
-
-	if dirSx.Mode&unix.S_IFMT == unix.S_IFDIR {
-		if err := walkSandboxMountsStatx(dir, dirSx.Mnt_id, filepath.Base(dir) == "volumes", &points); err != nil {
+	if sx.Mode&unix.S_IFMT == unix.S_IFDIR {
+		if err := walkSandboxMounts(dir, "", &points); err != nil {
 			return nil, err
 		}
 	}
 	return points, nil
 }
 
-// walkSandboxMountsStatx recursively inspects directory entries under curDir
-// using dirfd-relative statx calls, collecting mount roots into points without
-// descending into mounted filesystems or unmounted leaf volume directories.
-func walkSandboxMountsStatx(curDir string, dirMntID uint64, inVolumesDir bool, points *[]string) error {
+// walkSandboxMounts appends the mount points below root/rel to points. It does
+// not follow symlinks, descend into mount points, or descend into unmounted
+// leaf mountpoint dirs (isSandboxLeafMountDir). It closes each dir before
+// recursing, so it holds one open file at a time.
+func walkSandboxMounts(root, rel string, points *[]string) error {
+	curDir := filepath.Join(root, rel)
 	f, err := os.Open(curDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		_ = f.Close()
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
 	}
-	names, readErr := f.Readdirnames(-1)
-	if readErr != nil {
-		_ = f.Close()
-		if errors.Is(readErr, os.ErrNotExist) || errors.Is(readErr, unix.ENOENT) {
-			return nil
-		}
-		return readErr
-	}
 
 	dirfd := int(f.Fd())
-	type subdir struct {
-		path  string
-		mntID uint64
-		inVol bool
-	}
-	var subdirs []subdir
-
+	var subdirs []string
 	for _, name := range names {
 		sx, err := statxAt(dirfd, name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
-				continue
-			}
 			_ = f.Close()
 			return err
 		}
 		if sx.Mode&unix.S_IFMT == unix.S_IFLNK {
 			continue
 		}
-		if isMountRoot(sx, dirMntID) {
+		if sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
 			*points = append(*points, filepath.Join(curDir, name))
 			continue
 		}
-		isDir := sx.Mode&unix.S_IFMT == unix.S_IFDIR
-		if !isDir || isSandboxLeafMountDir(name, inVolumesDir) {
+		subRel := filepath.Join(rel, name)
+		if sx.Mode&unix.S_IFMT != unix.S_IFDIR || isSandboxLeafMountDir(subRel) {
 			continue
 		}
-		subdirs = append(subdirs, subdir{
-			path:  filepath.Join(curDir, name),
-			mntID: sx.Mnt_id,
-			inVol: name == "volumes",
-		})
+		subdirs = append(subdirs, subRel)
 	}
 	_ = f.Close()
 
 	for _, sub := range subdirs {
-		if err := walkSandboxMountsStatx(sub.path, sub.mntID, sub.inVol, points); err != nil {
+		if err := walkSandboxMounts(root, sub, points); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// unmountAndRemoveMountinfo detaches mounts beneath dirs by scanning
-// mountinfoPath (/proc/self/mountinfo) and removes each directory whose mounts
-// all detached.
-func unmountAndRemoveMountinfo(ctx context.Context, dirs []string, mountinfoPath string) {
-	removable := make(map[string]bool, len(dirs))
-	if b, err := os.ReadFile(mountinfoPath); err != nil {
-		// Without the mount table there is no telling what is still mounted
-		// under the dirs, so none of them is provably safe to remove.
-		slog.WarnContext(ctx, "Cannot read mountinfo; leaving sandbox dirs in place",
-			slog.Any("err", err))
-	} else {
-		for _, d := range dirs {
-			removable[d] = true
-		}
-		type mount struct{ mp, dir string }
-		var mounts []mount
-		for _, line := range strings.Split(string(b), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 5 {
-				continue
-			}
-			mp := fields[4] // mount point
-			for _, d := range dirs {
-				if mp == d || strings.HasPrefix(mp, d+"/") {
-					mounts = append(mounts, mount{mp: mp, dir: d})
-					break
-				}
-			}
-		}
-		// Deepest paths first so child mounts unmount before their parents.
-		sort.Slice(mounts, func(i, j int) bool { return len(mounts[i].mp) > len(mounts[j].mp) })
-		for _, m := range mounts {
-			if err := unix.Unmount(m.mp, unix.MNT_DETACH); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount leftover sandbox mount",
-					slog.String("mount", m.mp), slog.Any("err", err))
-				removable[m.dir] = false
-			}
-		}
-	}
-	for _, d := range dirs {
-		if !removable[d] {
-			slog.WarnContext(ctx, "Leaving sandbox dir in place: mounts under it were not all detached",
-				slog.String("dir", d))
-			continue
-		}
-		if err := os.RemoveAll(d); err != nil {
-			slog.WarnContext(ctx, "Failed to remove leftover sandbox dir",
-				slog.String("dir", d), slog.Any("err", err))
-		}
-	}
-}
-
-// killOrphanedSandboxProcesses scans procRoot (/proc) and sends SIGKILL to any
-// orphaned cloud-hypervisor or virtiofsd process serving the sandbox id.
+// killOrphanedSandboxProcesses scans procRoot (/proc) and kills the
+// per-sandbox processes (cloud-hypervisor / virtiofsd) left by a prior killed
+// attempt: a canceled Create leaves the CH it spawned running (reparented to
+// the init) holding guest RAM and stale sockets. Matched strictly by the
+// sandbox id (an actor UUID) appearing in the cmdline, so nothing unrelated
+// can match.
 func killOrphanedSandboxProcesses(ctx context.Context, id, procRoot string) {
-	// Kill orphaned per-sandbox processes (cloud-hypervisor / virtiofsd) left by
-	// a prior killed attempt: a canceled Create leaves the CH it spawned running
-	// (reparented to the init) holding guest RAM and stale sockets. Matched strictly by
-	// the sandbox id (an actor UUID) appearing in the cmdline, so nothing
-	// unrelated can match.
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return

@@ -111,17 +111,13 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 // cleanupSandboxState kills what is left of the actor's host processes and
 // clears its sandbox directories.
 func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID string) {
-	cgroupKilled := false
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	if err := cgroup.KillActorLeaf(killCtx, actorUID); err != nil {
-		slog.WarnContext(ctx, "Failed to kill the actor's leftover processes", slog.Any("err", err))
-	} else {
-		cgroupKilled = true
-	}
+	err := cgroup.KillActorLeaf(killCtx, actorUID)
 	cancel()
-	kata.CleanupSandboxStateOpts(ctx, actorUID, kata.CleanupOptions{
-		CgroupKilled: cgroupKilled,
-	})
+	if err != nil {
+		slog.WarnContext(ctx, "Failed to kill the actor's leftover processes", slog.Any("err", err))
+	}
+	kata.CleanupSandboxState(ctx, actorUID, err == nil)
 }
 
 // unhostActor removes an actor, its network, and its cgroup. Repeated calls are
