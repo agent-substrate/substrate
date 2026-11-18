@@ -490,3 +490,41 @@ func TestEnsureSandboxAssetsRejectsBadAssetNames(t *testing.T) {
 		t.Errorf("kata-kernel staged at %q (%v), want a regular file at %s", paths["kata-kernel"], err, filepath.Join(dstDir, "kata-kernel"))
 	}
 }
+
+func TestWriteSandboxRecordKeepsAnUnchangedRecord(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "5d1b7c8e-2f3a-4b5c-8d9e-0a1b2c3d4e5f"
+	rec := &sandboxAssetsRecord{
+		SandboxClass: "gvisor",
+		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://test-bucket/gvisor-release.tar.gz", SHA256: strings.Repeat("a", 64)}},
+	}
+	if err := writeSandboxRecord(actorUID, rec); err != nil {
+		t.Fatalf("writeSandboxRecord: %v", err)
+	}
+	path := ateletpath.ActorSandboxAssetsFile(actorUID)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSandboxRecord(actorUID, rec); err != nil {
+		t.Fatalf("writeSandboxRecord: %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("rewrote an unchanged sandbox record")
+	}
+	rec.Assets[gvisorAssetName] = assetEntry{URL: "gs://test-bucket/gvisor-release.tar.gz", SHA256: strings.Repeat("b", 64)}
+	if err := writeSandboxRecord(actorUID, rec); err != nil {
+		t.Fatalf("writeSandboxRecord: %v", err)
+	}
+	got, err := readSandboxRecord(actorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha := got.Assets[gvisorAssetName].SHA256; sha != strings.Repeat("b", 64) {
+		t.Errorf("sandbox record sha256 = %q after a change, want the new one", sha)
+	}
+}
