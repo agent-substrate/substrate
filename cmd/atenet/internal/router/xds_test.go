@@ -1192,7 +1192,11 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	}
 	routeTimeout := func(t *testing.T, x *XdsServer) time.Duration {
 		t.Helper()
-		return routeAction(t, x).GetTimeout().AsDuration()
+		timeout := routeAction(t, x).GetTimeout()
+		if timeout == nil {
+			t.Fatal("workload route has no explicit timeout")
+		}
+		return timeout.AsDuration()
 	}
 	idleTimeout := func(t *testing.T, x *XdsServer) time.Duration {
 		t.Helper()
@@ -1216,20 +1220,22 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 		}
 	})
 
-	// The flag cannot produce a zero: --route-timeout carries defaultRouteTimeout,
-	// so an operator who never passes it gets the default, not 0. The guard is on the
-	// setter because SetRouteTimeout is part of the type's API and reachable
-	// from any caller, and because a zero here is the one value Envoy reads as
-	// "no timeout at all" — a mis-set knob would silently turn every stuck
-	// actor into a held-open request rather than failing visibly. The sibling
-	// setters guard the same way.
-	t.Run("NonPositiveKeepsDefault", func(t *testing.T) {
-		for _, d := range []time.Duration{0, -time.Second} {
-			x := NewXdsServer(0)
-			x.SetRouteTimeout(d)
-			if got := routeTimeout(t, x); got != defaultRouteTimeout {
-				t.Errorf("route timeout after SetRouteTimeout(%v) = %v, want default %v", d, got, defaultRouteTimeout)
-			}
+	t.Run("SetterAcceptsZero", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(0)
+		if got := routeTimeout(t, x); got != 0 {
+			t.Errorf("route timeout after SetRouteTimeout(0) = %v, want 0", got)
+		}
+		if got := idleTimeout(t, x); got != envoyDefaultStreamIdleTimeout {
+			t.Errorf("idle timeout after SetRouteTimeout(0) = %v, want %v", got, envoyDefaultStreamIdleTimeout)
+		}
+	})
+
+	t.Run("SetterRejectsNegative", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(-time.Second)
+		if got := routeTimeout(t, x); got != defaultRouteTimeout {
+			t.Errorf("route timeout after SetRouteTimeout(-1s) = %v, want default %v", got, defaultRouteTimeout)
 		}
 	})
 
@@ -1267,7 +1273,7 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	t.Run("IdleTimeoutNeverFiresBeforeTheRouteTimeout", func(t *testing.T) {
 		for _, d := range []time.Duration{0, 10 * time.Second, time.Minute, defaultRouteTimeout, 30 * time.Minute} {
 			x := NewXdsServer(0)
-			x.SetRouteTimeout(d) // non-positive keeps the default; see above
+			x.SetRouteTimeout(d)
 			action := routeAction(t, x)
 			if action.GetIdleTimeout() == nil {
 				t.Fatalf("SetRouteTimeout(%v): no idle timeout set on the workload route", d)
