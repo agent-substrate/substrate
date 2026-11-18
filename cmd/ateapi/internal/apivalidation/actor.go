@@ -142,3 +142,23 @@ func ValidateCustom_ExternalVolumeStatus_StorageVolumeId(_ context.Context, _ op
 func ValidateCustom_ExternalVolumeStatus_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
 	return resources.ValidateCSIMap(fldPath, value)
 }
+
+// ValidateCustom_ExternalVolumeSnapshot_VolumeType checks the driver that took a
+// volume snapshot, which is copied from the source volume and so takes the same
+// form as ExternalVolumeStatus.volume_type.
+func ValidateCustom_ExternalVolumeSnapshot_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateVolumeType(fldPath, *value)
+}
+
+// ValidateCustom_ExternalVolumeSnapshot_StorageSnapshotId checks a volume
+// snapshot handle. Like a volume ID, the handle's format belongs to the storage
+// system, so the only thing worth checking is that it is printable.
+func ValidateCustom_ExternalVolumeSnapshot_StorageSnapshotId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
+
+// ValidateCustom_ExternalVolumeSnapshot_SourceVolumeId checks the source
+// volume's ID, which like storage_volume_id belongs to the storage system.
+func ValidateCustom_ExternalVolumeSnapshot_SourceVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
