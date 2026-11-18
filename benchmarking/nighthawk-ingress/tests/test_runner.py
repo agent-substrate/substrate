@@ -38,7 +38,7 @@ def test_converged_run_requires_successful_uploads(tmp_path, monkeypatch, upload
     # Place the otherwise timestamp-named work directory under this test.
     monkeypatch.setattr(runner, "Path", lambda _: tmp_path / "work")
     monkeypatch.setattr(runner.spec_mod, "build_spec_dict", lambda **_: {})
-    monkeypatch.setattr(runner.spec_mod, "spec_dict_to_textproto", lambda *_: "spec")
+    monkeypatch.setattr(runner.common_spec, "spec_dict_to_textproto", lambda *_: "spec")
     monkeypatch.setattr(runner, "start_service", lambda *_: mock.Mock())
     def adaptive(_spec, output, _logs):
         output.write_text("output")
