@@ -37,7 +37,7 @@ import (
 // ServiceImpl for business logic and invariants.
 type RPCService struct {
 	ateapi.UnimplementedControlServer
-	impl                  serviceStore
+	impl                  *ServiceImpl
 	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
@@ -101,6 +101,7 @@ func NewRPCService(
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
 	}
+	impl.pluginRegistry = s
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
@@ -180,6 +181,9 @@ type ServiceImpl struct {
 	// clusterSnapshotLocation is ate-api-server's --snapshot-location; see
 	// resolveSnapshotLocation.
 	clusterSnapshotLocation string
+
+	// pluginRegistry looks up the volume plugin for a driver name.
+	pluginRegistry VolumePluginRegistry
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
