@@ -137,7 +137,9 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		// which cannot produce decodable file handles.
 		"--inode-file-handles=never",
 		"--cache=auto",
-		"--thread-pool-size=1",
+		// No thread pool: the queue thread serves each request under the vring
+		// lock, so a snapshot's GET_VRING_BASE waits for the request in flight.
+		"--thread-pool-size=0",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
 		// The default (abort) makes a snapshot unrestorable if the guest still
