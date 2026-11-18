@@ -65,6 +65,7 @@ var (
 	drainGrace       = pflag.Duration("drain-grace", 5*time.Second, "how long to wait for in-flight RPCs on shutdown before a hard stop")
 	kubeAPIQPS       = pflag.Float32("kube-api-qps", 50, "Sustained queries per second allowed against the Kubernetes API.")
 	kubeAPIBurst     = pflag.Int("kube-api-burst", 100, "Burst queries allowed against the Kubernetes API.")
+	secretCacheTTL   = pflag.Duration("secret-cache-ttl", 10*time.Second, "How long a Secret read from Kubernetes is reused before reading it again, which bounds how long a rotated or relabeled Secret keeps serving its old value. 0 disables the cache (concurrent fetches of one Secret still share a read)")
 	previewFlags     = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
@@ -96,6 +97,10 @@ func run(ctx context.Context) error {
 
 	go serverboot.StartMetricsServer(ctx, *metricsAddr)
 
+	if *secretCacheTTL < 0 {
+		return fmt.Errorf("--secret-cache-ttl must not be negative, got %s (0 disables the cache)", *secretCacheTTL)
+	}
+
 	client, err := newKubeClient()
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -122,7 +127,7 @@ func run(ctx context.Context) error {
 		grpc.Creds(creds),
 	)
 	reflection.Register(srv)
-	provider := NewServer(client, nsAuth)
+	provider := NewServer(client, nsAuth, *secretCacheTTL)
 	credprovider.RegisterCredentialProviderServer(srv, provider)
 
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *listenAddr)
