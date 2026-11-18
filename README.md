@@ -15,8 +15,6 @@
 [![govulncheck](https://github.com/agent-substrate/substrate/actions/workflows/govulncheck.yaml/badge.svg)](https://github.com/agent-substrate/substrate/actions/workflows/govulncheck.yaml)
 [![GitHub stars](https://img.shields.io/github/stars/agent-substrate/substrate?style=flat)](https://github.com/agent-substrate/substrate/stargazers)
 
-<a href="https://trendshift.io/repositories/34772"><img src="https://trendshift.io/api/badge/repositories/34772" alt="agent-substrate/substrate on Trendshift: #1 repository of the day" width="250" height="55"></a>
-
 [Quickstart](#quickstart-development) · [Security](docs/security/security.md) · [Architecture](docs/concepts/architecture.md) · [Contributing](CONTRIBUTING.md)
 
 <a href="https://ate.dev">
