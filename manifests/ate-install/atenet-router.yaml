@@ -154,8 +154,7 @@ data:
                     port_value: 9901
       - name: xds_cluster
         connect_timeout: 0.25s
-        type: STRICT_DNS
-        lb_policy: ROUND_ROBIN
+        type: STATIC
         typed_extension_protocol_options:
           envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
