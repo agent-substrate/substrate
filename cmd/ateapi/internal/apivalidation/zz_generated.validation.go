@@ -10857,7 +10857,7 @@ func Validate_WorkerAssignment(
 		errs = append(errs, fn(fldPath.Child("worker_spiffe_id"), &obj.WorkerSpiffeId, oldVal, oldObj != nil)...)
 	}
 
-	{ // field v1.WorkerAssignment.ExecutionUid
+	{ // field v1.WorkerAssignment.ActorExecutionUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -10883,9 +10883,9 @@ func Validate_WorkerAssignment(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.WorkerAssignment) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActorExecutionUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("actor_execution_uid"), &obj.ActorExecutionUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs

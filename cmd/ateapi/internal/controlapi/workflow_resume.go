@@ -862,7 +862,7 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// stamped with the worker process's epoch and the Run or Restore call's UUID.
+// stamped with the worker process's epoch and the actor's execution UUID.
 //
 // The worker process registered that epoch, with its pod IPs, before it took
 // the workload. If it is still the Worker's registered epoch, the Actor is
@@ -901,7 +901,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
-		toUpdate.Status.WorkerAssignment.ExecutionUid = executionUID
+		toUpdate.Status.WorkerAssignment.ActorExecutionUid = executionUID
 		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
 		// The workload already runs, so a record that can't take the upload
 		// doesn't hold the actor in RESUMING. The next suspend prunes the entry.

@@ -2381,15 +2381,16 @@ type WorkerAssignment struct {
 	// +k8s:customValidation # a SPIFFE ID
 	// +k8s:update=NoModify
 	WorkerSpiffeId string `protobuf:"bytes,10,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
-	// execution_uid identifies the API server's Run or Restore call.
-	// Stored when the Actor becomes RUNNING. Empty for executions started by
-	// an older API server.
+	// actor_execution_uid identifies the Actor's current execution on this Worker.
+	// Each Run or Restore call starts an execution with a new UUID. The field is
+	// empty until the Actor becomes RUNNING and for executions started by an
+	// older API server.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ExecutionUid  string `protobuf:"bytes,11,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ActorExecutionUid string `protobuf:"bytes,11,opt,name=actor_execution_uid,json=actorExecutionUid,proto3" json:"actor_execution_uid,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *WorkerAssignment) Reset() {
@@ -2492,9 +2493,9 @@ func (x *WorkerAssignment) GetWorkerSpiffeId() string {
 	return ""
 }
 
-func (x *WorkerAssignment) GetExecutionUid() string {
+func (x *WorkerAssignment) GetActorExecutionUid() string {
 	if x != nil {
-		return x.ExecutionUid
+		return x.ActorExecutionUid
 	}
 	return ""
 }
@@ -10136,7 +10137,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xe3\x03\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xee\x03\n" +
 	"\x10WorkerAssignment\x126\n" +
 	"\x06worker\x18\x06 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -10150,8 +10151,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\x12Q\n" +
 	"\x0fsandbox_runtime\x18\t \x01(\v2(.substrate.ateapi.v1.ActorSandboxRuntimeR\x0esandboxRuntime\x12(\n" +
 	"\x10worker_spiffe_id\x18\n" +
-	" \x01(\tR\x0eworkerSpiffeId\x12#\n" +
-	"\rexecution_uid\x18\v \x01(\tR\fexecutionUid\"t\n" +
+	" \x01(\tR\x0eworkerSpiffeId\x12.\n" +
+	"\x13actor_execution_uid\x18\v \x01(\tR\x11actorExecutionUid\"t\n" +
 	"\tTagStatus\x129\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x1d.substrate.ateapi.v1.SnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\"\x86\x02\n" +

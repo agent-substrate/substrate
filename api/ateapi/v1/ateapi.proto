@@ -1054,13 +1054,14 @@ message WorkerAssignment {
   // +k8s:update=NoModify
   string worker_spiffe_id = 10;
 
-  // execution_uid identifies the API server's Run or Restore call.
-  // Stored when the Actor becomes RUNNING. Empty for executions started by
-  // an older API server.
+  // actor_execution_uid identifies the Actor's current execution on this Worker.
+  // Each Run or Restore call starts an execution with a new UUID. The field is
+  // empty until the Actor becomes RUNNING and for executions started by an
+  // older API server.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string execution_uid = 11;
+  string actor_execution_uid = 11;
 }
 
 // TagStatus is the server-owned state of a Tag.

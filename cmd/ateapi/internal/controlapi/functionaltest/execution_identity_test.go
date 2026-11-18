@@ -88,7 +88,7 @@ func TestResumeActorExecutionUID(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if before.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING || before.GetStatus().GetWorkerAssignment().GetExecutionUid() != "" {
+				if before.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING || before.GetStatus().GetWorkerAssignment().GetActorExecutionUid() != "" {
 					t.Fatalf("failed call committed its execution: %v", before.GetStatus())
 				}
 				assignment, err := tc.persistence.GetWorkerAssignment(ctx, worker, created.GetMetadata().GetUid())
@@ -114,7 +114,7 @@ func TestResumeActorExecutionUID(t *testing.T) {
 			if test.restore && (snapshotUUID == "" || generation < 1) {
 				t.Fatalf("restore snapshot = %q generation %d, want an existing snapshot", snapshotUUID, generation)
 			}
-			if resumed.GetActor().GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || resumed.GetActor().GetStatus().GetWorkerAssignment().GetExecutionUid() != uid {
+			if resumed.GetActor().GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || resumed.GetActor().GetStatus().GetWorkerAssignment().GetActorExecutionUid() != uid {
 				t.Fatalf("RUNNING actor lost the request's execution UID: %v", resumed)
 			}
 			if test.loseResponse {

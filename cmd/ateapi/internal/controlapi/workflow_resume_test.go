@@ -192,8 +192,8 @@ func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
 	assignment := got.GetStatus().GetWorkerAssignment()
-	if assignment.GetExecutionUid() != executionUID {
-		t.Errorf("execution_uid = %q, want %q", assignment.GetExecutionUid(), executionUID)
+	if assignment.GetActorExecutionUid() != executionUID {
+		t.Errorf("actor_execution_uid = %q, want %q", assignment.GetActorExecutionUid(), executionUID)
 	}
 	if assignment.GetWorkerEpoch() != 2 {
 		t.Errorf("worker_epoch = %d, want 2", assignment.GetWorkerEpoch())
