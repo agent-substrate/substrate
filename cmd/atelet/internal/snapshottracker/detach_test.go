@@ -392,6 +392,7 @@ func TestTrackerDetachTimer(t *testing.T) {
 	store := newFakeSnapshotStore()
 	tr := newIdleTestTracker(t, store)
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	s1Due := detachDueOf(tr, trackedActorUID)
 
 	endStart, err := tr.BeginStart(t.Context(), trackedActorUID)
 	if err != nil {
@@ -403,6 +404,11 @@ func TestTrackerDetachTimer(t *testing.T) {
 	endStart()
 	if due := detachDueOf(tr, trackedActorUID); !due.IsZero() {
 		t.Fatalf("detachDue after the start = %v, want zero whether or not it succeeded", due)
+	}
+	stepTo(tr, s1Due)
+	processNext(t, tr, opDetach)
+	if got := uuidOf(tr.State(trackedActorUID).GetLatestLocal()); got != "s1" {
+		t.Fatalf("latest_local after s1's unscheduled timer fired = %q, want s1 kept", got)
 	}
 
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
