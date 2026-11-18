@@ -19,10 +19,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.ate.dev/substrate/internal/credbundle"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
 
 const DefaultServiceAccountCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
@@ -88,6 +90,13 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 
 	opts := []grpc.DialOption{
 		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+		// Without pings, an RPC on a connection to a node that disappeared
+		// hangs until the kernel gives up, about 15 minutes by default.
+		// ate-api-server's keepalive EnforcementPolicy allows this rate.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    time.Minute,
+			Timeout: 10 * time.Second,
+		}),
 	}
 
 	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
