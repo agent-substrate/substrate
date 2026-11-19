@@ -30,7 +30,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -39,6 +38,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, TextIO
+
+# Also find the shared module when running directly from the source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from result_store import upload
 
 import actors
 from nighthawk_common import output as output_mod
@@ -63,12 +66,12 @@ def parse_duration_seconds(s: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--name", required=True, help="Test name (GCS path component)")
+    p.add_argument("--name", required=True, help="Test name (result path component)")
     p.add_argument("--tag", required=True, help="Tag for this run (commit sha)")
     p.add_argument(
         "--dest",
         required=True,
-        help="Root destination (gs://bucket/path or local path)",
+        help="Root destination (gs://bucket/path, s3://bucket/path, az://container/path, or local path)",
     )
     p.add_argument("--envoy-cpu", required=True, type=int, dest="envoy_cpu")
     p.add_argument("--actors", type=int, default=100)
@@ -178,25 +181,6 @@ def run_adaptive_client(
     )
     pump_stream("adaptive", proc.stdout, logs)
     return proc.wait()
-
-
-def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
-    # Imported here so non-GCS use doesn't require google-cloud-storage.
-    from google.cloud import storage
-
-    bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
-    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
-        str(local_path)
-    )
-
-
-def upload(src: Path, dest: str) -> None:
-    if dest.startswith("gs://"):
-        upload_to_gcs(src, dest)
-    else:
-        dest_path = Path(dest)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dest_path)
 
 
 def log_run_config(args: argparse.Namespace, prefix: str, logs: TextIO) -> None:

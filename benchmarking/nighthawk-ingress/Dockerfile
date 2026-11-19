@@ -74,14 +74,15 @@ FROM envoyproxy/nighthawk-dev@${NIGHTHAWK_IMAGE_DIGEST}
 
 # Deps must be installed with this image's own interpreter: grpcio/protobuf
 # native extensions are python-version-specific.
-COPY benchmarking/nighthawk-ingress/requirements.txt /tmp/requirements.txt
+COPY benchmarking/requirements.txt /requirements/requirements.txt
+COPY benchmarking/nighthawk-ingress/requirements.txt /requirements/nighthawk-ingress/requirements.txt
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
     && python3 -m pip install --no-cache-dir --break-system-packages \
-        --target=/app/deps -r /tmp/requirements.txt \
+        --target=/app/deps -r /requirements/nighthawk-ingress/requirements.txt \
     && apt-get purge -y python3-pip \
     && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /tmp/requirements.txt
+    && rm -rf /var/lib/apt/lists/* /requirements
 
 WORKDIR /app
 COPY --from=protogen /out/nighthawk.desc /app/nighthawk.desc
@@ -98,6 +99,8 @@ COPY benchmarking/nighthawk-ingress/runner.py \
      benchmarking/nighthawk-ingress/actors.py \
      /app/
 COPY benchmarking/nighthawk-ingress/tests /app/tests
+
+COPY benchmarking/result_store.py /app/result_store.py
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

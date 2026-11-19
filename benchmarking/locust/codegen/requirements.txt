@@ -15,7 +15,7 @@
 # Build-time dependencies for generate.sh and for the nighthawk-ingress
 # image's descriptor build. Kept apart from the load test's runtime
 # requirements.txt so that generating the protos does not pull in locust, the
-# opentelemetry exporters and google-cloud-storage.
+# opentelemetry exporters.
 #
 # grpcio-tools bundles protoc along with the Python and gRPC codegen plugins.
 # It is pinned because the generated files stamp the version that produced
