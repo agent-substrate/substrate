@@ -7,8 +7,8 @@ Benchmarks the Agent Substrate egress dataplane (`atunnel` -> `atenet-egress`) u
 ```mermaid
 flowchart LR
     client["nighthawk_client<br/>(host)"]
-    invoker["traffic-driver-invoker<br/>(:19980, adds ate-target-actor)"]
-    router["atenet-router<br/>(:443)"]
+    proxy["kubectl-ate proxy actor<br/>(:19980)"]
+    router["atenet-router<br/>(:8444)"]
 
     subgraph worker["WorkerPod (ateworker-gvisor)"]
         atunnel-ingress["ingress atunnel"]
@@ -19,14 +19,25 @@ flowchart LR
     egress["atenet-egress<br/>(HTTP / HTTPS MITM / TLS passthrough)"]
     server["nighthawk-server<br/>(:80, :443, :8443)"]
 
-    client -->|"start test"| invoker
-    invoker -->|"gRPC + ate-target-actor: nighthawk/tester"| router
+    client -->|"start test"| proxy
+    proxy -->|"CONNECT to nighthawk/tester:80"| router
     router --> atunnel-ingress
     atunnel-ingress --> actor
     actor ==>|"test traffic"| atunnel-egress
     atunnel-egress ==>|"mTLS"| egress
     egress ==> server
 ```
+
+## Tuning
+
+### Configuration knobs (the `nighthawk-egress:` block)
+
+A `type: nighthawk-egress` entry in [`benchmarking/automation/tests.yaml`](../automation/tests.yaml) sets both knobs in its `nighthawk-egress:` block:
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `envoyCpu` | required | CPU request and limit of `envoy` and `ext-proc` in `deployment/atenet-egress`, and the Envoy `--concurrency`. |
+| `mode` | required | `http`, `mitm`, or `passthrough`. |
 
 ## Prerequisites
 
@@ -50,7 +61,7 @@ The sizes:
      E2E_ATE_ENVOY_CONCURRENCY=1 go run ./cmd/ate-setup deploy ate-system \
        --cordon-system-infra-components \
        --credential-provider='{"name":"k8s.io"}' \
-       --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
+       --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
      ```
    - `E2E_ATE_ENVOY_CONCURRENCY` sets the `atenet-egress` Envoy worker thread count (`--concurrency`). `E2E_ATE_ENVOY_CONCURRENCY=1` measures a single Envoy core, which the sizes above are for.
    - Provision the CA bundle in `ate-system` so `atenet-egress` trusts `nighthawk-server`'s `servicedns` certificate on `:443`. The script defaults to a kind context, so name the cluster's context:
@@ -63,7 +74,7 @@ The sizes:
 
 ## Setup
 
-### 1. Deploy `nighthawk-server` and `traffic-driver-invoker`
+### 1. Deploy `nighthawk-server`
 
 ```bash
 ./benchmarking/nighthawk-egress/deploy.sh
@@ -75,17 +86,17 @@ The sizes:
 ./benchmarking/nighthawk-egress/deploy-traffic-driver.sh
 ```
 
-### 3. Port-forward `traffic-driver-invoker`
+### 3. Forward a port to the actor
 
-In a separate terminal, forward local port `19980` to the `traffic-driver-invoker` service:
+In a separate terminal, forward local port `19980` to `nighthawk_service` in the `nighthawk/tester` actor. `kubectl-ate proxy actor` connects as `spiffe://cluster.local/ns/ate-system/sa/atenet-client`, which is the ID in the deploy command above:
 
 ```bash
-kubectl -n nighthawk port-forward svc/traffic-driver-invoker 19980:19980
+go run ./cmd/kubectl-ate proxy actor tester -a nighthawk 19980:80
 ```
 
 ## Running the Benchmark
 
-Run `nighthawk_client` against the port-forwarded `traffic-driver-invoker` endpoint (`grpc://127.0.0.1:19980`), which routes the gRPC request to `nighthawk_service` inside the `nighthawk/tester` actor:
+Run `nighthawk_client` against the forwarded port (`grpc://127.0.0.1:19980`), which reaches `nighthawk_service` inside the `nighthawk/tester` actor:
 
 ```bash
 docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envoyproxy/nighthawk-dev:latest --nighthawk-service grpc://127.0.0.1:19980 --rps 1000 --concurrency 16 --protocol http1 --duration 60  http://nighthawk-server.nighthawk.svc:80
@@ -111,7 +122,7 @@ Delete the `nighthawk/tester` actor, actor template, atespace, and worker pool:
 ./benchmarking/nighthawk-egress/deploy-traffic-driver.sh --delete
 ```
 
-Delete `nighthawk-server` and `traffic-driver-invoker` from `nighthawk`:
+Delete `nighthawk-server` from `nighthawk`:
 
 ```bash
 ./benchmarking/nighthawk-egress/deploy.sh --delete
