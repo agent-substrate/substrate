@@ -537,8 +537,8 @@ message ExternalVolumeStatus {
 
 message Actor {
   option (resource) = {
-    scope : SCOPE_ATESPACE
-    plural : "Actors"
+    scope: SCOPE_ATESPACE
+    plural: "Actors"
   };
 
   // Common resource metadata: atespace, name, uid, version, timestamps.
@@ -587,9 +587,9 @@ message Actor {
 //
 message EgressPolicy {
   option (resource) = {
-    parents : "Actor"
-    singleton : true
-    plural : "EgressPolicies"
+    parents: "Actor"
+    singleton: true
+    plural: "EgressPolicies"
   };
 
   // Standard resource metadata. Atespace must match the parent Actor and name
@@ -673,6 +673,8 @@ message EgressRule {
 // HttpRule allows cleartext HTTP and is evaluated per request on the request
 // authority (Host or :authority) and port. The gateway resolves the name and
 // dials it.
+//
+// The rule also matches to WebSocket (ws://).
 message HttpRule {
   // Hostname patterns: a DNS name, or a DNS name with "*" as its leftmost
   // label. The rule matches when any pattern matches.
@@ -722,6 +724,8 @@ message HttpRule {
 //
 // Interception is for HTTP. A connection that sends no SNI does not match,
 // and a non-HTTP protocol inside an intercepted connection fails.
+//
+// The rule also matches to WebSocket over TLS (wss://).
 message HttpsRule {
   // Server names matched against the SNI, in the pattern syntax of
   // HttpRule.hostnames.
@@ -1099,8 +1103,8 @@ message TagStatus {
 // owning Atespace cannot be deleted until the tag is removed.
 message Tag {
   option (resource) = {
-    scope : SCOPE_ATESPACE
-    plural : "Tags"
+    scope: SCOPE_ATESPACE
+    plural: "Tags"
   };
 
   // Common resource metadata: atespace, name, uid, version, timestamps.
@@ -1136,8 +1140,8 @@ message Tag {
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
   option (resource) = {
-    scope : SCOPE_GLOBAL
-    plural : "Atespaces"
+    scope: SCOPE_GLOBAL
+    plural: "Atespaces"
   };
 
   // Common resource metadata: name, uid, version, timestamps.
@@ -1168,8 +1172,8 @@ message ObjectRef {
 
 message ActorTemplate {
   option (resource) = {
-    scope : SCOPE_ATESPACE
-    plural : "ActorTemplates"
+    scope: SCOPE_ATESPACE
+    plural: "ActorTemplates"
   };
 
   // Common resource metadata: atespace, name, uid, version, timestamps.
@@ -1459,7 +1463,7 @@ message EnvVar {
   //
   // +k8s:optional
   // +k8s:maxLength=32768 # guardrail;
-  string value = 2 [ debug_redact = true ];
+  string value = 2 [debug_redact = true];
 }
 
 // WakeupProbe tells the platform when a container is serving. It is
@@ -2021,7 +2025,7 @@ message MintActorJwtResponse {
   // A token minted for a Substrate component acting on the actor's behalf
   // (WorkerService.MintWorkerActorJwt) uses `worker-for-actor` in both places
   // instead, so a relying party can grant the two different access.
-  string actor_jwt = 1 [ debug_redact = true ];
+  string actor_jwt = 1 [debug_redact = true];
 
   // expire_time is when actor_jwt expires. Equal to its exp claim.
   google.protobuf.Timestamp expire_time = 2;
@@ -2296,8 +2300,8 @@ message ListActorsResponse {
 // would clear it — is rejected with INVALID_ARGUMENT.
 message Worker {
   option (resource) = {
-    scope : SCOPE_GLOBAL
-    plural : "Workers"
+    scope: SCOPE_GLOBAL
+    plural: "Workers"
   };
 
   // Output-only: name, uid, version and timestamps are all server-assigned.
@@ -2619,8 +2623,8 @@ message WorkerResources {
 // Worker.
 message ActorAssignment {
   option (resource) = {
-    parents : "Worker"
-    plural : "ActorAssignments"
+    parents: "Worker"
+    plural: "ActorAssignments"
   };
 
   // Metadata about the assignment.
@@ -2930,7 +2934,7 @@ message MintWorkerActorJwtResponse {
   //
   // A relying party that trusts actor JWTs must not accept this token as the
   // actor, and vice versa.
-  string actor_jwt = 1 [ debug_redact = true ];
+  string actor_jwt = 1 [debug_redact = true];
 
   // expire_time is when actor_jwt expires. Equal to its exp claim.
   google.protobuf.Timestamp expire_time = 2;
@@ -3108,9 +3112,12 @@ message SnapshotReport {
 // access policy resource, named "default".
 message AccessPolicy {
   option (resource) = {
-    parents : [ "Global", "Atespace" ]
-    singleton : true
-    plural : "AccessPolicies"
+    parents: [
+      "Global",
+      "Atespace"
+    ]
+    singleton: true
+    plural: "AccessPolicies"
   };
 
   // Standard resource metadata. Atespace must match the parent resource (empty
