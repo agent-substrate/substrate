@@ -16,6 +16,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -365,5 +366,88 @@ func TestNXDomainPacketUnencodableQuestion(t *testing.T) {
 	}
 	if gotHdr.RCode != dnsmessage.RCodeNameError {
 		t.Errorf("RCode = %v, want %v", gotHdr.RCode, dnsmessage.RCodeNameError)
+	}
+}
+
+func TestAddressPacket(t *testing.T) {
+	longName := strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("b", 61) + "."
+	tests := []struct {
+		name  string
+		qname string
+	}{
+		{name: "short name", qname: "db.example.com."},
+		// Resolvers that randomize the case of a query expect it back as sent.
+		{name: "mixed case name", qname: "Db.ExAmPlE.cOm."},
+		{name: "longest name", qname: longName},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			q := dnsmessage.Question{Name: dnsmessage.MustNewName(tc.qname), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}
+			// The header of an upstream response the answer replaces.
+			hdr := dnsmessage.Header{ID: 0xabcd, Response: true, RecursionDesired: true, Authoritative: true, AuthenticData: true, Truncated: true}
+			addr := [4]byte{198, 18, 0, 5}
+			pkt := AddressPacket(hdr, q, addr, 30)
+
+			if len(pkt) > 512 {
+				t.Errorf("response is %d bytes, want at most 512", len(pkt))
+			}
+			var p dnsmessage.Parser
+			gotHdr, err := p.Start(pkt)
+			if err != nil {
+				t.Fatalf("p.Start() unexpected error: %v", err)
+			}
+			wantHdr := dnsmessage.Header{ID: 0xabcd, Response: true, RecursionDesired: true, RecursionAvailable: true}
+			if gotHdr != wantHdr {
+				t.Errorf("header = %+v, want %+v", gotHdr, wantHdr)
+			}
+			questions, err := p.AllQuestions()
+			if err != nil {
+				t.Fatalf("p.AllQuestions() unexpected error: %v", err)
+			}
+			if len(questions) != 1 || questions[0] != q {
+				t.Errorf("questions = %+v, want [%+v]", questions, q)
+			}
+			answers, err := p.AllAnswers()
+			if err != nil {
+				t.Fatalf("p.AllAnswers() unexpected error: %v", err)
+			}
+			if len(answers) != 1 {
+				t.Fatalf("answers = %+v, want one A record", answers)
+			}
+			wantAnswerHdr := dnsmessage.ResourceHeader{Name: q.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 30, Length: 4}
+			if answers[0].Header != wantAnswerHdr {
+				t.Errorf("answer header = %+v, want %+v", answers[0].Header, wantAnswerHdr)
+			}
+			if a, ok := answers[0].Body.(*dnsmessage.AResource); !ok || a.A != addr {
+				t.Errorf("answer = %+v, want the A record %v", answers[0].Body, addr)
+			}
+			authorities, err := p.AllAuthorities()
+			if err != nil {
+				t.Fatalf("p.AllAuthorities() unexpected error: %v", err)
+			}
+			additionals, err := p.AllAdditionals()
+			if err != nil {
+				t.Fatalf("p.AllAdditionals() unexpected error: %v", err)
+			}
+			if len(authorities) != 0 || len(additionals) != 0 {
+				t.Errorf("authorities = %+v, additionals = %+v, want none", authorities, additionals)
+			}
+		})
+	}
+}
+
+func TestAddressPacketUnencodableQuestion(t *testing.T) {
+	// A zero-value Name cannot be encoded; the reply is SERVFAIL, never an
+	// answer for another name.
+	badQ := dnsmessage.Question{Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}
+	pkt := AddressPacket(dnsmessage.Header{ID: 0x4321}, badQ, [4]byte{198, 18, 0, 5}, 30)
+
+	var p dnsmessage.Parser
+	gotHdr, err := p.Start(pkt)
+	if err != nil {
+		t.Fatalf("p.Start() unexpected error: %v", err)
+	}
+	if gotHdr.ID != 0x4321 || gotHdr.RCode != dnsmessage.RCodeServerFailure {
+		t.Errorf("header = %+v, want ID 0x4321 and SERVFAIL", gotHdr)
 	}
 }

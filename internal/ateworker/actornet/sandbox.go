@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	"go.ate.dev/substrate/internal/atunnel/dns"
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/nodepath"
 
@@ -73,6 +74,11 @@ type SandboxNetworkConfig struct {
 	// DNSPolicy supplies the egress policy the actor's DNS queries are checked
 	// against. Nil refuses every query.
 	DNSPolicy dns.PolicySource
+
+	// FakeIPs makes the actor's DNS answer with a fake address per name, and
+	// its egress tunnel a connection to one to that name. Nil answers with
+	// real addresses.
+	FakeIPs *fakeip.Table
 }
 
 // SetupSandboxNetwork creates isolated networking with fixed sandbox addresses.
@@ -485,7 +491,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	if resolver != nil {
-		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy)
+		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy, cfg.FakeIPs)
 		if err != nil {
 			return nil, err
 		}

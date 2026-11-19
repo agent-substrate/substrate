@@ -22,11 +22,13 @@ import (
 	"net"
 	"strconv"
 
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"go.ate.dev/substrate/internal/netns"
 )
 
-// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource) (*Server, error) {
+// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace. With
+// fakeIPs, A queries are answered with the name's fake address.
+func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource, fakeIPs *fakeip.Table) (*Server, error) {
 	// Bind the wildcard because the microVM tap's gateway address is added later.
 	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
 
@@ -59,5 +61,5 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource)
 	}
 	netC.egressUDP = egressUDP
 
-	return r.serveOn(ctx, &netC, policy)
+	return r.serveOn(ctx, &netC, policy, fakeIPs)
 }
