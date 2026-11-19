@@ -293,8 +293,6 @@ deploy() {
     echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
     exit 1
   fi
-  ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
-  ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
@@ -483,6 +481,9 @@ for entry in "${FAKE_ATELET_ENV[@]}"; do
     exit 1
   fi
 done
+
+ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
+ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
 
 if [[ "${action}" == "deploy" ]]; then
   build_kubectl_ate
