@@ -192,30 +192,6 @@ class ValidateLocustCpuFlagsTest(unittest.TestCase):
                     )
 
 
-class GcloudSetupRetryTest(unittest.TestCase):
-    @mock.patch("orchestrator.time.sleep")
-    @mock.patch("orchestrator.subprocess.run")
-    @mock.patch("orchestrator.run")
-    def test_retries_get_credentials_on_transient_failure(
-        self, run_mock, subproc_mock, sleep_mock
-    ):
-        subproc_mock.side_effect = [
-            mock.Mock(returncode=1),
-            mock.Mock(returncode=0),
-        ]
-        env = {
-            "KO_DOCKER_REPO": "us-central1-docker.pkg.dev/p/r",
-            "CLUSTER_NAME": "c",
-            "CLUSTER_LOCATION": "l",
-            "PROJECT_ID": "p",
-        }
-        with mock.patch.dict(os.environ, env, clear=True):
-            orchestrator.gcloud_setup_for_target_cluster()
-        run_mock.assert_called_once()
-        self.assertEqual(subproc_mock.call_count, 2)
-        sleep_mock.assert_called_once_with(5)
-
-
 class RunTestApplyRetryTest(unittest.TestCase):
     @mock.patch("orchestrator.run_no_check")
     @mock.patch("orchestrator.wait_for_job", return_value="complete")

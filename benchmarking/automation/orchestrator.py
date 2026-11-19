@@ -187,31 +187,19 @@ def gcloud_setup_for_target_cluster() -> None:
             "--quiet",
         ]
     )
-    cmd = [
-        "gcloud",
-        "container",
-        "clusters",
-        "get-credentials",
-        os.environ["CLUSTER_NAME"],
-        "--location",
-        os.environ["CLUSTER_LOCATION"],
-        "--project",
-        os.environ["PROJECT_ID"],
-    ]
-    delays = (5, 10, 20, 30, 45)
-    for attempt in range(1, len(delays) + 2):
-        res = subprocess.run(cmd, check=False)
-        if res.returncode == 0:
-            return
-        if attempt > len(delays):
-            raise subprocess.CalledProcessError(res.returncode, cmd)
-        delay = delays[attempt - 1]
-        print(
-            f"[WARN] gcloud get-credentials attempt {attempt} failed "
-            f"(exit {res.returncode}); retrying in {delay}s...",
-            flush=True,
-        )
-        time.sleep(delay)
+    run(
+        [
+            "gcloud",
+            "container",
+            "clusters",
+            "get-credentials",
+            os.environ["CLUSTER_NAME"],
+            "--location",
+            os.environ["CLUSTER_LOCATION"],
+            "--project",
+            os.environ["PROJECT_ID"],
+        ]
+    )
 
 
 def test_type(test: dict[str, Any]) -> str:
