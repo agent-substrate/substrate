@@ -2881,14 +2881,44 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		assertAssignedRuntime(t, stored, oldRestorableRT)
 	})
 
-	t.Run("records runtime from row-locked worker when cached worker runtime is stale", func(t *testing.T) {
+	t.Run("refuses row-locked worker that lost the runtime it was picked for", func(t *testing.T) {
 		ctx := context.Background()
 		st := newTestPersistence(t)
 		// The stored row no longer lists the old version; the cached copy the
-		// scheduler hands back still does.
+		// scheduler hands back still does, so Schedule picked it for MEMORY.
 		fresh := seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT)
 		stale := proto.CloneOf(fresh)
 		stale.Status.SandboxClasses = workerSandboxClasses(newDefaultRT, oldRestorableRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
+
+		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{t: t, Scheduler: scheduling.New(nil), relaxedWorker: stale}}
+		if _, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}); !errors.Is(err, errWorkerFilledUp) {
+			t.Fatalf("assignWorkerAttempt error = %v, want errWorkerFilledUp", err)
+		}
+		after, err := st.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatalf("GetActor: %v", err)
+		}
+		if got := after.GetStatus().GetState(); got != suspended {
+			t.Errorf("state = %v, want SUSPENDED", got)
+		}
+		if got := after.GetStatus().GetWorkerAssignment(); got != nil {
+			t.Errorf("WorkerAssignment = %v, want none", got)
+		}
+		if worker := storetest.WorkerHostingActor(t, ctx, st, actor.GetMetadata().GetUid()); worker != "" {
+			t.Errorf("worker %q holds the actor, want none", worker)
+		}
+	})
+
+	t.Run("records runtime from row-locked worker when cached worker runtime is stale", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		// The stored row gained the old version since the cache saw it: Schedule
+		// picked it at ROOTFS, and admit accepts the fresh row and records the
+		// restorable runtime it now carries.
+		fresh := seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT, oldRestorableRT)
+		stale := proto.CloneOf(fresh)
+		stale.Status.SandboxClasses = workerSandboxClasses(newDefaultRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
 		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{t: t, Scheduler: scheduling.New(nil), relaxedWorker: stale}}
@@ -2896,7 +2926,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
-		assertAssignedRuntime(t, stored, newDefaultRT)
+		assertAssignedRuntime(t, stored, oldRestorableRT)
 		if diff := cmp.Diff(fresh.GetStatus().GetSandboxClasses(), bound.GetStatus().GetSandboxClasses(), protocmp.Transform()); diff != "" {
 			t.Errorf("returned worker SandboxClasses mismatch, want the fresh row's (-fresh +got):\n%s", diff)
 		}

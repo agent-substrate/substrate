@@ -466,10 +466,19 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// longer eligible. The store re-asks under the Worker's row lock, where the
 	// answer holds until the bind commits, so nothing here needs a fresh read
 	// and two claims for the last place cannot both be admitted.
+	//
+	// admit holds the bind to the tier Schedule picked the worker at. A worker
+	// that lost the snapshot's runtime since the cache saw it fails admit, and
+	// the retry schedules again.
+	floor := constraints.EffectiveMinFidelity()
+	atPicked := constraints
+	if _, picked := snapRuntime.BestRuntime(assignedWorker.GetStatus(), floor); picked > floor {
+		atPicked.MinFidelity = picked
+	}
 	// The bind evaluates the fresh row; record the assignment from the same view.
 	bound := assignedWorker
 	admit := func(fresh *ateapi.Worker) error {
-		if !w.scheduler.Applies(fresh, constraints) || !w.scheduler.HasRoom(fresh, constraints) {
+		if !w.scheduler.Applies(fresh, atPicked) || !w.scheduler.HasRoom(fresh, constraints) {
 			return errWorkerFilledUp
 		}
 		// The Worker re-registered with a different overhead since the cache
