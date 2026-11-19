@@ -465,11 +465,14 @@ class WaitForIdleTest(unittest.TestCase):
             def __init__(self, _ch):
                 self._pages = [
                     types.SimpleNamespace(
-                        actors=[types.SimpleNamespace(metadata=types.SimpleNamespace(name="a1"))],
+                        actors=[
+                            types.SimpleNamespace(metadata=types.SimpleNamespace(name="a1")),
+                            types.SimpleNamespace(metadata=types.SimpleNamespace(name="a2")),
+                        ],
                         next_page_token="p2",
                     ),
                     types.SimpleNamespace(
-                        actors=[types.SimpleNamespace(metadata=types.SimpleNamespace(name="a2"))],
+                        actors=[types.SimpleNamespace(metadata=types.SimpleNamespace(name="a3"))],
                         next_page_token="",
                     ),
                 ]
@@ -484,6 +487,8 @@ class WaitForIdleTest(unittest.TestCase):
 
             def DeleteActor(self, req, timeout=None):
                 events.append(("delete", req.actor.name))
+                if req.actor.name == "a1":
+                    raise _FakeRpcError(grpc.StatusCode.UNAVAILABLE, "worker down")
                 if req.actor.name == "a2":
                     raise _FakeRpcError(grpc.StatusCode.NOT_FOUND, "gone")
 
@@ -497,6 +502,7 @@ class WaitForIdleTest(unittest.TestCase):
         fake_pb2_grpc = types.SimpleNamespace(ControlStub=FakeStub)
         with (
             mock.patch("density_runner.ateapi_channel"),
+            mock.patch("builtins.print"),
             mock.patch.dict(
                 sys.modules,
                 {
@@ -505,8 +511,8 @@ class WaitForIdleTest(unittest.TestCase):
                 },
             ),
         ):
-            self.assertEqual(density_runner.cleanup_benchmark_actors(), 2)
-        for actor in ("a1", "a2"):
+            self.assertEqual(density_runner.cleanup_benchmark_actors(), 3)
+        for actor in ("a1", "a2", "a3"):
             self.assertEqual(
                 [op for op, name in events if name == actor],
                 ["suspend", "delete"],

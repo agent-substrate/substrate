@@ -455,7 +455,7 @@ def run_step(
     return parse_step_stats(users, exit_code, jsonl_path)
 
 
-def cleanup_benchmark_actors() -> int:
+def cleanup_benchmark_actors(logs: TextIO | None = None) -> int:
     """Suspends and deletes every actor in the benchmark atespace; returns how many it found."""
     # The stubs are generated into the image at build time and are not in the
     # repo, so importing them at module level would break the unit tests.
@@ -480,7 +480,7 @@ def cleanup_benchmark_actors() -> int:
             if not token:
                 break
 
-        def suspend_and_delete(name: str) -> None:
+        def suspend_and_delete(name: str) -> str | None:
             ref = ateapi_pb2.ObjectRef(atespace=BENCHMARK_ATESPACE, name=name)
             # Suspend first, matching agentsession's suspendAndDelete: deleting
             # an awake actor risks leaving it CRASHED and leaked on the worker.
@@ -500,10 +500,17 @@ def cleanup_benchmark_actors() -> int:
                 )
             except grpc.RpcError as e:
                 if e.code() != grpc.StatusCode.NOT_FOUND:
-                    raise
+                    return f"{name}: {e.code()} ({e.details()})"
+            return None
 
         with ThreadPoolExecutor(max_workers=32) as pool:
-            list(pool.map(suspend_and_delete, names))
+            errors = [err for err in pool.map(suspend_and_delete, names) if err]
+        if errors:
+            msg = f"DeleteActor failed for {len(errors)}/{len(names)} actors (first: {errors[0]})"
+            if logs is not None:
+                tee(logs, msg)
+            else:
+                print(msg, flush=True)
         return len(names)
 
 
@@ -518,7 +525,7 @@ def wait_for_idle(check_pods: bool, logs: TextIO) -> bool:
     while True:
         actors: int | None = None
         try:
-            actors = cleanup_benchmark_actors()
+            actors = cleanup_benchmark_actors(logs)
             if actors:
                 tee(logs, f"Deleted {actors} leftover benchmark actors")
         except grpc.RpcError as e:
