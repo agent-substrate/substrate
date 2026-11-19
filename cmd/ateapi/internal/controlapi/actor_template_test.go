@@ -56,7 +56,7 @@ func validActorTemplate(mutations ...func(*ateapi.ActorTemplate)) *ateapi.ActorT
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
 	s := &RPCService{impl: impl}
 	ctx := context.Background()
@@ -125,7 +125,7 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			preview.InitForTest(t, tt.gates...)
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence)
 			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
 			s := &RPCService{impl: impl}
 			ctx := context.Background()
@@ -152,7 +152,7 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
 	s := &RPCService{impl: impl}
 	ctx := context.Background()
@@ -199,7 +199,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 // snapshot_config is optional: create fills an omitted one with every default.
 func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
 	s := &RPCService{impl: impl}
 	ctx := context.Background()
@@ -276,7 +276,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagRef := resources.TagRefFromTag(tag)
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
-			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
+			svc := &RPCService{impl: newServiceImpl(persistence), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
 			// The handler must clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING

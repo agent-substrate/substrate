@@ -71,7 +71,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	storeID := storesResp.GetStores()[0].GetId()
 
 	svc := &RPCService{
-		impl: newServiceImpl(persistence, nil),
+		impl: newServiceImpl(persistence),
 	}
 	interceptor := authz.UnaryServerInterceptor(authorizer)
 

@@ -41,7 +41,8 @@ import (
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -155,31 +156,36 @@ func buildFixtureImage(t *testing.T, repo string) string {
 	return fmt.Sprintf("%s@%s", tag.Context().Name(), digest)
 }
 
-// storageClassOrEmpty returns the configured StorageClass if external volumes
-// are enabled and the cluster has the class, and "" if not. External volumes
-// are a preview feature and the CSI driver is optional, so either missing
-// drops the external volume from the template instead of failing every test
-// in the suite.
-func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients) string {
+// externalVolumeClassOrEmpty returns the configured ExternalVolumeClass if
+// external volumes are enabled and the class is registered, and "" if not.
+// External volumes are a preview feature and the CSI driver is optional, so
+// either missing drops the external volume from the template instead of
+// failing every test in the suite.
+func externalVolumeClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients) string {
 	t.Helper()
 
 	if !preview.IsEnabled(preview.GateExternalVolumes) {
 		t.Logf("preview gate %q is not enabled; the external-volume cases will be skipped", preview.GateExternalVolumes)
 		return ""
 	}
-	if _, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, e2e.StorageClass, metav1.GetOptions{}); err != nil {
-		t.Logf("StorageClass %q not found (%v); the external-volume case will be skipped", e2e.StorageClass, err)
-		return ""
+	if _, err := clients.SubstrateAPI.GetExternalVolumeClass(ctx, &ateapi.GetExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: e2e.ExternalVolumeClass},
+	}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			t.Logf("ExternalVolumeClass %q not found; the external-volume case will be skipped", e2e.ExternalVolumeClass)
+			return ""
+		}
+		t.Fatalf("GetExternalVolumeClass(%q): %v", e2e.ExternalVolumeClass, err)
 	}
-	return e2e.StorageClass
+	return e2e.ExternalVolumeClass
 }
 
 // createTemplate builds a probe ActorTemplate with the fixture attached as an
 // image volume, copying the resolved runtime from the shared probe template.
 // The template's name is suffixed per test run: it lives in the suite's
 // shared atespace, which outlives the per-test k8s namespace. A non-empty
-// storageClass adds the external volume.
-func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, storageClass string) *ateapi.ActorTemplate {
+// externalVolumeClass adds the external volume.
+func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, externalVolumeClass string) *ateapi.ActorTemplate {
 	t.Helper()
 
 	// The probe supplies this suite's container image and resolved runtime.
@@ -221,7 +227,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 					Name:       "scratch",
 					DurableDir: &ateapi.DurableDirVolumeSource{},
 				})
-			if storageClass == "" {
+			if externalVolumeClass == "" {
 				return
 			}
 			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
@@ -230,8 +236,8 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 			tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{
 				Name: extVolume,
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					CapacityBytes:    extCapacity,
-					StorageClassName: storageClass,
+					CapacityBytes:       extCapacity,
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: externalVolumeClass},
 				}},
 			})
 		},
@@ -358,8 +364,8 @@ func TestCombinedVolumes(t *testing.T) {
 
 	fixtureImage := buildFixtureImage(t, repo)
 	t.Logf("fixture image: %s", fixtureImage)
-	storageClass := storageClassOrEmpty(ctx, t, clients)
-	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
+	externalVolumeClass := externalVolumeClassOrEmpty(ctx, t, clients)
+	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, externalVolumeClass)
 
 	actorRef := resources.ActorRef{Atespace: atespace, Name: "cv-" + ns.Name}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
@@ -392,8 +398,8 @@ func TestCombinedVolumes(t *testing.T) {
 	requireExternalVolume := func(t *testing.T) {
 		t.Helper()
 		e2e.RequirePreview(t, preview.GateExternalVolumes)
-		if storageClass == "" {
-			t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+		if externalVolumeClass == "" {
+			t.Skipf("ExternalVolumeClass %q is not registered", e2e.ExternalVolumeClass)
 		}
 	}
 
@@ -461,7 +467,7 @@ func TestCombinedVolumes(t *testing.T) {
 		// Written after the suspend above, so it is in no snapshot the revert
 		// can return the actor to.
 		requireWrite(ctx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
-		if storageClass != "" {
+		if externalVolumeClass != "" {
 			requireWrite(ctx, t, router, actorRef, extPathA+"/"+postSnapshotName)
 		}
 

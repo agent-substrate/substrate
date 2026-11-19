@@ -120,13 +120,14 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-create-ext-vols")
 	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	volumes := []*ateapi.Volume{
 		{
 			Name: "ext-vol-1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -183,11 +184,12 @@ func TestCreateActor_ExternalVolumesWithoutOptIn(t *testing.T) {
 	ns := namespaceForTest("ns-create-ext-vols-no-opt-in")
 	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	createTemplateWithVolumes(t, tc, ns,
 		[]*ateapi.Volume{{
 			Name:     "ext-vol-1",
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 10 << 30}},
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"}, CapacityBytes: 10 << 30}},
 		}},
 		[]*ateapi.VolumeMount{{Name: "ext-vol-1", MountPath: "/data"}})
 
@@ -215,11 +217,12 @@ func TestActorLifecycle_ExternalVolumesWithoutOptIn(t *testing.T) {
 	ns := namespaceForTest("ns-lifecycle-ext-vols-no-opt-in")
 	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "fast")
 
 	createTemplateWithVolumes(t, tc, ns,
 		[]*ateapi.Volume{{
 			Name:     "data-vol",
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "fast", CapacityBytes: 20 << 30}},
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "fast"}, CapacityBytes: 20 << 30}},
 		}},
 		[]*ateapi.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}})
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
@@ -399,6 +402,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-snapshot-external-volume")
 	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 	template, err := tc.client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
 			Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
@@ -408,7 +412,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			Volumes: []*ateapi.Volume{{
 				Name: "data",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					CapacityBytes: 1 << 30, StorageClassName: "standard",
+					CapacityBytes: 1 << 30, ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
 				}},
 			}},
 			Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
@@ -429,8 +433,8 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			SourceTag:     tagRef,
 		},
 	})
-	if apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", apierror.Code(err))
+	if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "Tag cloning") {
+		t.Fatalf("CreateActor err = %v (code %v), want FailedPrecondition mentioning Tag cloning", err, apierror.Code(err))
 	}
 }
 
@@ -1325,13 +1329,14 @@ func TestDeleteActor_Running(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	createTemplateWithVolumes(t, tc, ns, []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}, []*ateapi.VolumeMount{
@@ -1879,13 +1884,14 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-lifecycle-ext-vols")
 	tc := setupPreviewTest(t, ns)
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "fast")
 
 	volumes := []*ateapi.Volume{
 		{
 			Name: "data-vol",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "fast",
-				CapacityBytes:    20 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "fast"},
+				CapacityBytes:       20 << 30,
 			}},
 		},
 	}
@@ -1992,6 +1998,156 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	}
 }
 
+// TestActorLifecycle_WithExternalVolumeClass provisions a volume from an
+// ExternalVolumeClass: the class's driver becomes the volume type, and its
+// parameters reach the driver's CreateVolume call.
+func TestActorLifecycle_WithExternalVolumeClass(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-lifecycle-evc")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	class, err := tc.client.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:     &ateapi.ResourceMetadata{Name: "evc-gold"},
+			DriverName:   "substrate.io/mock",
+			Parameters:   map[string]string{"tier": "gold"},
+			MountOptions: []string{"nfsvers=4.1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+	}
+	if class.GetDriverName() != "substrate.io/mock" {
+		t.Fatalf("driver = %q, want substrate.io/mock", class.GetDriverName())
+	}
+	volumes := []*ateapi.Volume{{
+		Name: "data-vol",
+		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "evc-gold"},
+			CapacityBytes:       20 << 30,
+		}},
+	}}
+	mounts := []*ateapi.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	actorRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-evc"}
+	createResp, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor-evc"},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	created := createResp.GetStatus().GetExternalVolumes().GetVolumes()
+	if len(created) != 1 || created[0].GetVolumeType() != "substrate.io/mock" || created[0].GetStorageVolumeId() != "" {
+		t.Fatalf("CreateActor volumes = %v, want 1 unprovisioned volume of type substrate.io/mock", created)
+	}
+	if diff := cmp.Diff([]string{"nfsvers=4.1"}, created[0].GetMountOptions()); diff != "" {
+		t.Errorf("CreateActor mount options mismatch (-want +got):\n%s", diff)
+	}
+
+	resumeResp, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	resumed := resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()
+	if len(resumed) != 1 || resumed[0].GetStorageVolumeId() == "" {
+		t.Fatalf("ResumeActor volumes = %v, want 1 provisioned volume", resumed)
+	}
+	if got := resumed[0].GetVolumeContext()["tier"]; got != "gold" {
+		t.Errorf("volume context tier = %q, want %q from the class parameters", got, "gold")
+	}
+	if diff := cmp.Diff([]string{"nfsvers=4.1"}, resumed[0].GetMountOptions()); diff != "" {
+		t.Errorf("ResumeActor mount options mismatch (-want +got):\n%s", diff)
+	}
+
+	if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+}
+
+// TestCreateActor_MissingExternalVolumeClass checks that CreateActor fails when
+// the template names an ExternalVolumeClass that does not exist.
+func TestCreateActor_MissingExternalVolumeClass(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-missing-evc")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []*ateapi.Volume{{
+		Name: "data-vol",
+		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "evc-missing"},
+			CapacityBytes:       1 << 30,
+		}},
+	}}
+	mounts := []*ateapi.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor-missing-evc"},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, `ExternalVolumeClass "evc-missing" not found`)
+}
+
+// TestResumeActor_DeletedExternalVolumeClass checks that a resume fails with
+// FailedPrecondition, before any volume is created, when the template's
+// ExternalVolumeClass was deleted after the actor was created.
+func TestResumeActor_DeletedExternalVolumeClass(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-deleted-evc")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	if _, err := tc.client.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:   &ateapi.ResourceMetadata{Name: "evc-gone"},
+			DriverName: "substrate.io/mock",
+		},
+	}); err != nil {
+		t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+	}
+	volumes := []*ateapi.Volume{{
+		Name: "data-vol",
+		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "evc-gone"},
+			CapacityBytes:       1 << 30,
+		}},
+	}}
+	mounts := []*ateapi.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+
+	actorRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-deleted-evc"}
+	if _, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor-deleted-evc"},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.DeleteExternalVolumeClass(ctx, &ateapi.DeleteExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: "evc-gone"},
+	}); err != nil {
+		t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+	}
+
+	_, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, `ExternalVolumeClass "evc-gone" not found`)
+}
+
 type partialFailVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	deleted []string
@@ -2029,20 +2185,21 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	volumes := []*ateapi.Volume{
 		{
 			Name: "succ-vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 		{
 			Name: "fail-vol2",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2173,20 +2330,21 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	volumes := []*ateapi.Volume{
 		{
 			Name: "succ-vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 		{
 			Name: "retry-vol2",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2334,13 +2492,14 @@ func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2437,13 +2596,14 @@ func TestResumeActor_VolumeAttachFailure_DeleteActor(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2586,21 +2746,22 @@ func TestResumeActor_MultiVolumePartialAttachFailure_Retry(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	// 1. Create a template with two external volumes and a worker pod.
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 		{
 			Name: "vol2",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2758,14 +2919,15 @@ func TestSuspendActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	// 1. Create template with external volume and a mock worker pod.
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2868,14 +3030,15 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActor(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	// 1. Create template with external volume and a mock worker pod.
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -2959,14 +3122,15 @@ func TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) 
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	// 1. Create template with external volume and a mock worker pod.
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}
@@ -3149,14 +3313,15 @@ func TestSuspendActorAsync_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 		"substrate.io/mock": plugin,
 	})
 	defer tc.cleanup()
+	seedMockExternalVolumeClass(t, tc, "standard")
 
 	// 1. Create template with external volume and a mock worker pod.
 	volumes := []*ateapi.Volume{
 		{
 			Name: "vol1",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-				CapacityBytes:    10 << 30,
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+				CapacityBytes:       10 << 30,
 			}},
 		},
 	}

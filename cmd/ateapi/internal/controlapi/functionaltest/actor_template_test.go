@@ -407,7 +407,7 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 					}},
 					Volumes: []*ateapi.Volume{{
 						Name:     "data",
-						External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
+						External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"}, CapacityBytes: 1 << 30}},
 					}},
 					Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 				},

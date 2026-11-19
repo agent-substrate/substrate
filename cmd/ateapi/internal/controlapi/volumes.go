@@ -25,8 +25,6 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
 // externalVolumesStatus wraps vols for ActorStatus, leaving the field unset
@@ -38,27 +36,68 @@ func externalVolumesStatus(vols []*ateapi.ExternalVolumeStatus) *ateapi.External
 	return &ateapi.ExternalVolumes{Volumes: vols}
 }
 
+// externalVolumeClassGetter reads an ExternalVolumeClass by name. ServiceImpl
+// implements it and reports a missing class as a NotFound API error.
+type externalVolumeClassGetter interface {
+	GetExternalVolumeClass(ctx context.Context, name string) (*ateapi.ExternalVolumeClass, error)
+}
+
+// volumeClass holds the resolved ExternalVolumeClass fields for an external
+// volume template.
+type volumeClass struct {
+	name         string
+	driver       string
+	params       map[string]string
+	mountOptions []string
+}
+
+// resolveVolumeClass resolves the ExternalVolumeClass of an external volume
+// template. A missing class is a FailedPrecondition (the template is valid,
+// while the class does not exist yet or was deleted), as is a stored template
+// from before storage_class_name was retired so the caller knows to recreate
+// the template.
+func resolveVolumeClass(ctx context.Context, classes externalVolumeClassGetter, tmpl *ateapi.ExternalVolumeTemplate) (volumeClass, error) {
+	ref := tmpl.GetExternalVolumeClass()
+	if ref == nil {
+		if scName := tmpl.GetStorageClassName(); scName != "" { //nolint:staticcheck // SA1019: stored 1.0 preview templates may still carry storage_class_name
+			return volumeClass{}, apierror.FailedPrecondition("external volume template uses unsupported storage_class_name %q; recreate the template with external_volume_class", scName)
+		}
+		return volumeClass{}, apierror.FailedPrecondition("external volume template does not set external_volume_class")
+	}
+	name := ref.GetName()
+	class, err := classes.GetExternalVolumeClass(ctx, name)
+	if err != nil {
+		if apierror.Code(err) == codes.NotFound {
+			return volumeClass{}, apierror.FailedPrecondition("ExternalVolumeClass %q not found", name)
+		}
+		return volumeClass{}, apierror.Internal("failed to get ExternalVolumeClass %q: %v", name, err)
+	}
+	return volumeClass{
+		name:         name,
+		driver:       class.GetDriverName(),
+		params:       class.GetParameters(),
+		mountOptions: class.GetMountOptions(),
+	}, nil
+}
+
 // initialExternalVolumes constructs the actor's volume objects before volume
 // creation. A volume has no storage volume ID until it is provisioned.
-func initialExternalVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapi.ActorTemplate) ([]*ateapi.ExternalVolumeStatus, error) {
+func initialExternalVolumes(ctx context.Context, classes externalVolumeClassGetter, template *ateapi.ActorTemplate) ([]*ateapi.ExternalVolumeStatus, error) {
 	if template == nil {
 		return nil, apierror.InvalidArgument("template is required")
 	}
 	var volumes []*ateapi.ExternalVolumeStatus
 	for _, vol := range template.GetVolumes() {
-		if vol.GetExternal().GetTemplate() != nil {
-			scName := vol.GetExternal().GetTemplate().GetStorageClassName()
-			sc, err := scLister.Get(scName)
+		if ext := vol.GetExternal().GetTemplate(); ext != nil {
+			class, err := resolveVolumeClass(ctx, classes, ext)
 			if err != nil {
-				if k8serrors.IsNotFound(err) {
-					return nil, apierror.FailedPrecondition("StorageClass %q not found", scName)
-				}
-				return nil, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
+				return nil, err
 			}
 
 			volumes = append(volumes, &ateapi.ExternalVolumeStatus{
-				Name:       vol.GetName(),
-				VolumeType: sc.Provisioner,
+				Name:         vol.GetName(),
+				VolumeType:   class.driver,
+				MountOptions: class.mountOptions,
 			})
 		}
 	}
@@ -68,7 +107,7 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 // createActorVolumes provisions the external volumes in volumesToCreate that have no storage volume ID, using the provided volume plugin.
 // It returns the list of external volumes (with storage IDs), or an error if any creation fails.
 // Any volumes processed before or during a failure are returned alongside the error so they can be persisted on the actor.
-func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, actorUID string, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
+func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, classes externalVolumeClassGetter, actorUID string, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
 	resultVolumes = make([]*ateapi.ExternalVolumeStatus, 0, len(volumesToCreate))
 
 	var currentIdx int
@@ -102,28 +141,24 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 
 		actVolID := actorVolumeID(actorUID, volName)
 
-		scName := specVol.GetExternal().GetTemplate().GetStorageClassName()
-		sc, err := scLister.Get(scName)
+		class, err := resolveVolumeClass(ctx, classes, specVol.GetExternal().GetTemplate())
 		if err != nil {
-			if k8serrors.IsNotFound(err) {
-				return resultVolumes, apierror.FailedPrecondition("StorageClass %q not found", scName)
-			}
-			return resultVolumes, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
+			return resultVolumes, err
 		}
 
-		if sc.Provisioner != vol.GetVolumeType() {
-			return resultVolumes, apierror.FailedPrecondition("volume %q has mismatched type %q (expected %q from StorageClass %q)", volName, vol.GetVolumeType(), sc.Provisioner, scName)
+		if class.driver != vol.GetVolumeType() {
+			return resultVolumes, apierror.FailedPrecondition("volume %q has mismatched type %q (expected %q from ExternalVolumeClass %q)", volName, vol.GetVolumeType(), class.driver, class.name)
 		}
 
 		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
-			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
+			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (ExternalVolumeClass %q): %v", class.driver, class.name, err)
 		}
 
 		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
 			Name:          actVolID,
 			CapacityBytes: specVol.GetExternal().GetTemplate().GetCapacityBytes(),
-			Parameters:    sc.Parameters,
+			Parameters:    class.params,
 		})
 		if volErr != nil {
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
@@ -137,8 +172,9 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		resultVolumes = append(resultVolumes, &ateapi.ExternalVolumeStatus{
 			Name:            volName,
 			StorageVolumeId: resp.VolumeID,
-			VolumeType:      sc.Provisioner,
+			VolumeType:      class.driver,
 			VolumeContext:   resp.VolumeContext,
+			MountOptions:    class.mountOptions,
 		})
 	}
 	return resultVolumes, nil

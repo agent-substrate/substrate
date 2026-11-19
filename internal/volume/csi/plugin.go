@@ -400,11 +400,14 @@ func (p *Plugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest)
 		return err
 	}
 
+	publishCap := getStandardCapabilities()[0]
+	publishCap.GetMount().MountFlags = req.MountOptions
+
 	csiReq := &csi.NodePublishVolumeRequest{
 		VolumeId:          req.VolumeID,
 		StagingTargetPath: stagingPath,
 		TargetPath:        req.TargetPath,
-		VolumeCapability:  getStandardCapabilities()[0],
+		VolumeCapability:  publishCap,
 		Readonly:          false,
 		VolumeContext:     req.VolumeContext,
 		PublishContext:    req.PublishContext,
@@ -428,10 +431,13 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		return "", fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
 	}
 
+	stageCap := getStandardCapabilities()[0]
+	stageCap.GetMount().MountFlags = req.MountOptions
+
 	csiReq := &csi.NodeStageVolumeRequest{
 		VolumeId:          req.VolumeID,
 		StagingTargetPath: stagingPath,
-		VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
+		VolumeCapability:  stageCap,
 		VolumeContext:     req.VolumeContext,
 		PublishContext:    req.PublishContext,
 	}

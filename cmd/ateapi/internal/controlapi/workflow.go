@@ -36,7 +36,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
 // stepSpan opens the per-step trace span ("step.<name>" on the controlapi
@@ -110,7 +109,6 @@ type ActorWorkflow struct {
 	workerCache             *workercache.Cache
 	scheduler               scheduling.Scheduler
 	dialer                  *AteletDialer
-	storageClassLister      storagev1listers.StorageClassLister
 	instruments             *Instruments
 	egressGatewayAddress    string
 	pluginRegistry          VolumePluginRegistry
@@ -127,7 +125,6 @@ func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
-	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
@@ -138,7 +135,6 @@ func NewActorWorkflow(
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
-		storageClassLister:   storageClassLister,
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
@@ -187,6 +183,7 @@ type actorWorkflowStore interface {
 	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapi.ActorTemplate, error)
+	GetExternalVolumeClass(ctx context.Context, name string) (*ateapi.ExternalVolumeClass, error)
 	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error)
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
