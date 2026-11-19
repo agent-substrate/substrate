@@ -148,7 +148,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
-		Layers:       img.LayerDirs,
+		LowerDirs:    img.LowerDirs(),
+		StoreLayers:  img.LayerDirs,
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
@@ -200,7 +201,8 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),
 				ImageDigest: img.Digest.String(),
-				Layers:      img.LayerDirs,
+				LowerDirs:   img.LowerDirs(),
+				StoreLayers: img.LayerDirs,
 			}
 			return nil
 		})
