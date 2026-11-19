@@ -65,6 +65,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
@@ -343,6 +344,7 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
+	templateQueue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]())
 	controlSrv := controlapi.NewRPCService(
 		persistence,
 		workerCache,
@@ -356,10 +358,11 @@ func main() {
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		*snapshotLocation,
+		templateQueue,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval, templateQueue)
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's worker restarts.

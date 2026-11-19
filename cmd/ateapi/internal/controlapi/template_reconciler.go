@@ -93,18 +93,17 @@ type ActorTemplateReconciler struct {
 	resyncInterval time.Duration
 }
 
-func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration) *ActorTemplateReconciler {
+func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration, queue workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]) *ActorTemplateReconciler {
 	return &ActorTemplateReconciler{
 		persistence:    persistence,
 		control:        control,
 		resyncInterval: resyncInterval,
-		// Create rate-limiting queue with exponential backoff
-		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
+		queue:          queue,
 	}
 }
 
-// Start launches the queue workers and the resync producer; there is no event
-// source for stored templates, so the periodic list is the event source.
+// Start launches the queue workers and a periodic resync. Creation enqueues
+// new templates; the resync recovers work after a process exits before enqueueing.
 func (r *ActorTemplateReconciler) Start(ctx context.Context) {
 	go func() {
 		defer r.queue.ShutDown()

@@ -57,6 +57,9 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapi.Create
 		return nil, fmt.Errorf("while recording actor template: %w", err)
 	}
 
+	if stored.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() != ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+		s.templateQueue.Add(resources.ActorTemplateRefFromActorTemplate(stored))
+	}
 	return stored, nil
 }
 
