@@ -402,23 +402,46 @@ class ParseAndSweepTest(unittest.TestCase):
             self.assertEqual(rows["density_limit"]["abort_reason"], "received SIGTERM")
             self.assertIn("density_step_0008", rows)
 
-    def test_run_step_enforces_child_timeout(self):
+    def test_run_step_enforces_child_timeout_and_kills_grandchildren(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             args = _make_args(dest=str(root / "out"), density_step_duration="1m")
             logs_path = root / "logs.txt"
-            hang_cmd = [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(60)"]
+            gc_pid_file = root / "grandchild.pid"
+            # Child has default SIGTERM (dies immediately), while grandchild
+            # ignores SIGTERM so only process-group SIGKILL can reap it.
+            grandchild_code = (
+                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+            )
+            child_code = (
+                "import pathlib, subprocess, sys, time; "
+                f"p = subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]); "
+                f"pathlib.Path({str(gc_pid_file)!r}).write_text(str(p.pid)); "
+                "print('started', flush=True); time.sleep(60)"
+            )
+            hang_cmd = [sys.executable, "-c", child_code]
             t0 = time.monotonic()
             with (
                 open(logs_path, "w", encoding="utf-8") as logs,
+                mock.patch("density_runner.CHILD_TERM_GRACE_S", 0.2),
                 mock.patch("density_runner.build_step_cmd", return_value=hang_cmd),
                 mock.patch("builtins.print"),
             ):
-                res = density_runner.run_step(args, 32, root / "s32", logs, timeout_s=0.3)
+                res = density_runner.run_step(args, 32, root / "s32", logs, timeout_s=0.4)
             elapsed = time.monotonic() - t0
             self.assertEqual(res.failure_reason, "step timed out after 1s")
             self.assertLess(elapsed, 5.0)
             self.assertIn("timed out", logs_path.read_text(encoding="utf-8"))
+            gc_pid = int(gc_pid_file.read_text(encoding="utf-8"))
+            # Wait briefly for kernel process teardown after SIGKILL.
+            for _ in range(20):
+                try:
+                    os.kill(gc_pid, 0)
+                    time.sleep(0.05)
+                except ProcessLookupError:
+                    break
+            with self.assertRaises(ProcessLookupError):
+                os.kill(gc_pid, 0)
 
 
 class _FakeRpcError(grpc.RpcError):

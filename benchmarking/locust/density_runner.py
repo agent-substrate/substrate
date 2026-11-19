@@ -369,20 +369,34 @@ def build_step_cmd(
     return [*cmd, *args.locust_extra]
 
 
+def _pgrp_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 def _terminate_child(proc: subprocess.Popen[str]) -> None:
     """Terminates proc's process group, escalating to SIGKILL after grace."""
-    for sig, wait_s in ((signal.SIGTERM, CHILD_TERM_GRACE_S), (signal.SIGKILL, None)):
-        if proc.poll() is not None:
+    pgid = proc.pid
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + CHILD_TERM_GRACE_S
+    while time.monotonic() < deadline:
+        if proc.poll() is not None and not _pgrp_alive(pgid):
             return
-        try:
-            os.killpg(proc.pid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=wait_s)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+        time.sleep(0.05)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def run_step(
