@@ -325,10 +325,10 @@ func TestUpdateTag_DeleteRecreateRace(t *testing.T) {
 		Interface: persistence,
 		inject: func() {
 			tagRef := resources.TagRef{Atespace: testAtespace, Name: tagName}
-			if _, err := persistence.MarkTagForDeletion(ctx, tagRef, store.OptionalPrecondition{}, nil); err != nil {
+			if _, err := persistence.MarkTagForDeletion(ctx, tagRef, store.Precondition{}, nil); err != nil {
 				t.Fatalf("Racing writer: MarkTagForDeletion: %v", err)
 			}
-			if _, err := persistence.DeleteTag(ctx, tagRef, store.OptionalPrecondition{}); err != nil {
+			if _, err := persistence.DeleteTag(ctx, tagRef, store.Precondition{}); err != nil {
 				t.Fatalf("Racing writer: DeleteTag: %v", err)
 			}
 			recreatedTag = storetest.MustCreateTag(t, ctx, persistence, newTestTag(t, tagName, actorTwo))
@@ -456,7 +456,7 @@ func TestUpdateTagStatus(t *testing.T) {
 	if _, err := impl.UpdateTag(ctx, ref, store.PreconditionFrom(tag), repoint); apierror.Code(err) != codes.InvalidArgument {
 		t.Errorf("UpdateTag repointing the snapshot: error = %v, want code InvalidArgument", err)
 	}
-	if _, err := impl.MarkTagForDeletion(ctx, ref, store.OptionalPrecondition{UID: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()}, repoint); apierror.Code(err) != codes.InvalidArgument {
+	if _, err := impl.MarkTagForDeletion(ctx, ref, store.Precondition{UID: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()}, repoint); apierror.Code(err) != codes.InvalidArgument {
 		t.Errorf("MarkTagForDeletion repointing the snapshot: error = %v, want code InvalidArgument", err)
 	}
 	if _, err := impl.UpdateTag(ctx, ref, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {

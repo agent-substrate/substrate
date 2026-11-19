@@ -449,14 +449,23 @@ func setUpdateMetadata(newMeta, oldMeta *ateapi.ResourceMetadata) {
 	newMeta.DeleteTime = oldMeta.DeleteTime
 }
 
-func mapDeleteError(err error, uid string, version int64, precondition store.OptionalPrecondition) error {
+// checkPrecondition checks precondition against md. With optionalGuards it
+// skips an unset uid or version guard, as a delete does.
+func checkPrecondition(precondition store.Precondition, md *ateapi.ResourceMetadata, optionalGuards bool) error {
+	if optionalGuards {
+		return precondition.CheckOptional(md)
+	}
+	return precondition.CheckRequired(md)
+}
+
+func mapDeleteError(err error, uid string, version int64, precondition store.Precondition) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("reading after a guarded delete matched nothing: %w", err)
 	}
-	if err := precondition.Check(&ateapi.ResourceMetadata{Uid: uid, Version: version}); err != nil {
+	if err := precondition.CheckOptional(&ateapi.ResourceMetadata{Uid: uid, Version: version}); err != nil {
 		return err
 	}
 	// The row matches the guards now, so it changed between the two statements.

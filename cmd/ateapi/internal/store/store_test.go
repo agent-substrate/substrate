@@ -41,42 +41,63 @@ func TestPreconditionCheck(t *testing.T) {
 	tests := []struct {
 		name         string
 		precondition Precondition
-		wantErr      error
+		wantRequired error
+		wantOptional error
 	}{
 		{
 			name:         "the guarded object is still the stored one",
 			precondition: Precondition{UID: storedUID, Version: storedVer},
-			wantErr:      nil,
 		},
 		{
 			name:         "the name now addresses a different incarnation",
 			precondition: Precondition{UID: staleUID, Version: storedVer},
-			wantErr:      ErrUIDConflict,
+			wantRequired: ErrUIDConflict,
+			wantOptional: ErrUIDConflict,
 		},
 		{
 			name:         "the version moved under the caller",
 			precondition: Precondition{UID: storedUID, Version: staleVer},
-			wantErr:      ErrVersionConflict,
+			wantRequired: ErrVersionConflict,
+			wantOptional: ErrVersionConflict,
 		},
 		{
 			// The uid is reported first: a new incarnation makes the version
 			// meaningless, and it is the failure a retry can never resolve.
 			name:         "both stale reports the uid conflict",
 			precondition: Precondition{UID: staleUID, Version: staleVer},
-			wantErr:      ErrUIDConflict,
+			wantRequired: ErrUIDConflict,
+			wantOptional: ErrUIDConflict,
+		},
+		{
+			name:         "no guards",
+			wantRequired: ErrPreconditionRequired,
+		},
+		{
+			name:         "uid only",
+			precondition: Precondition{UID: storedUID},
+			wantRequired: ErrPreconditionRequired,
+		},
+		{
+			name:         "stale version only",
+			precondition: Precondition{Version: staleVer},
+			wantRequired: ErrPreconditionRequired,
+			wantOptional: ErrVersionConflict,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.precondition.Check(storedMetadata); !errors.Is(err, tt.wantErr) {
-				t.Errorf("Check(storedMetadata) = %v, want one matching %v", err, tt.wantErr)
+			if err := tt.precondition.CheckRequired(storedMetadata); !errors.Is(err, tt.wantRequired) {
+				t.Errorf("CheckRequired(storedMetadata) = %v, want one matching %v", err, tt.wantRequired)
+			}
+			if err := tt.precondition.CheckOptional(storedMetadata); !errors.Is(err, tt.wantOptional) {
+				t.Errorf("CheckOptional(storedMetadata) = %v, want one matching %v", err, tt.wantOptional)
 			}
 		})
 	}
 }
 
-func TestPreconditionValidate(t *testing.T) {
+func TestPreconditionValidateRequired(t *testing.T) {
 	tests := []struct {
 		name         string
 		precondition Precondition
@@ -106,8 +127,8 @@ func TestPreconditionValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.precondition.Validate(); !errors.Is(err, tt.wantErr) {
-				t.Errorf("Validate() = %v, want one matching %v", err, tt.wantErr)
+			if err := tt.precondition.ValidateRequired(); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ValidateRequired() = %v, want one matching %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -152,8 +173,8 @@ func TestPreconditionFrom(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("PreconditionFrom(observed) = %+v, want %+v", got, tt.want)
 			}
-			if err := got.Validate(); !errors.Is(err, tt.wantValidateErr) {
-				t.Errorf("PreconditionFrom(observed).Validate() = %v, want one matching %v", err, tt.wantValidateErr)
+			if err := got.ValidateRequired(); !errors.Is(err, tt.wantValidateErr) {
+				t.Errorf("PreconditionFrom(observed).ValidateRequired() = %v, want one matching %v", err, tt.wantValidateErr)
 			}
 		})
 	}

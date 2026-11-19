@@ -65,7 +65,7 @@ func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (*ateapi.Access
 }
 
 func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 
@@ -81,7 +81,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	if err != nil {
 		return nil, err
 	}
-	if err := precondition.Check(dbPolicy.GetMetadata()); err != nil {
+	if err := precondition.CheckRequired(dbPolicy.GetMetadata()); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbPolicy.Metadata)
@@ -151,7 +151,7 @@ func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) 
 }
 
 func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 
@@ -167,7 +167,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err != nil {
 		return nil, err
 	}
-	if err := precondition.Check(dbPolicy.GetMetadata()); err != nil {
+	if err := precondition.CheckRequired(dbPolicy.GetMetadata()); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbPolicy.Metadata)
@@ -195,7 +195,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.OptionalPrecondition) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition) (*ateapi.AccessPolicy, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning access policy delete for %s: %w", name, err)

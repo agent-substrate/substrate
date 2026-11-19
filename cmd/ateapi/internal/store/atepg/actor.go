@@ -80,19 +80,19 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 }
 
 func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
-	return updateActor(ctx, p.pool, actorRef, store.OptionalPrecondition(precondition), mutate, false)
+	return updateActor(ctx, p.pool, actorRef, precondition, mutate, false)
 }
 
-func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.OptionalPrecondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return updateActor(ctx, p.pool, actorRef, precondition, mutate, true)
 }
 
 // updateActor applies mutate to the stored actor through q, which is the pool
 // or a transaction the write must commit with.
-func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.OptionalPrecondition, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -113,7 +113,7 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
-	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
+	if err := checkPrecondition(precondition, dbActor.GetMetadata(), markForDeletion); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbActor.Metadata)
@@ -153,7 +153,7 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	return dbActor, nil
 }
 
-func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.OptionalPrecondition) (*ateapi.Actor, error) {
+func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -174,7 +174,7 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	if err := unmarshalStored(protoBytes, deleted); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor to delete: %w", err)
 	}
-	if err := precondition.Check(deleted.GetMetadata()); err != nil {
+	if err := precondition.CheckOptional(deleted.GetMetadata()); err != nil {
 		return nil, err
 	}
 	if deleted.GetStatus().GetWorkerAssignment() != nil {

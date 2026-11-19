@@ -220,7 +220,7 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 			persistence := newTestPersistence(t)
 			seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 			if tc.deleteWorker {
-				if _, err := persistence.DeleteWorker(ctx, testWorkerUID("pod-1"), store.OptionalPrecondition{}); err != nil {
+				if _, err := persistence.DeleteWorker(ctx, testWorkerUID("pod-1"), store.Precondition{}); err != nil {
 					t.Fatalf("DeleteWorker: %v", err)
 				}
 			}
