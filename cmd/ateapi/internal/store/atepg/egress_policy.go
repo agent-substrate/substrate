@@ -96,7 +96,7 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.EgressPolicy, error) {
+func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.OptionalPrecondition) (*ateapi.EgressPolicy, error) {
 	var version int64
 	var uid string
 	var protoBytes []byte

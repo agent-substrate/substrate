@@ -198,7 +198,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 
 	// --- Scenario 3: Atomic rollback if DeleteAtespacePolicies fails after DELETE FROM atespaces ---
-	if _, err := persistence.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.DeletePreconditions{}); err != nil {
+	if _, err := persistence.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.OptionalPrecondition{}); err != nil {
 		t.Fatalf("DeleteActorTemplate failed: %v", err)
 	}
 	// Install a temporary PostgreSQL BEFORE DELETE trigger on OpenFGA's `tuple` table

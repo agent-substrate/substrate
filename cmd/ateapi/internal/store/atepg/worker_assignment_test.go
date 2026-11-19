@@ -89,7 +89,7 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
-	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.OptionalPrecondition{}); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 

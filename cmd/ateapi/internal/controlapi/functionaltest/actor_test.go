@@ -499,7 +499,7 @@ func TestCreateActor_FromDeletingTag(t *testing.T) {
 	tag := seedTag(t, tc, "deleting-source", "deleting", func(tag *ateapi.Tag) {
 		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
 	})
-	if _, err := tc.persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); err != nil {
+	if _, err := tc.persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.OptionalPrecondition{}, nil); err != nil {
 		t.Fatalf("MarkTagForDeletion: %v", err)
 	}
 
@@ -530,7 +530,7 @@ func TestCreateActor_FromDeletingGoldenTag(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("recording the golden tag: %v", err)
 	}
-	if _, err := tc.persistence.MarkTagForDeletion(ctx, goldenRef, store.DeletePreconditions{}, nil); err != nil {
+	if _, err := tc.persistence.MarkTagForDeletion(ctx, goldenRef, store.OptionalPrecondition{}, nil); err != nil {
 		t.Fatalf("MarkTagForDeletion: %v", err)
 	}
 
@@ -1125,7 +1125,7 @@ func TestUpdateActor_FailsIfDeleting(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
-	marked, err := tc.persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
+	marked, err := tc.persistence.MarkActorForDeletion(ctx, actorRef, store.OptionalPrecondition{}, nil)
 	if err != nil {
 		t.Fatalf("MarkActorForDeletion: %v", err)
 	}
@@ -1583,7 +1583,7 @@ func TestDeleteActor_StateDeleting(t *testing.T) {
 	if _, err := tc.persistence.CreateActor(context.Background(), deletingActor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
-	if _, err := tc.persistence.MarkActorForDeletion(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "deleting-actor"}, store.DeletePreconditions{}, nil); err != nil {
+	if _, err := tc.persistence.MarkActorForDeletion(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "deleting-actor"}, store.OptionalPrecondition{}, nil); err != nil {
 		t.Fatalf("MarkActorForDeletion: %v", err)
 	}
 

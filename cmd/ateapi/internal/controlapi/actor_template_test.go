@@ -282,7 +282,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.OptionalPrecondition{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -304,7 +304,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				stale := store.DeletePreconditions{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
+				stale := store.OptionalPrecondition{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
 				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); apierror.Code(err) != codes.Aborted {
 					t.Fatalf("DeleteActorTemplate with a stale version = %v, want code Aborted", err)
 				}

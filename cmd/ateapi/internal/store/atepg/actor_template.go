@@ -83,14 +83,14 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return p.updateActorTemplate(ctx, templateRef, store.DeletePreconditions(precondition), mutate, false)
+	return p.updateActorTemplate(ctx, templateRef, store.OptionalPrecondition(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.OptionalPrecondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.OptionalPrecondition, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
@@ -221,7 +221,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	return store.ListResponse[*ateapi.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.OptionalPrecondition) (*ateapi.ActorTemplate, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_templates AS t

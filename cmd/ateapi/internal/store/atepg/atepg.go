@@ -447,7 +447,7 @@ func setUpdateMetadata(newMeta, oldMeta *ateapi.ResourceMetadata) {
 	newMeta.DeleteTime = oldMeta.DeleteTime
 }
 
-func mapDeleteError(err error, uid string, version int64, precondition store.DeletePreconditions) error {
+func mapDeleteError(err error, uid string, version int64, precondition store.OptionalPrecondition) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
