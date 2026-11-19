@@ -220,6 +220,8 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
+	// An update requires both guards. A mark for deletion checks only the
+	// guards the caller set.
 	if err := checkPrecondition(precondition, dbTag.GetMetadata(), markForDeletion); err != nil {
 		return nil, err
 	}

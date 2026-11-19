@@ -116,6 +116,8 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 		if err != nil {
 			return nil, err
 		}
+		// An update requires both guards. A mark for deletion checks only the
+		// guards the caller set.
 		if err := checkPrecondition(precondition, dbWorker.GetMetadata(), markForDeletion); err != nil {
 			return nil, err
 		}

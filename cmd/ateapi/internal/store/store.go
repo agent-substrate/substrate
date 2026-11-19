@@ -331,9 +331,7 @@ type Interface interface {
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
 }
 
-// Precondition holds the uid and version guards of a write. An update
-// requires both and checks them with CheckRequired. Deletes and marks for
-// deletion check them with CheckOptional, which skips an unset guard.
+// Precondition holds the uid and version guards of a write.
 type Precondition struct {
 	// UID is the incarnation the write is for. Empty, under CheckOptional,
 	// accepts whichever object holds the name when the write runs.
@@ -356,10 +354,9 @@ func PreconditionFrom(observed hasResourceMetadata) Precondition {
 	return Precondition{UID: md.GetUid(), Version: md.GetVersion()}
 }
 
-// ValidateRequired reports whether the precondition carries both guards an
-// update requires.
+// ValidateRequired reports whether the precondition carries both guards.
 //
-// Returns ErrPreconditionRequired, which the update surfaces verbatim.
+// Returns an error matching ErrPreconditionRequired.
 func (p Precondition) ValidateRequired() error {
 	if p.UID == "" {
 		return fmt.Errorf("%w: uid", ErrPreconditionRequired)
@@ -374,21 +371,26 @@ func (p Precondition) ValidateRequired() error {
 // them. The uid is reported first: a new incarnation makes the version
 // meaningless.
 //
-// Returns ErrPreconditionRequired, ErrUIDConflict or ErrVersionConflict,
-// which the caller surfaces verbatim.
+// Returns an error matching ErrPreconditionRequired, ErrUIDConflict or
+// ErrVersionConflict.
 func (p Precondition) CheckRequired(md *ateapi.ResourceMetadata) error {
 	if err := p.ValidateRequired(); err != nil {
 		return err
 	}
-	return p.CheckOptional(md)
+	if p.UID != md.GetUid() {
+		return ErrUIDConflict
+	}
+	if p.Version != md.GetVersion() {
+		return ErrVersionConflict
+	}
+	return nil
 }
 
 // CheckOptional reports whether md still matches the guards p carries. An
 // unset guard is not checked. The uid is reported first: a new incarnation
 // makes the version meaningless.
 //
-// Returns ErrUIDConflict or ErrVersionConflict, which the caller surfaces
-// verbatim.
+// Returns ErrUIDConflict or ErrVersionConflict.
 func (p Precondition) CheckOptional(md *ateapi.ResourceMetadata) error {
 	if p.UID != "" && p.UID != md.GetUid() {
 		return ErrUIDConflict

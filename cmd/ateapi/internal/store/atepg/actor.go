@@ -113,6 +113,8 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
+	// An update requires both guards. A mark for deletion checks only the
+	// guards the caller set.
 	if err := checkPrecondition(precondition, dbActor.GetMetadata(), markForDeletion); err != nil {
 		return nil, err
 	}
