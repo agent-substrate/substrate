@@ -73,8 +73,8 @@ name (`xds.filter_chain_name`) tells the handler which leg it is on:
 
 | Leg (filter chain) | Where | Sees | Decides |
 | --- | --- | --- | --- |
-| `egress` | outer CONNECT | actor certificate, the `IP:port` the actor dialed | per TCP connection: identity, and that the actor has a policy with rules |
-| `egress_cleartext` | HTTP the actor sent in the clear | `Host`, method, headers, the dialed `IP:port` | **every request**, the `http` rules |
+| `egress` | outer CONNECT | actor certificate, the `IP:port` the actor dialed or the `name:port` atunnel correlated it to | per TCP connection: identity, and that the actor has a policy with rules |
+| `egress_cleartext` | HTTP the actor sent in the clear | `Host`, method, headers, the dialed port | **every request**, the `http` rules |
 | `egress_tls_mitm` | TLS the gateway terminated | same as cleartext, plus the connection's SNI | **every request**, the `https` rules |
 
 A request leg decides the request on its `Host`, a DNS name or an IP literal,
