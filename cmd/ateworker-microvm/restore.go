@@ -158,26 +158,17 @@ func (s *AteWorkerService) reconstructDeltaIfNeeded(ctx context.Context, actorUI
 	outMemPath := filepath.Join(targetDir, "memory-ranges")
 	metaPath := filepath.Join(restoreDir, memoryRangesDiffMetaFile)
 	dataPath := filepath.Join(restoreDir, memoryRangesDiffDataFile)
-	if _, merr := os.Stat(metaPath); merr == nil {
-		baseSum, err := goldenBaseSum(ctx, baseID)
-		if err != nil {
-			return "", false, fmt.Errorf("while reading checksum of golden base %s: %w", baseID, err)
-		}
-		if err := ch.RestoreFromDelta(ctx, goldenBaseMemPath, baseSum, metaPath, dataPath, outMemPath); err != nil {
-			return "", false, fmt.Errorf("while reconstructing compact delta against golden base %s: %w", baseID, err)
-		}
-		if !preserveRestoreDir {
-			_ = os.Remove(metaPath)
-			_ = os.Remove(dataPath)
-			_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
-		}
-	} else {
-		if err := ch.MergeSparseOverlay(ctx, goldenBaseMemPath, filepath.Join(restoreDir, "memory-ranges"), outMemPath); err != nil {
-			return "", false, fmt.Errorf("while overlaying golden delta onto base: %w", err)
-		}
-		if !preserveRestoreDir {
-			_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
-		}
+	baseSum, err := goldenBaseSum(ctx, baseID)
+	if err != nil {
+		return "", false, fmt.Errorf("while reading checksum of golden base %s: %w", baseID, err)
+	}
+	if err := ch.RestoreFromDelta(ctx, goldenBaseMemPath, baseSum, metaPath, dataPath, outMemPath); err != nil {
+		return "", false, fmt.Errorf("while reconstructing compact delta against golden base %s: %w", baseID, err)
+	}
+	if !preserveRestoreDir {
+		_ = os.Remove(metaPath)
+		_ = os.Remove(dataPath)
+		_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
 	}
 	slog.InfoContext(ctx, "Reconstructed memory-ranges from golden base and delta",
 		slog.String("id", actorUID), slog.String("base_id", baseID), slog.Duration("merge", time.Since(tMerge)))

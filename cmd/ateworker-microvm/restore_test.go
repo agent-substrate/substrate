@@ -681,13 +681,10 @@ func TestRestoreMemoryFidelityRequiresKernelAndImage(t *testing.T) {
 func TestDifferentialSnapshotCheckpointAndRestoreRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
-		sparseDelta        bool
 		preserveRestoreDir bool
 	}{
-		{name: "compact_extent_in_place", sparseDelta: false, preserveRestoreDir: false},
-		{name: "compact_extent_preserved_dir", sparseDelta: false, preserveRestoreDir: true},
-		{name: "sparse_hole_punch_in_place", sparseDelta: true, preserveRestoreDir: false},
-		{name: "sparse_hole_punch_preserved_dir", sparseDelta: true, preserveRestoreDir: true},
+		{name: "compact_extent_in_place", preserveRestoreDir: false},
+		{name: "compact_extent_preserved_dir", preserveRestoreDir: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -705,12 +702,6 @@ func TestDifferentialSnapshotCheckpointAndRestoreRoundTrip(t *testing.T) {
 			)
 			actorDirs := &ateworkerpb.ActorDirs{RootDir: filepath.Join(nodepath.ActorsDir, actorUID)}
 			deflateDir := func(dir string) error {
-				if tc.sparseDelta {
-					if _, _, err := ch.DeflateAgainstBase(ctx, goldenBaseMemoryRangesPath(baseID), filepath.Join(dir, "memory-ranges")); err != nil {
-						return err
-					}
-					return writeGoldenDeltaMarker(dir)
-				}
 				return s.maybeDeflateCheckpointAgainstGoldenBase(ctx, baseID, actorUID, dir)
 			}
 
