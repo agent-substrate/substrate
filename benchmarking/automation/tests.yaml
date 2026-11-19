@@ -786,3 +786,58 @@ tests:
       - "50"
       - "--ladder"
       - "50:2m@20,50:2m@50"
+  # Hot-path authz benchmarks: same fake data plane and ladder shapes as the
+  # cold resume suite above, but ate-client is the only bootstrap owner so
+  # benchmark-runner authorizes through stored atespace policies in OpenFGA.
+  - name: ateapi_authz_hotpath_fake_smoke
+    type: locust
+    description: "ate-api-server hot-path authz smoke on the fake data plane, ate-api-server at 2 CPUs: 50 actors, 20 then 50 cold resumes/s"
+    targetCluster: dev
+    file: /app/tests/resumepaused.py,/app/shapes/ladder_shape.py
+    duration: 6m
+    users: 50
+    workerCount: 2
+    actorCPU: "10m"
+    isolate:
+      delay: 150ms
+    ateArgs:
+      - "--cordon-system-infra-components"
+      - "--ateapi-authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client"
+    controlPlane:
+      apiServer:
+        replicas: 1
+        cpu: 2
+        memory: 4Gi
+        poolMaxConns: 64
+    flags:
+      - "--ladder-spawn-rate"
+      - "50"
+      - "--ladder"
+      - "50:2m@20,50:2m@50"
+  - name: ateapi_authz_hotpath_fake_2cpu
+    type: locust
+    description: "ate-api-server hot-path authz on the fake data plane, ate-api-server at 2 CPUs: rate ladder 100-1500 cold resumes/s"
+    targetCluster: dev
+    file: /app/tests/resumepaused.py,/app/shapes/ladder_shape.py
+    duration: 23m
+    users: 1000
+    workerCount: 200
+    actorCPU: "10m"
+    runnerCpu: "8"
+    runnerMemory: "2Gi"
+    isolate:
+      delay: 150ms
+    ateArgs:
+      - "--cordon-system-infra-components"
+      - "--ateapi-authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client"
+    controlPlane:
+      apiServer:
+        replicas: 1
+        cpu: 2
+        memory: 4Gi
+        poolMaxConns: 64
+    flags:
+      - "--ladder-spawn-rate"
+      - "1000"
+      - "--ladder"
+      - "1000:3m@100,1000:3m@200,1000:3m@400,1000:3m@600,1000:3m@800,1000:3m@1000,1000:3m@1500"
