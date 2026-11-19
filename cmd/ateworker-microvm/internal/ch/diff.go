@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -33,10 +34,17 @@ import (
 
 const (
 	diffMagic            = "ADIF"
-	diffVersion   uint32 = 1
+	diffVersion   uint32 = 2
 	diffPageSize  int64  = 4096
 	diffChunkSize int64  = 256 * 1024
+	// diffHeaderLen is the ADIF v2 header: magic, version, target size,
+	// extent count, and the SHA-256 of the base the delta was made against.
+	diffHeaderLen = 24 + sha256.Size
 )
+
+// ErrDeltaBaseMismatch reports that a delta was made against a different base
+// image than the one it is being restored onto.
+var ErrDeltaBaseMismatch = errors.New("delta was made against a different base")
 
 // SparseExtent describes a contiguous byte range [Offset, Offset+Length) in a guest memory image.
 type SparseExtent struct {
@@ -166,8 +174,10 @@ func DeflateAgainstBase(ctx context.Context, baseFile, targetFile string) (punch
 	return punchedBytes, keptBytes, err
 }
 
-// CreateDeltaAgainstBase writes modified 4 KiB pages into metaFile (ADIF v1) and dataFile.
-func CreateDeltaAgainstBase(ctx context.Context, baseFile, targetFile, metaFile, dataFile string) (keptBytes int64, err error) {
+// CreateDeltaAgainstBase writes modified 4 KiB pages into metaFile (ADIF v2) and dataFile.
+// baseSum is the SHA-256 of baseFile. It goes into metaFile so RestoreFromDelta
+// can refuse a different base.
+func CreateDeltaAgainstBase(ctx context.Context, baseFile string, baseSum [sha256.Size]byte, targetFile, metaFile, dataFile string) (keptBytes int64, err error) {
 	dataF, err := os.OpenFile(dataFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return 0, err
@@ -206,45 +216,66 @@ func CreateDeltaAgainstBase(ctx context.Context, baseFile, targetFile, metaFile,
 		return 0, err
 	}
 
-	header := make([]byte, 24+len(extents)*16)
+	header := make([]byte, diffHeaderLen+len(extents)*16)
 	copy(header[0:4], diffMagic)
 	binary.LittleEndian.PutUint32(header[4:8], diffVersion)
 	binary.LittleEndian.PutUint64(header[8:16], uint64(size))
 	binary.LittleEndian.PutUint64(header[16:24], uint64(len(extents)))
+	copy(header[24:diffHeaderLen], baseSum[:])
 	for i, ext := range extents {
-		b := 24 + i*16
+		b := diffHeaderLen + i*16
 		binary.LittleEndian.PutUint64(header[b:b+8], uint64(ext.Offset))
 		binary.LittleEndian.PutUint64(header[b+8:b+16], uint64(ext.Length))
 	}
 	return keptBytes, os.WriteFile(metaFile, header, 0o600)
 }
 
-// parseDeltaMeta parses and validates an ADIF v1 differential metadata header and its extent table.
-func parseDeltaMeta(metaBytes []byte) (targetSize int64, extents []SparseExtent, err error) {
-	if len(metaBytes) < 24 || string(metaBytes[0:4]) != diffMagic || binary.LittleEndian.Uint32(metaBytes[4:8]) != diffVersion {
-		return 0, nil, fmt.Errorf("invalid delta meta header")
+// parseDeltaMeta parses and validates an ADIF v2 differential metadata header and its extent table.
+func parseDeltaMeta(metaBytes []byte) (targetSize int64, baseSum [sha256.Size]byte, extents []SparseExtent, err error) {
+	if len(metaBytes) < 8 || string(metaBytes[0:4]) != diffMagic {
+		return 0, baseSum, nil, fmt.Errorf("invalid delta meta header")
+	}
+	if v := binary.LittleEndian.Uint32(metaBytes[4:8]); v != diffVersion {
+		return 0, baseSum, nil, fmt.Errorf("unsupported delta meta version %d, want %d", v, diffVersion)
+	}
+	if len(metaBytes) < diffHeaderLen {
+		return 0, baseSum, nil, fmt.Errorf("invalid delta meta header")
 	}
 	rawTargetSize := binary.LittleEndian.Uint64(metaBytes[8:16])
 	rawNumExtents := binary.LittleEndian.Uint64(metaBytes[16:24])
-	payloadLen := len(metaBytes) - 24
+	payloadLen := len(metaBytes) - diffHeaderLen
 	if rawTargetSize > math.MaxInt64 || payloadLen%16 != 0 || rawNumExtents != uint64(payloadLen/16) {
-		return 0, nil, fmt.Errorf("corrupt delta meta size (%d bytes for %d extents)", len(metaBytes), rawNumExtents)
+		return 0, baseSum, nil, fmt.Errorf("corrupt delta meta size (%d bytes for %d extents)", len(metaBytes), rawNumExtents)
 	}
 	targetSize = int64(rawTargetSize)
+	copy(baseSum[:], metaBytes[24:diffHeaderLen])
 	numExtents := payloadLen / 16
 	extents = make([]SparseExtent, numExtents)
 	for i := range numExtents {
-		b := 24 + i*16
+		b := diffHeaderLen + i*16
 		extents[i] = SparseExtent{
 			Offset: int64(binary.LittleEndian.Uint64(metaBytes[b : b+8])),
 			Length: int64(binary.LittleEndian.Uint64(metaBytes[b+8 : b+16])),
 		}
 	}
-	return targetSize, extents, nil
+	return targetSize, baseSum, extents, nil
 }
 
-// RestoreFromDelta reconstructs outFile from baseFile + ADIF v1 metaFile and dataFile.
-func RestoreFromDelta(ctx context.Context, baseFile, metaFile, dataFile, outFile string) error {
+// RestoreFromDelta reconstructs outFile from baseFile + ADIF v2 metaFile and dataFile.
+// baseSum is the SHA-256 of baseFile. If metaFile records a different base, it
+// returns ErrDeltaBaseMismatch and writes nothing.
+func RestoreFromDelta(ctx context.Context, baseFile string, baseSum [sha256.Size]byte, metaFile, dataFile, outFile string) error {
+	metaBytes, err := os.ReadFile(metaFile)
+	if err != nil {
+		return err
+	}
+	_, deltaSum, _, err := parseDeltaMeta(metaBytes)
+	if err != nil {
+		return err
+	}
+	if deltaSum != baseSum {
+		return fmt.Errorf("%w: delta base sha256 %x, local base sha256 %x", ErrDeltaBaseMismatch, deltaSum, baseSum)
+	}
 	tmpFile := outFile + ".reconstructed"
 	_ = os.Remove(tmpFile)
 	if err := CopySparseFileFast(ctx, baseFile, tmpFile); err != nil {
@@ -259,13 +290,13 @@ func RestoreFromDelta(ctx context.Context, baseFile, metaFile, dataFile, outFile
 	return os.Rename(tmpFile, outFile)
 }
 
-// OverlayDeltaFilesRecorded overlays ADIF v1 dirty extents onto dstFile in place.
+// OverlayDeltaFilesRecorded overlays ADIF v2 dirty extents onto dstFile in place.
 func OverlayDeltaFilesRecorded(ctx context.Context, metaFile, dataFile, dstFile string) ([]SparseExtent, int64, error) {
 	metaBytes, err := os.ReadFile(metaFile)
 	if err != nil {
 		return nil, 0, err
 	}
-	targetSize, extents, err := parseDeltaMeta(metaBytes)
+	targetSize, _, extents, err := parseDeltaMeta(metaBytes)
 	if err != nil {
 		return nil, 0, err
 	}

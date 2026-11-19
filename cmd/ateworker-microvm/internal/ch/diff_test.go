@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,11 +84,26 @@ func TestDeflateAndCompactDeltaRoundTrip(t *testing.T) {
 	t.Run("CreateDeltaAgainstBaseAndRestoreFromDelta", func(t *testing.T) {
 		dir := t.TempDir()
 		baseFile, targetFile, wantHash, _, wantKept := buildDiffFixture(t, dir)
+		baseBytes, err := os.ReadFile(baseFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseSum := sha256.Sum256(baseBytes)
 		metaFile, dataFile, outFile := filepath.Join(dir, "meta"), filepath.Join(dir, "data"), filepath.Join(dir, "reconstructed")
-		if kept, err := CreateDeltaAgainstBase(ctx, baseFile, targetFile, metaFile, dataFile); err != nil || kept != wantKept {
+		if kept, err := CreateDeltaAgainstBase(ctx, baseFile, baseSum, targetFile, metaFile, dataFile); err != nil || kept != wantKept {
 			t.Fatalf("CreateDeltaAgainstBase = (%d, %v), want (%d, nil)", kept, err, wantKept)
 		}
-		if err := RestoreFromDelta(ctx, baseFile, metaFile, dataFile, outFile); err != nil {
+
+		otherSum := baseSum
+		otherSum[0] ^= 0xff
+		if err := RestoreFromDelta(ctx, baseFile, otherSum, metaFile, dataFile, outFile); !errors.Is(err, ErrDeltaBaseMismatch) {
+			t.Fatalf("RestoreFromDelta with another base sum = %v, want ErrDeltaBaseMismatch", err)
+		}
+		if _, err := os.Stat(outFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("RestoreFromDelta wrote %s on a base mismatch (stat err=%v)", outFile, err)
+		}
+
+		if err := RestoreFromDelta(ctx, baseFile, baseSum, metaFile, dataFile, outFile); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := os.ReadFile(outFile); err != nil || sha256.Sum256(got) != wantHash {
@@ -150,14 +166,20 @@ func TestDeflateAndCompactDeltaRoundTrip(t *testing.T) {
 	})
 
 	t.Run("RejectsCorruptOrOverflowingDeltaMeta", func(t *testing.T) {
-		var hdr [24]byte
+		var hdr [diffHeaderLen]byte
 		copy(hdr[0:4], diffMagic)
 		binary.LittleEndian.PutUint32(hdr[4:8], diffVersion)
 		binary.LittleEndian.PutUint64(hdr[8:16], 4096)
 		// 0x1000000000000000 * 16 overflows uint64 to 0, testing overflow-safe extent count check.
 		binary.LittleEndian.PutUint64(hdr[16:24], 0x1000000000000000)
-		if _, _, err := parseDeltaMeta(hdr[:]); err == nil {
+		if _, _, _, err := parseDeltaMeta(hdr[:]); err == nil {
 			t.Fatal("expected error for overflowing extent count in parseDeltaMeta")
+		}
+		// A version 1 header carries no base checksum and is rejected.
+		binary.LittleEndian.PutUint32(hdr[4:8], 1)
+		binary.LittleEndian.PutUint64(hdr[16:24], 0)
+		if _, _, _, err := parseDeltaMeta(hdr[:24]); err == nil {
+			t.Fatal("expected error for a version 1 delta meta header")
 		}
 	})
 }
@@ -210,11 +232,16 @@ func BenchmarkCreateDeltaAgainstBase_167MB(b *testing.B) {
 	ctx := context.Background()
 	dir, baseFile, targetFile, _ := setup167MBTestFiles(b)
 	metaOut, dataOut := filepath.Join(dir, "bench.diff-meta"), filepath.Join(dir, "bench.diff-data")
+	baseBytes, err := os.ReadFile(baseFile)
+	if err != nil {
+		b.Fatal(err)
+	}
+	baseSum := sha256.Sum256(baseBytes)
 	b.SetBytes(167 << 20)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := CreateDeltaAgainstBase(ctx, baseFile, targetFile, metaOut, dataOut); err != nil {
+		if _, err := CreateDeltaAgainstBase(ctx, baseFile, baseSum, targetFile, metaOut, dataOut); err != nil {
 			b.Fatal(err)
 		}
 	}

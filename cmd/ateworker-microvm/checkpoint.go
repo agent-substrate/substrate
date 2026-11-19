@@ -423,7 +423,7 @@ func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, chec
 }
 
 // maybeDeflateCheckpointAgainstGoldenBase writes a warm checkpoint's modified pages
-// against the cached golden base as compact ADIF v1 extent files.
+// against the cached golden base as compact ADIF v2 extent files.
 func (s *AteWorkerService) maybeDeflateCheckpointAgainstGoldenBase(ctx context.Context, baseID, actorUID, checkpointDir string) error {
 	if !validBaseID(baseID) {
 		return nil
@@ -437,8 +437,13 @@ func (s *AteWorkerService) maybeDeflateCheckpointAgainstGoldenBase(ctx context.C
 	}
 
 	tDeflate := time.Now()
+	baseSum, err := goldenBaseSum(ctx, baseID)
+	if err != nil {
+		slog.WarnContext(ctx, "No golden base checksum, keeping full snapshot", slog.String("id", actorUID), slog.String("base_id", baseID), slog.Any("err", err))
+		return nil
+	}
 	metaPath, dataPath := filepath.Join(checkpointDir, memoryRangesDiffMetaFile), filepath.Join(checkpointDir, memoryRangesDiffDataFile)
-	kept, err := ch.CreateDeltaAgainstBase(ctx, goldenBaseMemPath, checkpointMemPath, metaPath, dataPath)
+	kept, err := ch.CreateDeltaAgainstBase(ctx, goldenBaseMemPath, baseSum, checkpointMemPath, metaPath, dataPath)
 	if err != nil {
 		slog.WarnContext(ctx, "CreateDeltaAgainstBase skipped, keeping full snapshot", slog.String("id", actorUID), slog.Any("err", err))
 		return nil

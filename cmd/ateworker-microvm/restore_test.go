@@ -733,6 +733,9 @@ func TestDifferentialSnapshotCheckpointAndRestoreRoundTrip(t *testing.T) {
 			if fi, err := os.Stat(coldMemPath); err != nil || fi.Sys().(*syscall.Stat_t).Nlink != 1 {
 				t.Fatalf("coldMemPath Nlink = %d (err=%v), want 1 so restore source does not share inode with golden cache", fi.Sys().(*syscall.Stat_t).Nlink, err)
 			}
+			if sum, err := os.ReadFile(goldenBaseSumPath(baseID)); err != nil || strings.TrimSpace(string(sum)) != fmt.Sprintf("%x", sha256.Sum256(baseBytes)) {
+				t.Fatalf("golden base checksum file = %q (err=%v), want sha256 of the cached base", sum, err)
+			}
 
 			// 2. Warm checkpoint modifies 2 pages and deflates against the cached golden base.
 			checkpointDir := filepath.Join(tmpRoot, "warm-checkpoint")
@@ -837,6 +840,110 @@ func TestDifferentialSnapshotCheckpointAndRestoreRoundTrip(t *testing.T) {
 			}
 			if gotSecondHash := sha256.Sum256(gotSecondBytes); gotSecondHash != wantSecondHash {
 				t.Fatalf("second reconstructed SHA256 = %x, want %x", gotSecondHash, wantSecondHash)
+			}
+		})
+	}
+}
+
+func TestDeltaRestoreChecksGoldenBaseSum(t *testing.T) {
+	const (
+		baseID   = "golden-base-1"
+		actorUID = "warm-actor-1"
+		size     = 64 * 1024
+		pageSize = 4096
+	)
+	for _, tc := range []struct {
+		name string
+		// mutate changes the node's golden base cache after the delta was made.
+		mutate func(t *testing.T, base []byte)
+		// wantErr is a substring of the restore error, or "" for success.
+		wantErr string
+	}{
+		{
+			name:   "matching base",
+			mutate: func(*testing.T, []byte) {},
+		},
+		{
+			name: "checksum file missing",
+			mutate: func(t *testing.T, _ []byte) {
+				if err := os.Remove(goldenBaseSumPath(baseID)); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "different cached base",
+			mutate: func(t *testing.T, base []byte) {
+				other := bytes.Repeat([]byte{0x5A}, len(base))
+				if err := os.WriteFile(goldenBaseMemoryRangesPath(baseID), other, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := writeGoldenBaseSum(baseID, sha256.Sum256(other)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: "golden base " + baseID,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			tmpRoot := t.TempDir()
+			origActorsDir := nodepath.ActorsDir
+			nodepath.ActorsDir = filepath.Join(tmpRoot, "actors")
+			t.Cleanup(func() { nodepath.ActorsDir = origActorsDir })
+			s := &AteWorkerService{}
+			actorDirs := &ateworkerpb.ActorDirs{RootDir: filepath.Join(nodepath.ActorsDir, actorUID)}
+
+			base := make([]byte, size)
+			for i := range base {
+				base[i] = byte(i/pageSize + 1)
+			}
+			coldMemPath := filepath.Join(tmpRoot, "cold-memory-ranges")
+			if err := os.WriteFile(coldMemPath, base, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ensureGoldenBaseCached(ctx, baseID, coldMemPath); err != nil {
+				t.Fatal(err)
+			}
+
+			checkpointDir := filepath.Join(tmpRoot, "checkpoint")
+			if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"config.json", "state.json"} {
+				if err := os.WriteFile(filepath.Join(checkpointDir, name), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			modified := append([]byte(nil), base...)
+			copy(modified[3*pageSize:4*pageSize], bytes.Repeat([]byte{0xAA}, pageSize))
+			if err := os.WriteFile(filepath.Join(checkpointDir, "memory-ranges"), modified, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.maybeDeflateCheckpointAgainstGoldenBase(ctx, baseID, actorUID, checkpointDir); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(checkpointDir, memoryRangesDiffMetaFile)); err != nil {
+				t.Fatalf("checkpoint has no delta: %v", err)
+			}
+
+			tc.mutate(t, base)
+			vmmDir, _, err := s.reconstructDeltaIfNeeded(ctx, actorUID, baseID, checkpointDir, actorDirs, false)
+			if tc.wantErr != "" {
+				if !errors.Is(err, ch.ErrDeltaBaseMismatch) || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("reconstructDeltaIfNeeded = %v, want ch.ErrDeltaBaseMismatch naming %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("reconstructDeltaIfNeeded: %v", err)
+			}
+			got, err := os.ReadFile(filepath.Join(vmmDir, "memory-ranges"))
+			if err != nil || !bytes.Equal(got, modified) {
+				t.Fatalf("reconstructed memory-ranges differs from the checkpointed guest memory (err=%v)", err)
+			}
+			if sum, err := os.ReadFile(goldenBaseSumPath(baseID)); err != nil || strings.TrimSpace(string(sum)) != fmt.Sprintf("%x", sha256.Sum256(base)) {
+				t.Fatalf("golden base checksum file = %q (err=%v), want sha256 of the cached base", sum, err)
 			}
 		})
 	}

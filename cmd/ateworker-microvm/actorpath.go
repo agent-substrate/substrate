@@ -20,8 +20,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +41,9 @@ const (
 	goldenDeltaMarkerFile    = "golden-delta"
 	memoryRangesDiffMetaFile = "memory-ranges.diff-meta"
 	memoryRangesDiffDataFile = "memory-ranges.diff-data"
+	// goldenBaseSumFile sits next to a cached golden base and holds the hex
+	// SHA-256 of its memory-ranges.
+	goldenBaseSumFile = "memory-ranges.sha256"
 )
 
 // deltaRestoreStagingDir returns the per-actor host directory used to stage a
@@ -68,7 +77,78 @@ func rootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "rootfs-upper")
 }
 
+// goldenBaseSumPath returns the path of the SHA-256 file for a cached golden base.
+func goldenBaseSumPath(baseID string) string {
+	return filepath.Join(filepath.Dir(goldenBaseMemoryRangesPath(baseID)), goldenBaseSumFile)
+}
+
+// goldenBaseSum returns the SHA-256 of the cached golden base for baseID. It
+// reads the file written when the base was cached. A base cached without one
+// is hashed once here and the file written.
+func goldenBaseSum(ctx context.Context, baseID string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	b, err := os.ReadFile(goldenBaseSumPath(baseID))
+	if err == nil {
+		if n, derr := hex.Decode(sum[:], bytes.TrimSpace(b)); derr != nil || n != sha256.Size {
+			return sum, fmt.Errorf("corrupt checksum file for golden base %s", baseID)
+		}
+		return sum, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return sum, err
+	}
+	if sum, err = hashFile(ctx, goldenBaseMemoryRangesPath(baseID)); err != nil {
+		return sum, err
+	}
+	return sum, writeGoldenBaseSum(baseID, sum)
+}
+
+// writeGoldenBaseSum atomically writes sum as the checksum file of the cached golden base for baseID.
+func writeGoldenBaseSum(baseID string, sum [sha256.Size]byte) error {
+	dst := goldenBaseSumPath(baseID)
+	f, err := os.CreateTemp(filepath.Dir(dst), ".memory-ranges.sha256.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	_, werr := f.WriteString(hex.EncodeToString(sum[:]) + "\n")
+	if err := errors.Join(werr, f.Close()); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// hashFile returns the SHA-256 of the file at path, holes read as zeros.
+func hashFile(ctx context.Context, path string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	f, err := os.Open(path)
+	if err != nil {
+		return sum, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	buf := make([]byte, 1<<20)
+	for {
+		if err := ctx.Err(); err != nil {
+			return sum, err
+		}
+		n, rerr := f.Read(buf)
+		h.Write(buf[:n])
+		if errors.Is(rerr, io.EOF) {
+			break
+		}
+		if rerr != nil {
+			return sum, rerr
+		}
+	}
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
+}
+
 // ensureGoldenBaseCached populates the node-local golden base memory-ranges cache from srcMemPath if not already cached.
+// The first cached copy stays: a later or concurrent call never replaces it. The
+// checksum file is written from the same bytes right after.
 func ensureGoldenBaseCached(ctx context.Context, baseID, srcMemPath string) error {
 	if !validBaseID(baseID) || srcMemPath == "" {
 		return nil
@@ -98,5 +178,15 @@ func ensureGoldenBaseCached(ctx context.Context, baseID, srcMemPath string) erro
 	if err := ch.CopySparseFileFast(ctx, srcMemPath, tmpPath); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, dstPath)
+	sum, err := hashFile(ctx, tmpPath)
+	if err != nil {
+		return err
+	}
+	if err := os.Link(tmpPath, dstPath); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	return writeGoldenBaseSum(baseID, sum)
 }

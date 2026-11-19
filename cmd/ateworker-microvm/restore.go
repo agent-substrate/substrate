@@ -159,8 +159,12 @@ func (s *AteWorkerService) reconstructDeltaIfNeeded(ctx context.Context, actorUI
 	metaPath := filepath.Join(restoreDir, memoryRangesDiffMetaFile)
 	dataPath := filepath.Join(restoreDir, memoryRangesDiffDataFile)
 	if _, merr := os.Stat(metaPath); merr == nil {
-		if err := ch.RestoreFromDelta(ctx, goldenBaseMemPath, metaPath, dataPath, outMemPath); err != nil {
-			return "", false, fmt.Errorf("while reconstructing compact delta against golden base: %w", err)
+		baseSum, err := goldenBaseSum(ctx, baseID)
+		if err != nil {
+			return "", false, fmt.Errorf("while reading checksum of golden base %s: %w", baseID, err)
+		}
+		if err := ch.RestoreFromDelta(ctx, goldenBaseMemPath, baseSum, metaPath, dataPath, outMemPath); err != nil {
+			return "", false, fmt.Errorf("while reconstructing compact delta against golden base %s: %w", baseID, err)
 		}
 		if !preserveRestoreDir {
 			_ = os.Remove(metaPath)
