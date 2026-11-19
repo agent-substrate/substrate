@@ -15,6 +15,9 @@ DaemonSet that prepares image layers itself, for example by loading them lazily
 from a remote store. The plugin API and a library for writing plugins live in
 [ai-on-gke/image-provider-plugin](https://github.com/ai-on-gke/image-provider-plugin).
 
+The plugin is a preview feature. atelet prepares images through it only when
+the `ImageProviderPlugin` [preview gate](../dev/preview-gates.md) is on.
+
 ## Configuration
 
 atelet talks to the plugin over the Unix socket that `--image-provider-socket`
@@ -28,14 +31,32 @@ overlayfs lowerdirs as they are. Whiteouts in them must use the overlayfs
 format. Worker pods see only `/var/lib/ate`, so the plugin must put the
 directories there.
 
+## Enabling the preview gate
+
+Install with the `ImageProviderPlugin` gate, for example
+`ATE_PREVIEW=ImageProviderPlugin` with ate-setup. Turn the gate on only after
+every WorkerPool runs the release that has it. atelet then writes overlay specs
+at version 2 for plugin images, which older workers reject.
+
+With the gate off, atelet pulls every image into the image cache and takes no
+new plugin leases. It still releases, reconciles and refreshes the leases its
+actors hold, and still suspends them when the plugin drains. ate-setup passes
+`ATE_PREVIEW` to the worker pods too, so changing it rolls every WorkerPool.
+Actors that resume after the roll use the image cache.
+
+Before you roll atelet back to a release without the gate, turn the gate off
+and wait until no actor holds a plugin image. An older atelet cannot read the
+version 2 overlay specs.
+
 ## Preparing an image
 
 For each image a Run or Restore needs, atelet:
 
 1. Serves a digest ref straight from the image cache when the cache holds the
    whole image.
-2. Otherwise asks the plugin with `CanProvide`, and if it serves the image,
-   calls `PrepareImage` with the registry credentials atelet resolves for it.
+2. Otherwise, with the gate on, asks the plugin with `CanProvide`, and if it
+   serves the image, calls `PrepareImage` with the registry credentials atelet
+   resolves for it.
 3. Pulls into the image cache when the plugin declines the image or fails.
 
 atelet records each request on `ate.imageprovider.requests` and
