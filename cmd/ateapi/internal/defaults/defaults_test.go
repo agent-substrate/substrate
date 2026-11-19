@@ -152,6 +152,14 @@ func TestApply(t *testing.T) {
 			{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
 		}}},
 	}, {
+		name: "csi driver config has no defaults",
+		in:   &ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"}, DriverName: "nfs.csi.k8s.io", ControllerEndpoint: "dns:///csi-nfs:9000"},
+		want: &ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"}, DriverName: "nfs.csi.k8s.io", ControllerEndpoint: "dns:///csi-nfs:9000"},
+	}, {
+		name: "external volume class has no defaults",
+		in:   &ateapi.ExternalVolumeClass{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"}, DriverName: "nfs.csi.k8s.io"},
+		want: &ateapi.ExternalVolumeClass{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"}, DriverName: "nfs.csi.k8s.io"},
+	}, {
 		name: "tag has no defaults",
 		in:   &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},
 		want: &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},
