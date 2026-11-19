@@ -167,7 +167,7 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 
 	// 4. The snapshot carries the assignment's v1, and the next resume falls
 	// back to ROOTFS on v2, which both pools now advertise.
-	f.suspend(t, f.v1Runtime)
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, f.v1Runtime)
 	f.resumeAndCheck(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, v2Runtime)
 }
 
