@@ -536,8 +536,10 @@ func decodeStrict(raw json.RawMessage, v any) error {
 	return dec.Decode(v)
 }
 
-func isNull(raw json.RawMessage) bool                  { return string(bytes.TrimSpace(raw)) == "null" }
-func parseUint(raw json.RawMessage) (uint64, error)   { return strconv.ParseUint(string(bytes.TrimSpace(raw)), 10, 64) }
+func isNull(raw json.RawMessage) bool { return string(bytes.TrimSpace(raw)) == "null" }
+func parseUint(raw json.RawMessage) (uint64, error) {
+	return strconv.ParseUint(string(bytes.TrimSpace(raw)), 10, 64)
+}
 func optBool(o jsonObject, key string) (bool, error) {
 	raw, ok := o.get(key)
 	if !ok || isNull(raw) {
