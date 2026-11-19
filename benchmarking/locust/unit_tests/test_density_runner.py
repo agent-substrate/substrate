@@ -19,9 +19,11 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -99,6 +101,12 @@ class EvaluateStepTest(unittest.TestCase):
         )
         cases = [
             ("clean_pass", ok, base, ""),
+            (
+                "preset_failure",
+                replace(ok, failure_reason="step timed out after 970s"),
+                base,
+                "step timed out after 970s",
+            ),
             ("no_wake", replace(ok, wake_p90_ms=None), base, "no wake measurements recorded"),
             ("wake_knee_floor", replace(ok, wake_p90_ms=1050.0), base, "wake P90 1050 ms > 1000 ms"),
             ("suspend_knee", replace(ok, suspend_p90_ms=1200.0), base, "suspend P90 1200 ms > 1000 ms"),
@@ -224,18 +232,32 @@ class ParseAndSweepTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             density_runner.build_step_cmd(args, 8, Path("/tmp/s8"))
 
+    @staticmethod
+    def _passing_step(users: int, wake_p90_ms: float = 120.0) -> StepResult:
+        return StepResult(
+            users=users,
+            live_actors=users,
+            wake_p50_ms=80.0,
+            wake_p90_ms=wake_p90_ms,
+            suspend_p50_ms=90.0,
+            suspend_p90_ms=130.0,
+            failure_ratio=0.0,
+            trial_summary={"machine_type": "c4-standard-16"},
+        )
+
+    @staticmethod
+    def _read_jsonl(dest: Path) -> dict[str, dict[str, str | None]]:
+        return {
+            r["metric"]: r["measurements"]
+            for r in map(
+                json.loads,
+                next(dest.rglob("stats.jsonl")).read_text(encoding="utf-8").splitlines(),
+            )
+        }
+
     def test_run_density_sweep_writes_status_json(self):
         def ok_step(_args, users, _step_dest, _logs):
-            return StepResult(
-                users=users,
-                live_actors=users,
-                wake_p50_ms=80.0,
-                wake_p90_ms=120.0 if users == 8 else 1500.0,
-                suspend_p50_ms=90.0,
-                suspend_p90_ms=130.0,
-                failure_ratio=0.0,
-                trial_summary={"machine_type": "c4-standard-16"},
-            )
+            return self._passing_step(users, wake_p90_ms=120.0 if users == 8 else 1500.0)
 
         def crash_second_step(_args, users, step_dest, logs):
             if users == 8:
@@ -304,15 +326,99 @@ class ParseAndSweepTest(unittest.TestCase):
                         run_step.assert_not_called()
                     status = json.loads(next(dest.rglob("status.json")).read_text(encoding="utf-8"))
                     self.assertEqual(status, want_status)
-                    rows = {
-                        r["metric"]: r["measurements"]
-                        for r in map(
-                            json.loads,
-                            next(dest.rglob("stats.jsonl")).read_text(encoding="utf-8").splitlines(),
-                        )
-                    }
+                    rows = self._read_jsonl(dest)
                     for k, v in want_limit.items():
                         self.assertEqual(rows["density_limit"][k], v)
+
+    def test_incremental_upload_and_timeout_bisection(self):
+        snapshots: list[tuple[int, dict[str, dict[str, str | None]], bool]] = []
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            dest, work = root / "out", root / "work"
+            work.mkdir()
+            args = _make_args(dest=str(dest), density_step_duration="1m", users=32)
+
+            def step_fn(_args, users, _step_dest, _logs):
+                if next(dest.rglob("stats.jsonl"), None) is not None:
+                    snapshots.append(
+                        (users, self._read_jsonl(dest), next(dest.rglob("status.json"), None) is not None)
+                    )
+                if users == 32:
+                    return StepResult(users=32, failure_reason="step timed out after 660s")
+                return self._passing_step(users)
+
+            with (
+                mock.patch("density_runner.tempfile.mkdtemp", return_value=str(work)),
+                mock.patch("density_runner.run_step", side_effect=step_fn),
+                mock.patch("density_runner.wait_for_idle", return_value=True),
+            ):
+                density_runner.run_density_sweep(args, runner.upload)
+
+            # Before u=16 started, u=8 was already published as "in progress" without status.json.
+            self.assertGreaterEqual(len(snapshots), 3)
+            u_before, mid_rows, mid_has_status = snapshots[0]
+            self.assertEqual(u_before, 16)
+            self.assertFalse(mid_has_status)
+            self.assertEqual(mid_rows["density_limit"]["max_actors"], "8")
+            self.assertEqual(mid_rows["density_limit"]["abort_reason"], "in progress")
+            self.assertIn("density_step_0008", mid_rows)
+
+            # Timeout at u=32 bisected down to u=24 (which passed) and finished cleanly.
+            final_rows = self._read_jsonl(dest)
+            self.assertEqual(final_rows["density_limit"]["max_actors"], "24")
+            self.assertEqual(final_rows["density_limit"]["first_failed_users"], "32")
+            self.assertEqual(final_rows["density_limit"]["failure_reason"], "step timed out after 660s")
+            self.assertIsNone(final_rows["density_limit"]["abort_reason"])
+            status = json.loads(next(dest.rglob("status.json")).read_text(encoding="utf-8"))
+            self.assertEqual(status, {"locust_exit_code": 0, "stats_generated": True})
+
+    def test_sigterm_flushes_completed_steps_and_restores_handler(self):
+        prev_handler = signal.getsignal(signal.SIGTERM)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            dest, work = root / "out", root / "work"
+            work.mkdir()
+            args = _make_args(dest=str(dest), density_step_duration="1m", users=32)
+
+            def step_fn(_args, users, _step_dest, _logs):
+                if users == 16:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return self._passing_step(users)
+
+            with (
+                mock.patch("density_runner.tempfile.mkdtemp", return_value=str(work)),
+                mock.patch("density_runner.run_step", side_effect=step_fn),
+                mock.patch("density_runner.wait_for_idle", return_value=True),
+            ):
+                with self.assertRaises(SystemExit) as cm:
+                    density_runner.run_density_sweep(args, runner.upload)
+                self.assertEqual(cm.exception.code, 1)
+
+            self.assertEqual(signal.getsignal(signal.SIGTERM), prev_handler)
+            status = json.loads(next(dest.rglob("status.json")).read_text(encoding="utf-8"))
+            self.assertEqual(status, {"locust_exit_code": 1, "stats_generated": True})
+            rows = self._read_jsonl(dest)
+            self.assertEqual(rows["density_limit"]["max_actors"], "8")
+            self.assertEqual(rows["density_limit"]["abort_reason"], "received SIGTERM")
+            self.assertIn("density_step_0008", rows)
+
+    def test_run_step_enforces_child_timeout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            args = _make_args(dest=str(root / "out"), density_step_duration="1m")
+            logs_path = root / "logs.txt"
+            hang_cmd = [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(60)"]
+            t0 = time.monotonic()
+            with (
+                open(logs_path, "w", encoding="utf-8") as logs,
+                mock.patch("density_runner.build_step_cmd", return_value=hang_cmd),
+                mock.patch("builtins.print"),
+            ):
+                res = density_runner.run_step(args, 32, root / "s32", logs, timeout_s=0.3)
+            elapsed = time.monotonic() - t0
+            self.assertEqual(res.failure_reason, "step timed out after 1s")
+            self.assertLess(elapsed, 5.0)
+            self.assertIn("timed out", logs_path.read_text(encoding="utf-8"))
 
 
 class _FakeRpcError(grpc.RpcError):
@@ -329,8 +435,8 @@ class _FakeRpcError(grpc.RpcError):
 
 
 class WaitForIdleTest(unittest.TestCase):
-    def test_cleanup_benchmark_actors_pages_and_ignores_not_found(self):
-        deleted: list[str] = []
+    def test_cleanup_benchmark_actors_suspends_then_deletes_and_ignores_errors(self):
+        events: list[tuple[str, str]] = []
 
         class FakeStub:
             def __init__(self, _ch):
@@ -348,14 +454,20 @@ class WaitForIdleTest(unittest.TestCase):
             def ListActors(self, _req, timeout=None):
                 return self._pages.pop(0)
 
+            def SuspendActor(self, req, timeout=None):
+                events.append(("suspend", req.actor.name))
+                if req.actor.name == "a1":
+                    raise _FakeRpcError(grpc.StatusCode.FAILED_PRECONDITION, "crashed")
+
             def DeleteActor(self, req, timeout=None):
-                deleted.append(req.actor.name)
+                events.append(("delete", req.actor.name))
                 if req.actor.name == "a2":
                     raise _FakeRpcError(grpc.StatusCode.NOT_FOUND, "gone")
 
         fake_pb2 = types.SimpleNamespace(
             ListActorsRequest=types.SimpleNamespace,
             ListOptions=types.SimpleNamespace,
+            SuspendActorRequest=types.SimpleNamespace,
             DeleteActorRequest=types.SimpleNamespace,
             ObjectRef=types.SimpleNamespace,
         )
@@ -371,7 +483,11 @@ class WaitForIdleTest(unittest.TestCase):
             ),
         ):
             self.assertEqual(density_runner.cleanup_benchmark_actors(), 2)
-        self.assertCountEqual(deleted, ["a1", "a2"])
+        for actor in ("a1", "a2"):
+            self.assertEqual(
+                [op for op, name in events if name == actor],
+                ["suspend", "delete"],
+            )
 
     def test_cleanup_does_not_import_locust_or_gevent(self):
         locust_dir = str(Path(__file__).resolve().parent.parent)

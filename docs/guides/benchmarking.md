@@ -574,18 +574,23 @@ larger of 8 users or 12.5% of the failing step:
   new one when an actor never serves after creation, fails three steps in a
   row, crashes, or returns 404, so `live_actors` alone would not show it.
 
-Before each step the runner deletes any leftover actors in the `benchmark`
-atespace and waits up to 5 minutes for the atespace to empty and every worker
-pod to be Ready. Passing `--no-cluster-facts` skips both the readiness wait and
-the Kubernetes pod checks (worker restarts, OOMKilled pods, evictions, and lost
-pods). If the cluster does not settle, the search aborts and marks the run
-failed. If the remaining `-t` budget cannot fit another step, the search stops
-cleanly and reports the highest passing step so far.
+Before each step the runner suspends and deletes any leftover actors in the
+`benchmark` atespace and waits up to 5 minutes for the atespace to empty and
+every worker pod to be Ready. Passing `--no-cluster-facts` skips both the
+readiness wait and the Kubernetes pod checks (worker restarts, OOMKilled pods,
+evictions, and lost pods). If the cluster does not settle, the search aborts and
+marks the run failed. Each child `runner.py` step is bounded by a per-step
+timeout (`--density-step-duration` + `--atelet-lag-s` + `10m`); a timed-out step
+is terminated, scored as failed, and bisected down. If the remaining `-t` budget
+cannot fit another step, the search stops cleanly and reports the highest
+passing step so far.
 
-Each step writes its intermediate files to local scratch so `--dest` receives
-one run directory at the end. The runner uploads `logs.txt`, `status.json`, and
-`stats.jsonl`. `stats.jsonl` holds the highest passing step's `trial_summary`
-(with `run_start` and `run_end` spanning the whole search) and
+Each step writes its intermediate files to local scratch and uploads updated
+`stats.jsonl` (tagged with `abort_reason: "in progress"`) and `logs.txt` to
+`--dest` after every step so partial progress survives hard kills. `SIGTERM`
+terminates any active child step and flushes the final `logs.txt`,
+`status.json`, and `stats.jsonl`. `stats.jsonl` holds the highest passing step's
+`trial_summary` (with `run_start` and `run_end` spanning the whole search) and
 `server_summary`, a `density_limit` row (`max_actors`, `first_failed_users`,
 `failure_reason`, `abort_reason`), and one `density_step_NNNN` row per step,
 where `NNNN` is the zero-padded user count.

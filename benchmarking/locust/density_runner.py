@@ -27,11 +27,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, TextIO
 
@@ -57,6 +60,14 @@ ATE_API_HOST = "api.ate-system.svc.cluster.local:443"
 BENCHMARK_ATESPACE = "benchmark"
 SETTLE_TIMEOUT_S = 300
 SETTLE_POLL_S = 10
+# Headroom beyond step load duration + atelet lag for runner.py startup,
+# boomer's 90s shutdown grace, Prometheus queries, and local artifact writes.
+STEP_TIMEOUT_BUFFER_S = 600
+CHILD_TERM_GRACE_S = 5
+
+
+class _SigtermReceived(BaseException):
+    """Raised on SIGTERM so run_density_sweep cleans up and flushes results."""
 
 SERVER_PASSTHROUGH_KEYS = (
     "active_actors_p50",
@@ -200,6 +211,8 @@ def knee_ceiling_ms(baseline_p90_ms: float | None) -> float | None:
 
 def evaluate_step(step: StepResult, baseline: StepResult | None) -> str:
     """Returns an empty string when `step` passes, else the failure reason."""
+    if step.failure_reason:
+        return step.failure_reason
     if step.wake_p90_ms is None:
         return "no wake measurements recorded"
 
@@ -356,23 +369,80 @@ def build_step_cmd(
     return [*cmd, *args.locust_extra]
 
 
-def run_step(args: argparse.Namespace, users: int, step_dest: Path, logs: TextIO) -> StepResult:
+def _terminate_child(proc: subprocess.Popen[str]) -> None:
+    """Terminates proc's process group, escalating to SIGKILL after grace."""
+    for sig, wait_s in ((signal.SIGTERM, CHILD_TERM_GRACE_S), (signal.SIGKILL, None)):
+        if proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=wait_s)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_step(
+    args: argparse.Namespace,
+    users: int,
+    step_dest: Path,
+    logs: TextIO,
+    *,
+    timeout_s: float | None = None,
+) -> StepResult:
     cmd = build_step_cmd(args, users, step_dest)
+    step_timeout = (
+        _parse_duration_s(args.density_step_duration)
+        + args.atelet_lag_s
+        + STEP_TIMEOUT_BUFFER_S
+        if timeout_s is None
+        else timeout_s
+    )
     tee(logs, f"\n==== Density step users={users} ====")
     tee(logs, f"Running: {' '.join(cmd)}")
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1, text=True
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        text=True,
+        start_new_session=True,
     )
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        tee(logs, f"[u={users}] {line.rstrip()}")
-    exit_code = proc.wait()
+    stdout = proc.stdout
+    assert stdout is not None
+
+    def _pump() -> None:
+        for line in stdout:
+            tee(logs, f"[u={users}] {line.rstrip()}")
+
+    pump = threading.Thread(target=_pump, daemon=True)
+    pump.start()
+    try:
+        exit_code = proc.wait(timeout=step_timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_child(proc)
+        pump.join(timeout=5)
+        timeout_int = max(1, int(round(step_timeout)))
+        tee(logs, f"Step u={users} timed out after {timeout_int}s; terminated child")
+        return StepResult(
+            users=users,
+            failure_reason=f"step timed out after {timeout_int}s",
+        )
+    except BaseException:
+        _terminate_child(proc)
+        pump.join(timeout=2)
+        raise
+
+    pump.join(timeout=5)
     jsonl_path = next(step_dest.rglob("stats.jsonl"), None)
     return parse_step_stats(users, exit_code, jsonl_path)
 
 
 def cleanup_benchmark_actors() -> int:
-    """Deletes every actor in the benchmark atespace and returns how many it found."""
+    """Suspends and deletes every actor in the benchmark atespace; returns how many it found."""
     # The stubs are generated into the image at build time and are not in the
     # repo, so importing them at module level would break the unit tests.
     from common import ateapi_pb2, ateapi_pb2_grpc
@@ -396,12 +466,22 @@ def cleanup_benchmark_actors() -> int:
             if not token:
                 break
 
-        def delete_one(name: str) -> None:
+        def suspend_and_delete(name: str) -> None:
+            ref = ateapi_pb2.ObjectRef(atespace=BENCHMARK_ATESPACE, name=name)
+            # Suspend first, matching agentsession's suspendAndDelete: deleting
+            # an awake actor risks leaving it CRASHED and leaked on the worker.
+            # Already-SUSPENDED actors return as-is; ignore errors (e.g.
+            # CRASHED/DELETING/NOT_FOUND) and still proceed to DeleteActor.
+            try:
+                stub.SuspendActor(
+                    ateapi_pb2.SuspendActorRequest(actor=ref),
+                    timeout=30,
+                )
+            except grpc.RpcError:
+                pass
             try:
                 stub.DeleteActor(
-                    ateapi_pb2.DeleteActorRequest(
-                        actor=ateapi_pb2.ObjectRef(atespace=BENCHMARK_ATESPACE, name=name)
-                    ),
+                    ateapi_pb2.DeleteActorRequest(actor=ref),
                     timeout=30,
                 )
             except grpc.RpcError as e:
@@ -409,7 +489,7 @@ def cleanup_benchmark_actors() -> int:
                     raise
 
         with ThreadPoolExecutor(max_workers=32) as pool:
-            list(pool.map(delete_one, names))
+            list(pool.map(suspend_and_delete, names))
         return len(names)
 
 
@@ -467,68 +547,44 @@ def run_density_sweep(
     abort_reason: str | None = None
     sweep_ok = False
     upload_ok = True
-    try:
-        with open(logs_path, "w", encoding="utf-8") as logs:
-            while (users := next_step_users(steps, args.users)) is not None:
-                if steps and time.time() + step_budget_s > deadline_ts:
-                    tee(logs, "Stopping search: remaining -t budget cannot fit another step")
-                    break
-                iter_start = time.monotonic()
-                if not wait_for_idle(args.cluster_facts, logs):
-                    abort_reason = "cluster did not go idle"
-                    tee(logs, f"Stopping search: {abort_reason}")
-                    break
-                step = run_step(args, users, steps_root / f"u{users:04d}", logs)
-                step_budget_s = max(step_budget_s, int(time.monotonic() - iter_start))
-                if step.exit_code != 0:
-                    abort_reason = f"step u={users} exited with code {step.exit_code}"
-                    tee(logs, f"Stopping search: {abort_reason}")
-                    break
-                step.failure_reason = evaluate_step(step, steps[0] if steps else None)
-                step.passed = step.failure_reason == ""
-                steps.append(step)
-                verdict = "PASS" if step.passed else f"FAIL ({step.failure_reason})"
-                tee(logs, f"Step users={users} verdict: {verdict}")
 
-            summary = summarize_sweep(steps)
-            tee(
-                logs,
-                f"Result: max_actors={summary['max_actors']} "
-                f"first_failed={summary['first_failed_users']} "
-                f"reason={summary['failure_reason']}",
-            )
-    except Exception as e:
-        # Marks the published status as failed; the exception still propagates.
-        abort_reason = f"density runner error: {e}"
-        raise
-    finally:
-        run_end_ts = int(datetime.now(timezone.utc).timestamp())
-        summary = {**summarize_sweep(steps), "abort_reason": abort_reason}
+    def publish(*, final: bool) -> bool:
+        cur_end_ts = int(datetime.now(timezone.utc).timestamp())
+        cur_summary = {
+            **summarize_sweep(steps),
+            "abort_reason": abort_reason if final else "in progress",
+        }
         records = build_jsonl_records(
             steps,
-            summary,
+            cur_summary,
             timestamp=data_ts,
             tag=args.tag,
             test_name=args.name,
             run_start=run_ts,
-            run_end=run_end_ts,
+            run_end=cur_end_ts,
         )
         with open(jsonl_path, "w", encoding="utf-8") as f:
             for rec in records:
                 f.write(json.dumps(rec) + "\n")
 
-        sweep_ok = summary["max_actors"] >= 1 and abort_reason is None
-        status_path.write_text(
-            json.dumps(
-                {"locust_exit_code": 0 if sweep_ok else 1, "stats_generated": bool(steps)}
-            ),
-            encoding="utf-8",
-        )
-        for src, basename in (
-            (status_path, "status.json"),
+        to_upload: list[tuple[Path, str]] = [
             (logs_path, "logs.txt"),
             (jsonl_path, "stats.jsonl"),
-        ):
+        ]
+        if final:
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "locust_exit_code": 0 if sweep_ok else 1,
+                        "stats_generated": bool(steps),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            to_upload.insert(0, (status_path, "status.json"))
+
+        ok = True
+        for src, basename in to_upload:
             if not src.exists():
                 continue
             dest = f"{prefix}/{basename}"
@@ -537,7 +593,65 @@ def run_density_sweep(
                 print(f"Uploaded {src} -> {dest}", flush=True)
             except Exception as e:
                 print(f"Upload of {src} failed: {e}", flush=True)
-                upload_ok = False
+                ok = False
+        return ok
+
+    prev_sigterm: Any = None
+    on_main_thread = threading.current_thread() is threading.main_thread()
+    if on_main_thread:
+        def _handle_sigterm(_signum: int, _frame: Any) -> None:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            raise _SigtermReceived()
+
+        prev_sigterm = signal.signal(signal.SIGTERM, _handle_sigterm)
+
+    try:
+        with open(logs_path, "w", encoding="utf-8") as logs:
+            try:
+                while (users := next_step_users(steps, args.users)) is not None:
+                    if steps and time.time() + step_budget_s > deadline_ts:
+                        tee(logs, "Stopping search: remaining -t budget cannot fit another step")
+                        break
+                    iter_start = time.monotonic()
+                    if not wait_for_idle(args.cluster_facts, logs):
+                        abort_reason = "cluster did not go idle"
+                        tee(logs, f"Stopping search: {abort_reason}")
+                        break
+                    step = run_step(args, users, steps_root / f"u{users:04d}", logs)
+                    if step.exit_code != 0:
+                        abort_reason = f"step u={users} exited with code {step.exit_code}"
+                        tee(logs, f"Stopping search: {abort_reason}")
+                        break
+                    if not step.failure_reason:
+                        step_budget_s = max(step_budget_s, int(time.monotonic() - iter_start))
+                    step.failure_reason = evaluate_step(step, steps[0] if steps else None)
+                    step.passed = step.failure_reason == ""
+                    steps.append(step)
+                    verdict = "PASS" if step.passed else f"FAIL ({step.failure_reason})"
+                    tee(logs, f"Step users={users} verdict: {verdict}")
+                    publish(final=False)
+
+                summary = summarize_sweep(steps)
+                tee(
+                    logs,
+                    f"Result: max_actors={summary['max_actors']} "
+                    f"first_failed={summary['first_failed_users']} "
+                    f"reason={summary['failure_reason']}",
+                )
+            except _SigtermReceived:
+                abort_reason = "received SIGTERM"
+                tee(logs, f"Stopping search: {abort_reason}")
+    except Exception as e:
+        # Marks the published status as failed; the exception still propagates.
+        abort_reason = f"density runner error: {e}"
+        raise
+    finally:
+        try:
+            sweep_ok = summarize_sweep(steps)["max_actors"] >= 1 and abort_reason is None
+            upload_ok = publish(final=True)
+        finally:
+            if on_main_thread:
+                signal.signal(signal.SIGTERM, prev_sigterm)
 
     if not sweep_ok or not upload_ok:
         sys.exit(1)
