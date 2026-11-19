@@ -15,8 +15,11 @@
 package filecachegc
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,17 +243,28 @@ func TestDryRunCountsNoEvictions(t *testing.T) {
 }
 
 func TestPassShortfall(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	// Everything left is linked: the pass frees less than asked.
-	fake := &fakeStore{size: 1500, stats: filecache.EvictStats{Retired: 1, FreedBytes: 100, SkippedLinked: 4}}
+	fake := &fakeStore{size: 1500, stats: filecache.EvictStats{SkippedLinked: 4}}
 	g, reader := newTestGC(t, fake, 1000)
-	for range 3 {
+	for range shortfallWarnLimit {
 		g.runPass(context.Background())
 	}
-	if g.consecutiveShortfalls != 3 {
-		t.Errorf("consecutiveShortfalls = %d, want 3", g.consecutiveShortfalls)
+	// A shortfall past the warn limit still logs when it evicts an entry.
+	fake.stats = filecache.EvictStats{Retired: 1, FreedBytes: 100, SkippedLinked: 3}
+	g.runPass(context.Background())
+	if g.consecutiveShortfalls != 4 {
+		t.Errorf("consecutiveShortfalls = %d, want 4", g.consecutiveShortfalls)
 	}
-	if got := sumByOutcome(t, collectMetric(t, reader, gcPassesMetric)); got[ateattr.FileCacheGCOutcomeShortfall] != 3 {
-		t.Errorf("passes by outcome = %v, want three shortfalls", got)
+	if got := strings.Count(buf.String(), "File cache GC could not reach its budget"); got != 4 {
+		t.Errorf("shortfall warnings = %d, want 4:\n%s", got, buf.String())
+	}
+	if got := sumByOutcome(t, collectMetric(t, reader, gcPassesMetric)); got[ateattr.FileCacheGCOutcomeShortfall] != 4 {
+		t.Errorf("passes by outcome = %v, want four shortfalls", got)
 	}
 	// A pass that meets the budget resets the streak.
 	fake.size = 500
