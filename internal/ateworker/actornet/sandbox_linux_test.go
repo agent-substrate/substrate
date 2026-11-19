@@ -35,6 +35,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"go.ate.dev/substrate/internal/nodepath"
 
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/roottest"
 )
@@ -345,7 +346,7 @@ func TestCleanupClosesEachDescriptorOnce(t *testing.T) {
 // tell whether Close waits for serving to stop or merely closes the sockets.
 type slowEgress struct{ release chan struct{} }
 
-func (e *slowEgress) Bind(string) (func(context.Context, net.Listener) error, error) {
+func (e *slowEgress) Bind(string, *fakeip.Table) (func(context.Context, net.Listener) error, error) {
 	return func(_ context.Context, l net.Listener) error {
 		<-e.release
 		return l.Close()

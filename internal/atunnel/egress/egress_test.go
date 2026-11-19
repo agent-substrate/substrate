@@ -72,7 +72,7 @@ func TestEgressBindingDoesNotOutliveItsActivation(t *testing.T) {
 			}
 			bind := func() func(context.Context, net.Listener) error {
 				t.Helper()
-				serve, err := egress.Bind(testActorUID)
+				serve, err := egress.Bind(testActorUID, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -152,10 +152,10 @@ func TestEgressUnactivatedBindingCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := egress.Bind(""); err == nil {
+	if _, err := egress.Bind("", nil); err == nil {
 		t.Fatal("bound an empty actor UID")
 	}
-	serve, err := egress.Bind(testActorUID)
+	serve, err := egress.Bind(testActorUID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
