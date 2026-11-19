@@ -123,11 +123,15 @@ func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) 
 	return nil
 }
 
-// monitorImageProvider reconciles the plugin's leases each time the plugin's
-// socket appears or is replaced, at startup or after the plugin restarts,
-// until ctx ends. A failed reconcile is retried on the next check.
+// monitorImageProvider watches the image provider plugin until ctx ends. Each
+// time the plugin's socket appears or is replaced, at startup or after the
+// plugin restarts, it reconciles the plugin's leases, and retries a failed
+// reconcile on the next check. Right after a reconcile, and every
+// providerAuthRefreshPeriod, it refreshes the registry credentials of the
+// leases that need it.
 func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir string) {
 	var last os.FileInfo
+	var lastRefresh time.Time
 	ticker := time.NewTicker(imageProviderMonitorPeriod)
 	defer ticker.Stop()
 	for {
@@ -136,9 +140,17 @@ func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir str
 			if err := s.reconcileProviderLeases(ctx, actorsDir); err != nil {
 				slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
 				info = nil
+			} else {
+				// The plugin may have restarted and lost the credentials.
+				s.providerAuth.reset()
+				lastRefresh = time.Time{}
 			}
 		}
 		last = info
+		if info != nil && time.Since(lastRefresh) >= providerAuthRefreshPeriod {
+			s.refreshProviderAuth(ctx, actorsDir)
+			lastRefresh = time.Now()
+		}
 		select {
 		case <-ctx.Done():
 			return
