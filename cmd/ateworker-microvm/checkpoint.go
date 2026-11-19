@@ -441,19 +441,18 @@ func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, chec
 	}
 }
 
-// snapshotSlotMemory extracts a differential or full memory-ranges snapshot from a running actor's file-backed guest RAM slot.
+// snapshotSlotMemory writes a running actor's file-backed guest RAM slot into checkpointDir: an ADIF
+// delta against the cached golden base when there is one, otherwise a full memory-ranges.
 func (s *AteWorkerService) snapshotSlotMemory(ctx context.Context, ra *runningActor, baseID, actorUID, checkpointDir, checkpointMem string) error {
 	if actorUID != baseID && validBaseID(baseID) {
 		basePath := goldenBaseMemoryRangesPathForDir(checkpointDir, baseID)
-		if _, err := os.Stat(basePath); err != nil && ra.memSlotBase != "" {
-			basePath = ra.memSlotBase
-		}
-		if _, err := os.Stat(basePath); err == nil {
+		baseSum, sumErr := goldenBaseSum(ctx, baseID)
+		if _, err := os.Stat(basePath); err == nil && sumErr == nil {
 			readBase := goldenBaseReadPath(basePath)
 			tDeflate := time.Now()
-			kept, err := ch.CreateSparseDeltaAgainstBase(ctx, readBase, ra.memSlot, checkpointMem)
+			metaPath, dataPath := filepath.Join(checkpointDir, memoryRangesDiffMetaFile), filepath.Join(checkpointDir, memoryRangesDiffDataFile)
+			kept, err := ch.CreateDeltaAgainstBase(ctx, readBase, baseSum, ra.memSlot, metaPath, dataPath)
 			if err != nil {
-				_ = os.Remove(checkpointMem)
 				return fmt.Errorf("while deflating slot against golden base: %w", err)
 			}
 			slog.InfoContext(ctx, "Deflated warm snapshot against golden base from slot",

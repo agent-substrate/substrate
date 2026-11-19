@@ -114,7 +114,6 @@ type runningActor struct {
 
 	memSlot                string
 	memSlotDev, memSlotIno uint64
-	memSlotBase            string
 	origMemory             json.RawMessage
 }
 

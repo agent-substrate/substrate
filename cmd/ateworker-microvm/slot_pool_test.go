@@ -19,7 +19,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +32,8 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 const (
@@ -44,6 +48,7 @@ type slotTestFixture struct {
 	dir      string
 	baseFile string
 	base     []byte
+	baseSum  [sha256.Size]byte
 }
 
 func newSlotTestFixture(t *testing.T) *slotTestFixture {
@@ -64,23 +69,28 @@ func newSlotTestFixture(t *testing.T) *slotTestFixture {
 	if f.base, err = os.ReadFile(f.baseFile); err != nil {
 		t.Fatal(err)
 	}
+	f.baseSum = sha256.Sum256(f.base)
 	goldenPrewarmStarted.Store(f.baseFile, struct{}{})
 	return f
 }
 
-func (f *slotTestFixture) delta(path string, b byte) (full, delta []byte) {
+// delta writes an ADIF delta against the fixture base into dir and returns the
+// guest memory it encodes and its meta and data files.
+func (f *slotTestFixture) delta(dir string, b byte) (full []byte, metaFile, dataFile string) {
 	f.t.Helper()
-	target := path + ".target"
+	target := filepath.Join(dir, "target")
 	full = append([]byte(nil), f.base...)
 	copy(full[2*slotTestPage:3*slotTestPage], bytes.Repeat([]byte{b}, slotTestPage))
 	copy(full[3*slotTestPage:4*slotTestPage], make([]byte, slotTestPage))
 	copy(full[5*slotTestPage:6*slotTestPage], bytes.Repeat([]byte{b + 1}, slotTestPage))
-	_ = os.WriteFile(target, full, 0o600)
-	if _, err := ch.CreateSparseDeltaAgainstBase(context.Background(), f.baseFile, target, path); err != nil {
+	if err := os.WriteFile(target, full, 0o600); err != nil {
 		f.t.Fatal(err)
 	}
-	delta, _ = os.ReadFile(path)
-	return full, delta
+	metaFile, dataFile = filepath.Join(dir, memoryRangesDiffMetaFile), filepath.Join(dir, memoryRangesDiffDataFile)
+	if _, err := ch.CreateDeltaAgainstBase(context.Background(), f.baseFile, f.baseSum, target, metaFile, dataFile); err != nil {
+		f.t.Fatal(err)
+	}
+	return full, metaFile, dataFile
 }
 
 func useTmpfsSlots(t *testing.T) string {
@@ -125,21 +135,22 @@ func TestSlotPoolAcquireCompactAndContention(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			restoreMem := filepath.Join(f.dir, fmt.Sprintf("w-%d", id), "memory-ranges")
-			_ = os.MkdirAll(filepath.Dir(restoreMem), 0o700)
-			full, _ := f.delta(restoreMem, byte(0x20+id))
-			commit, abort, err := acquireGoldenSlotOverlay(ctx, f.baseFile, restoreMem, restoreMem)
+			dir := filepath.Join(f.dir, fmt.Sprintf("w-%d", id))
+			_ = os.MkdirAll(dir, 0o700)
+			full, metaFile, dataFile := f.delta(dir, byte(0x20+id))
+			restoreMem := filepath.Join(dir, "memory-ranges")
+			lease, err := acquireGoldenSlotCompact(ctx, f.baseFile, f.baseSum, metaFile, dataFile, restoreMem)
 			if err != nil {
 				errCh <- err
 				return
 			}
 			got, _ := os.ReadFile(restoreMem)
 			if !bytes.Equal(got, full) {
-				abort()
+				lease.abort()
 				errCh <- fmt.Errorf("worker %d mismatch", id)
 				return
 			}
-			commit(true, false)
+			lease.commit(true, false)
 		}(w)
 	}
 	wg.Wait()
@@ -149,18 +160,12 @@ func TestSlotPoolAcquireCompactAndContention(t *testing.T) {
 	}
 	_ = waitIdleSlots(t, pool, int(pool.nextID.Load()))
 
-	// Verify ADIF compact delta overlay and surgical reset.
-	target := filepath.Join(f.dir, "compact-target.bin")
-	full := append([]byte(nil), f.base...)
-	copy(full[2*slotTestPage:3*slotTestPage], bytes.Repeat([]byte{0xCC}, slotTestPage))
-	_ = os.WriteFile(target, full, 0o600)
-	metaFile, dataFile := filepath.Join(f.dir, memoryRangesDiffMetaFile), filepath.Join(f.dir, memoryRangesDiffDataFile)
-	if _, err := ch.CreateDeltaAgainstBase(ctx, f.baseFile, target, metaFile, dataFile); err != nil {
-		t.Fatal(err)
-	}
-	outFile := filepath.Join(f.dir, "compact-restore", "memory-ranges")
-	_ = os.MkdirAll(filepath.Dir(outFile), 0o700)
-	lease, err := acquireGoldenSlotCompact(ctx, f.baseFile, metaFile, dataFile, outFile)
+	// Verify ADIF delta overlay and surgical reset.
+	compactDir := filepath.Join(f.dir, "compact-restore")
+	_ = os.MkdirAll(compactDir, 0o700)
+	full, metaFile, dataFile := f.delta(compactDir, 0xCC)
+	outFile := filepath.Join(compactDir, "memory-ranges")
+	lease, err := acquireGoldenSlotCompact(ctx, f.baseFile, f.baseSum, metaFile, dataFile, outFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +201,7 @@ func TestStartZeroCopyRestoreAndAbandon(t *testing.T) {
 	_ = os.WriteFile(base, bytes.Repeat([]byte{1}, 4096), 0o600)
 	pool := &baseSlotPool{srcFile: base, baseFile: base, slotDir: filepath.Join(dir, "slots"), inTmpfs: true, idle: make(chan *goldenSlot, 1)}
 	lease := &goldenSlotLease{
-		commit: func(bool, bool) bool { return false }, abort: func() {},
+		commit: func(bool, bool) {}, abort: func() {},
 		slot: &goldenSlot{path: slot}, pool: pool, fromIdle: true, claimed: new(atomic.Bool),
 	}
 
@@ -222,11 +227,13 @@ func TestStartZeroCopyRestoreAndAbandon(t *testing.T) {
 	}
 }
 
-func setup167MBSlotBenchFixture(b *testing.B) (baseFile, slotFile, deltaFile string) {
+func setup167MBSlotBenchFixture(b *testing.B) (baseFile, slotFile, metaFile, dataFile string) {
 	b.Helper()
 	const logicalSize, residentSize, dirtySize, chunkSize = 384 << 20, 167 << 20, 7 << 20, 1 << 20
 	dir := b.TempDir()
-	baseFile, slotFile, deltaFile = filepath.Join(dir, "base.bin"), filepath.Join(dir, "slot.bin"), filepath.Join(dir, "delta.bin")
+	baseFile, slotFile = filepath.Join(dir, "base.bin"), filepath.Join(dir, "slot.bin")
+	targetFile := filepath.Join(dir, "target.bin")
+	metaFile, dataFile = filepath.Join(dir, "delta.meta"), filepath.Join(dir, "delta.data")
 	bf, _ := os.OpenFile(baseFile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	_ = bf.Truncate(logicalSize)
 	chunk := bytes.Repeat([]byte{0x42}, chunkSize)
@@ -234,22 +241,27 @@ func setup167MBSlotBenchFixture(b *testing.B) (baseFile, slotFile, deltaFile str
 		_, _ = bf.WriteAt(chunk, off)
 	}
 	_ = bf.Close()
-	if err := ch.CopySparseFileFast(context.Background(), baseFile, slotFile); err != nil {
-		b.Fatal(err)
+	for _, dst := range []string{slotFile, targetFile} {
+		if err := ch.CopySparseFileFast(context.Background(), baseFile, dst); err != nil {
+			b.Fatal(err)
+		}
 	}
-	df, _ := os.OpenFile(deltaFile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
-	_ = df.Truncate(logicalSize)
+	tf, _ := os.OpenFile(targetFile, os.O_RDWR, 0o600)
 	dirtyChunk := bytes.Repeat([]byte{0x99}, chunkSize)
 	for i := int64(0); i < dirtySize/chunkSize; i++ {
-		_, _ = df.WriteAt(dirtyChunk, (i*20+4)*chunkSize)
+		_, _ = tf.WriteAt(dirtyChunk, (i*20+4)*chunkSize)
 	}
-	_ = df.Close()
-	return baseFile, slotFile, deltaFile
+	_ = tf.Close()
+	// OverlayDeltaFilesRecorded does not check the base, so the bench skips hashing it.
+	if _, err := ch.CreateDeltaAgainstBase(context.Background(), baseFile, [sha256.Size]byte{}, targetFile, metaFile, dataFile); err != nil {
+		b.Fatal(err)
+	}
+	return baseFile, slotFile, metaFile, dataFile
 }
 
 func BenchmarkRestoreMemory_FullCopyVsSlotPool(b *testing.B) {
 	ctx := context.Background()
-	baseFile, slotFile, deltaFile := setup167MBSlotBenchFixture(b)
+	baseFile, slotFile, metaFile, dataFile := setup167MBSlotBenchFixture(b)
 	b.Run("FullCopy_167MB", func(b *testing.B) {
 		outFile := filepath.Join(filepath.Dir(baseFile), "out.bin")
 		b.SetBytes(167 << 20)
@@ -259,7 +271,7 @@ func BenchmarkRestoreMemory_FullCopyVsSlotPool(b *testing.B) {
 			if err := ch.CopySparseFileFast(ctx, baseFile, outFile); err != nil {
 				b.Fatal(err)
 			}
-			if _, _, err := ch.OverlaySparseRegionsRecorded(ctx, deltaFile, outFile); err != nil {
+			if _, _, err := ch.OverlayDeltaFilesRecorded(ctx, metaFile, dataFile, outFile); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -269,7 +281,7 @@ func BenchmarkRestoreMemory_FullCopyVsSlotPool(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for range b.N {
-			extents, _, err := ch.OverlaySparseRegionsRecorded(ctx, deltaFile, slotFile)
+			extents, _, err := ch.OverlayDeltaFilesRecorded(ctx, metaFile, dataFile, slotFile)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -278,4 +290,149 @@ func BenchmarkRestoreMemory_FullCopyVsSlotPool(b *testing.B) {
 			}
 		}
 	})
+}
+
+// slotDeltaFixture is a node with a cached golden base, used by the slot restore
+// and slot checkpoint tests.
+type slotDeltaFixture struct {
+	t        *testing.T
+	baseID   string
+	base     []byte
+	baseSum  [sha256.Size]byte
+	basePath string
+	pool     *baseSlotPool
+}
+
+// newSlotDeltaFixture caches a golden base under a temporary node path and
+// readies its tmpfs slot pool with one idle slot.
+func newSlotDeltaFixture(t *testing.T) *slotDeltaFixture {
+	t.Helper()
+	ctx := context.Background()
+	tmpRoot := t.TempDir()
+	origActorsDir := nodepath.ActorsDir
+	nodepath.ActorsDir = filepath.Join(tmpRoot, "actors")
+	t.Cleanup(func() { nodepath.ActorsDir = origActorsDir })
+	root := useTmpfsSlots(t)
+
+	f := &slotDeltaFixture{t: t, baseID: "golden-base-1", base: make([]byte, slotTestSize)}
+	for i := range f.base {
+		f.base[i] = byte(i/slotTestPage + 1)
+	}
+	f.baseSum = sha256.Sum256(f.base)
+	f.basePath = goldenBaseMemoryRangesPath(f.baseID)
+	goldenPrewarmStarted.Store(f.basePath, struct{}{})
+	t.Cleanup(func() { goldenPrewarmStarted.Delete(f.basePath) })
+	src := filepath.Join(tmpRoot, "golden-memory-ranges")
+	if err := os.WriteFile(src, f.base, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureGoldenBaseCached(ctx, f.baseID, src); err != nil {
+		t.Fatal(err)
+	}
+	f.pool = getOrCreateBaseSlotPool(f.basePath, root)
+	if !f.pool.ready(ctx) {
+		t.Fatal("tmpfs pool not ready")
+	}
+	f.pool.replenishOneSlot()
+	return f
+}
+
+func TestReconstructDeltaWithSlotChecksBase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// deltaSum is the base checksum written into the delta, or nil for the cached base's.
+		deltaSum *[sha256.Size]byte
+	}{
+		{name: "matching base"},
+		{name: "different base", deltaSum: &[sha256.Size]byte{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newSlotDeltaFixture(t)
+			restoreDir := filepath.Join(t.TempDir(), "restore")
+			if err := os.MkdirAll(restoreDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"config.json", "state.json"} {
+				if err := os.WriteFile(filepath.Join(restoreDir, name), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			full := append([]byte(nil), f.base...)
+			copy(full[3*slotTestPage:4*slotTestPage], bytes.Repeat([]byte{0xAA}, slotTestPage))
+			target := filepath.Join(t.TempDir(), "target")
+			if err := os.WriteFile(target, full, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sum := f.baseSum
+			if tc.deltaSum != nil {
+				sum = *tc.deltaSum
+			}
+			metaFile, dataFile := filepath.Join(restoreDir, memoryRangesDiffMetaFile), filepath.Join(restoreDir, memoryRangesDiffDataFile)
+			if _, err := ch.CreateDeltaAgainstBase(ctx, f.basePath, sum, target, metaFile, dataFile); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeGoldenDeltaMarker(restoreDir); err != nil {
+				t.Fatal(err)
+			}
+			actorDirs := &ateworkerpb.ActorDirs{RootDir: filepath.Join(nodepath.ActorsDir, "warm-actor-1")}
+
+			s := &AteWorkerService{}
+			vmmDir, _, lease, err := s.reconstructDeltaWithSlot(ctx, "warm-actor-1", f.baseID, restoreDir, actorDirs, true)
+			if tc.deltaSum != nil {
+				if !errors.Is(err, ch.ErrDeltaBaseMismatch) || !strings.Contains(err.Error(), f.baseID) {
+					t.Fatalf("reconstructDeltaWithSlot = %v, want ch.ErrDeltaBaseMismatch naming %s", err, f.baseID)
+				}
+				if n := len(f.pool.idle); n != 1 {
+					t.Fatalf("pool has %d idle slots after a refused delta, want 1", n)
+				}
+				if _, err := os.Stat(deltaRestoreStagingDir(actorDirs)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("refused delta created the staging dir (stat err=%v)", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("reconstructDeltaWithSlot: %v", err)
+			}
+			if lease == nil || lease.slot == nil || !lease.fromIdle {
+				t.Fatal("restore did not take the idle slot")
+			}
+			got, err := os.ReadFile(filepath.Join(vmmDir, "memory-ranges"))
+			if err != nil || !bytes.Equal(got, full) {
+				t.Fatalf("restored memory-ranges differs from the checkpointed guest memory (err=%v)", err)
+			}
+			lease.abort()
+		})
+	}
+}
+
+func TestSnapshotSlotMemoryWritesCheckedDelta(t *testing.T) {
+	ctx := context.Background()
+	f := newSlotDeltaFixture(t)
+	slot := filepath.Join(t.TempDir(), "slot")
+	full := append([]byte(nil), f.base...)
+	copy(full[6*slotTestPage:7*slotTestPage], bytes.Repeat([]byte{0xBB}, slotTestPage))
+	if err := os.WriteFile(slot, full, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkpointDir := t.TempDir()
+	s := &AteWorkerService{}
+	ra := &runningActor{memSlot: slot}
+	if err := s.snapshotSlotMemory(ctx, ra, f.baseID, "warm-actor-1", checkpointDir, filepath.Join(checkpointDir, "memory-ranges")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(checkpointDir, "memory-ranges")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("slot checkpoint wrote a full memory-ranges (stat err=%v)", err)
+	}
+	metaFile, dataFile := filepath.Join(checkpointDir, memoryRangesDiffMetaFile), filepath.Join(checkpointDir, memoryRangesDiffDataFile)
+	if err := ch.CheckDeltaBase(metaFile, f.baseSum); err != nil {
+		t.Fatalf("slot checkpoint delta does not record the golden base: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := ch.RestoreFromDelta(ctx, f.basePath, f.baseSum, metaFile, dataFile, out); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(out); err != nil || !bytes.Equal(got, full) {
+		t.Fatalf("delta from slot does not rebuild the slot's memory (err=%v)", err)
+	}
 }

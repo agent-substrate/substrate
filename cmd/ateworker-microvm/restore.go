@@ -199,6 +199,15 @@ func (s *AteWorkerService) reconstructDeltaWithSlot(ctx context.Context, actorUI
 	if _, serr := os.Stat(goldenBaseMemPath); serr != nil {
 		return "", false, nil, fmt.Errorf("golden base %s missing for differential restore of %s: %w", goldenBaseMemPath, actorUID, serr)
 	}
+	baseSum, err := goldenBaseSum(ctx, baseID)
+	if err != nil {
+		return "", false, nil, fmt.Errorf("while reading checksum of golden base %s: %w", baseID, err)
+	}
+	metaPath, dataPath := filepath.Join(restoreDir, memoryRangesDiffMetaFile), filepath.Join(restoreDir, memoryRangesDiffDataFile)
+	// before a slot is taken or anything is written
+	if err := ch.CheckDeltaBase(metaPath, baseSum); err != nil {
+		return "", false, nil, fmt.Errorf("while checking delta against golden base %s: %w", baseID, err)
+	}
 	targetDir := restoreDir
 	if preserveRestoreDir {
 		targetDir, err = stagePreservedDeltaRestoreDir(restoreDir, actorDirs)
@@ -208,22 +217,14 @@ func (s *AteWorkerService) reconstructDeltaWithSlot(ctx context.Context, actorUI
 	}
 	tMerge := time.Now()
 	outMemPath := filepath.Join(targetDir, "memory-ranges")
-	metaPath, dataPath := filepath.Join(restoreDir, memoryRangesDiffMetaFile), filepath.Join(restoreDir, memoryRangesDiffDataFile)
-	if _, merr := os.Stat(metaPath); merr == nil {
-		lease, err = acquireGoldenSlotCompact(ctx, goldenBaseMemPath, metaPath, dataPath, outMemPath)
-		if err != nil {
-			return "", false, nil, fmt.Errorf("while reconstructing compact delta into golden slot: %w", err)
-		}
-		if !preserveRestoreDir {
-			_ = os.Remove(metaPath)
-			_ = os.Remove(dataPath)
-			_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
-		}
-	} else {
-		lease, err = acquireGoldenSlot(ctx, goldenBaseMemPath, filepath.Join(restoreDir, "memory-ranges"), outMemPath)
-		if err != nil {
-			return "", false, nil, fmt.Errorf("while reconstructing sparse delta into golden slot: %w", err)
-		}
+	lease, err = acquireGoldenSlotCompact(ctx, goldenBaseMemPath, baseSum, metaPath, dataPath, outMemPath)
+	if err != nil {
+		return "", false, nil, fmt.Errorf("while reconstructing compact delta into golden slot: %w", err)
+	}
+	if !preserveRestoreDir {
+		_ = os.Remove(metaPath)
+		_ = os.Remove(dataPath)
+		_ = os.Remove(filepath.Join(restoreDir, goldenDeltaMarkerFile))
 	}
 	slog.InfoContext(ctx, "Reconstructed warm snapshot from golden base slot",
 		slog.String("id", actorUID), slog.String("base_id", baseID), slog.Duration("reconstruct", time.Since(tMerge)))
@@ -574,9 +575,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	if slotLease != nil {
-		if keepDelta := slotLease.commit(memMode == ch.MemRestoreEager, vmmPreserveRestoreDir); !keepDelta {
-			_ = os.Remove(filepath.Join(vmmRestoreDir, goldenDeltaMarkerFile))
-		}
+		slotLease.commit(memMode == ch.MemRestoreEager, vmmPreserveRestoreDir)
 	}
 	if zc != nil && vmmPreserveRestoreDir {
 		if err := zc.revert(); err != nil {
@@ -702,7 +701,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 	if zc != nil {
 		ra.memSlot, ra.memSlotDev, ra.memSlotIno = zc.slot, zc.slotDev, zc.slotIno
-		ra.memSlotBase, ra.origMemory = zc.slotBase, zc.origMemory
+		ra.origMemory = zc.origMemory
 	}
 
 	// Re-attach stdout/stderr forwarding for each container over the agent

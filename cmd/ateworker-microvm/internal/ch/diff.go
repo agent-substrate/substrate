@@ -265,16 +265,8 @@ func parseDeltaMeta(metaBytes []byte) (targetSize int64, baseSum [sha256.Size]by
 // baseSum is the SHA-256 of baseFile. If metaFile records a different base, it
 // returns ErrDeltaBaseMismatch and writes nothing.
 func RestoreFromDelta(ctx context.Context, baseFile string, baseSum [sha256.Size]byte, metaFile, dataFile, outFile string) error {
-	metaBytes, err := os.ReadFile(metaFile)
-	if err != nil {
+	if err := CheckDeltaBase(metaFile, baseSum); err != nil {
 		return err
-	}
-	_, deltaSum, _, err := parseDeltaMeta(metaBytes)
-	if err != nil {
-		return err
-	}
-	if deltaSum != baseSum {
-		return fmt.Errorf("%w: delta base sha256 %x, local base sha256 %x", ErrDeltaBaseMismatch, deltaSum, baseSum)
 	}
 	tmpFile := outFile + ".reconstructed"
 	_ = os.Remove(tmpFile)
@@ -288,6 +280,23 @@ func RestoreFromDelta(ctx context.Context, baseFile string, baseSum [sha256.Size
 	}
 	_ = os.Remove(outFile)
 	return os.Rename(tmpFile, outFile)
+}
+
+// CheckDeltaBase returns ErrDeltaBaseMismatch if metaFile was made against a
+// base other than the one with SHA-256 baseSum.
+func CheckDeltaBase(metaFile string, baseSum [sha256.Size]byte) error {
+	metaBytes, err := os.ReadFile(metaFile)
+	if err != nil {
+		return err
+	}
+	_, deltaSum, _, err := parseDeltaMeta(metaBytes)
+	if err != nil {
+		return err
+	}
+	if deltaSum != baseSum {
+		return fmt.Errorf("%w: delta base sha256 %x, local base sha256 %x", ErrDeltaBaseMismatch, deltaSum, baseSum)
+	}
+	return nil
 }
 
 // OverlayDeltaFilesRecorded overlays ADIF v2 dirty extents onto dstFile in place.

@@ -347,19 +347,9 @@ func materializeSlot(ctx context.Context, slotPath, outFile string) error {
 	return os.Rename(tmp, outFile)
 }
 
-// recoverInterruptedOverlay restores outFile from its delta backup if a previous overlay left a dangling symlink.
-func recoverInterruptedOverlay(outFile string) {
-	deltaBackup := outFile + ".delta.bak"
-	if fi, err := os.Lstat(outFile); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if _, err := os.Lstat(deltaBackup); err == nil {
-			_ = os.Rename(deltaBackup, outFile)
-		}
-	}
-}
-
 // goldenSlotLease tracks an acquired golden slot and its commit/abort lifecycle callbacks during restore.
 type goldenSlotLease struct {
-	commit   func(eager, preserve bool) (keepDelta bool)
+	commit   func(eager, preserve bool)
 	abort    func()
 	slot     *goldenSlot
 	pool     *baseSlotPool
@@ -376,52 +366,10 @@ func (l *goldenSlotLease) claimForVM() string {
 	return l.slot.path
 }
 
-// acquireGoldenSlotOverlay acquires a golden slot, overlays deltaFile in place, binds it to outFile, and returns commit and abort callbacks.
-func acquireGoldenSlotOverlay(ctx context.Context, baseFile, deltaFile, outFile string) (commit func(eager, preserve bool) (keepDelta bool), abort func(), err error) {
-	l, err := acquireGoldenSlot(ctx, baseFile, deltaFile, outFile)
-	if err != nil {
-		return nil, nil, err
-	}
-	return l.commit, l.abort, nil
-}
-
-// acquireGoldenSlot acquires a golden slot from the pool for baseFile, overlays sparse deltaFile onto it, and binds it to outFile.
-func acquireGoldenSlot(ctx context.Context, baseFile, deltaFile, outFile string) (*goldenSlotLease, error) {
-	noopLease := &goldenSlotLease{commit: func(bool, bool) bool { return false }, abort: func() {}}
-	recoverInterruptedOverlay(outFile)
-	maybePrewarmGoldenSlots(baseFile)
-	bi, err := os.Stat(baseFile)
-	if err != nil {
-		return nil, err
-	}
-	di, err := os.Stat(deltaFile)
-	if err != nil {
-		return nil, err
-	}
-	if bi.Size() != di.Size() {
-		return nil, fmt.Errorf("acquireGoldenSlotOverlay: size mismatch base=%d delta=%d", bi.Size(), di.Size())
-	}
-	pool := goldenSlotPool(ctx, baseFile)
-	slot, fromIdle, err := acquireRawSlotFromPool(ctx, pool, bi.Size())
-	if err != nil {
-		if !pool.inTmpfs {
-			return nil, fmt.Errorf("staging golden slot: %w", err)
-		}
-		return noopLease, ch.MergeSparseOverlay(ctx, baseFile, deltaFile, outFile)
-	}
-	dirtyRanges, _, oerr := ch.OverlaySparseRegionsRecorded(ctx, deltaFile, slot.path)
-	if oerr != nil {
-		_ = os.Remove(slot.path)
-		return nil, oerr
-	}
-	return bindSlotToOutFile(ctx, pool, slot, fromIdle, dirtyRanges, deltaFile, outFile, func() error {
-		return ch.MergeSparseOverlay(ctx, baseFile, deltaFile, outFile)
-	})
-}
-
-// acquireGoldenSlotCompact acquires a golden slot from the pool for baseFile, overlays compact ADIF v1 metaFile and dataFile onto it, and binds it to outFile.
-func acquireGoldenSlotCompact(ctx context.Context, baseFile, metaFile, dataFile, outFile string) (*goldenSlotLease, error) {
-	noopLease := &goldenSlotLease{commit: func(bool, bool) bool { return false }, abort: func() {}}
+// acquireGoldenSlotCompact acquires a golden slot from the pool for baseFile, overlays ADIF v2 metaFile and dataFile onto it,
+// and binds it to outFile. baseSum is the SHA-256 of baseFile; the caller checks metaFile against it with ch.CheckDeltaBase first.
+func acquireGoldenSlotCompact(ctx context.Context, baseFile string, baseSum [sha256.Size]byte, metaFile, dataFile, outFile string) (*goldenSlotLease, error) {
+	noopLease := &goldenSlotLease{commit: func(bool, bool) {}, abort: func() {}}
 	maybePrewarmGoldenSlots(baseFile)
 	bi, err := os.Stat(baseFile)
 	if err != nil {
@@ -433,15 +381,15 @@ func acquireGoldenSlotCompact(ctx context.Context, baseFile, metaFile, dataFile,
 		if !pool.inTmpfs {
 			return nil, fmt.Errorf("staging golden slot: %w", err)
 		}
-		return noopLease, ch.RestoreFromDelta(ctx, baseFile, metaFile, dataFile, outFile)
+		return noopLease, ch.RestoreFromDelta(ctx, baseFile, baseSum, metaFile, dataFile, outFile)
 	}
 	dirtyRanges, _, oerr := ch.OverlayDeltaFilesRecorded(ctx, metaFile, dataFile, slot.path)
 	if oerr != nil {
 		_ = os.Remove(slot.path)
 		return nil, oerr
 	}
-	return bindSlotToOutFile(ctx, pool, slot, fromIdle, dirtyRanges, "", outFile, func() error {
-		return ch.RestoreFromDelta(ctx, baseFile, metaFile, dataFile, outFile)
+	return bindSlotToOutFile(ctx, pool, slot, fromIdle, dirtyRanges, outFile, func() error {
+		return ch.RestoreFromDelta(ctx, baseFile, baseSum, metaFile, dataFile, outFile)
 	})
 }
 
@@ -473,34 +421,18 @@ func acquireRawSlotFromPool(ctx context.Context, pool *baseSlotPool, expectedSiz
 // bindSlotToOutFile links an overlaid golden slot to outFile and constructs the goldenSlotLease managing its lifecycle.
 func bindSlotToOutFile(
 	ctx context.Context, pool *baseSlotPool, slot *goldenSlot, fromIdle bool,
-	dirtyRanges []ch.SparseExtent, deltaFile, outFile string, diskFallback func() error,
+	dirtyRanges []ch.SparseExtent, outFile string, diskFallback func() error,
 ) (*goldenSlotLease, error) {
-	noopLease := &goldenSlotLease{commit: func(bool, bool) bool { return false }, abort: func() {}}
-	hasBackup := deltaFile != "" && deltaFile == outFile
-	deltaBackup := outFile + ".delta.bak"
-	if hasBackup {
-		_ = os.Remove(deltaBackup)
-		if err := os.Rename(outFile, deltaBackup); err != nil {
-			go pool.resetAndReturnSlot(slot, dirtyRanges)
-			return nil, fmt.Errorf("backup delta %q: %w", outFile, err)
-		}
-	} else {
-		_ = os.Remove(outFile)
-	}
+	noopLease := &goldenSlotLease{commit: func(bool, bool) {}, abort: func() {}}
+	_ = os.Remove(outFile)
 	symlinked, err := linkSlot(slot.path, outFile)
 	if err != nil {
-		if hasBackup {
-			_ = os.Rename(deltaBackup, outFile)
-		}
 		go pool.resetAndReturnSlot(slot, dirtyRanges)
 		return noopLease, diskFallback()
 	}
 
 	bg := context.WithoutCancel(ctx)
 	detach := func() {
-		if hasBackup {
-			_ = os.Remove(deltaBackup)
-		}
 		if symlinked && materializeSlot(bg, slot.path, outFile) != nil {
 			return
 		}
@@ -510,42 +442,22 @@ func bindSlotToOutFile(
 
 	claimed := new(atomic.Bool)
 	var once sync.Once
-	commitFn := func(eager, preserve bool) (keepDelta bool) {
+	commitFn := func(eager, preserve bool) {
 		once.Do(func() {
-			if claimed.Load() {
-				keepDelta = commitClaimedSlot(outFile, deltaBackup, hasBackup, preserve)
-				return
-			}
 			switch {
-			case eager && !preserve:
-				if hasBackup {
-					_ = os.Remove(deltaBackup)
-				}
+			case claimed.Load():
 				_ = os.Remove(outFile)
-				go pool.resetAndReturnSlot(slot, dirtyRanges)
-			case eager && pool.inTmpfs:
-				if hasBackup {
-					if os.Rename(deltaBackup, outFile) != nil {
-						detach()
-						return
-					}
-				} else {
-					_ = os.Remove(outFile)
-				}
-				keepDelta = true
+			case eager && (!preserve || pool.inTmpfs):
+				_ = os.Remove(outFile)
 				go pool.resetAndReturnSlot(slot, dirtyRanges)
 			default:
 				detach()
 			}
 		})
-		return keepDelta
 	}
 	abortFn := func() {
 		once.Do(func() {
 			_ = os.Remove(outFile)
-			if hasBackup {
-				_ = os.Rename(deltaBackup, outFile)
-			}
 			if !claimed.Load() {
 				go pool.resetAndReturnSlot(slot, dirtyRanges)
 			}
@@ -554,27 +466,12 @@ func bindSlotToOutFile(
 	return &goldenSlotLease{commit: commitFn, abort: abortFn, slot: slot, pool: pool, fromIdle: fromIdle, claimed: claimed}, nil
 }
 
-// commitClaimedSlot cleans up or restores the delta file in restoreDir after a slot has been claimed for zero-copy VM restore.
-func commitClaimedSlot(outFile, deltaBackup string, hasBackup, preserve bool) (keepDelta bool) {
-	if !preserve {
-		_ = os.Remove(deltaBackup)
-		_ = os.Remove(outFile)
-		return false
-	}
-	if !hasBackup {
-		_ = os.Remove(outFile)
-		return true
-	}
-	_ = os.Rename(deltaBackup, outFile)
-	return true
-}
-
 // zeroCopyRestore tracks the state of an active zero-copy file-backed guest RAM restore.
 type zeroCopyRestore struct {
-	restoreDir, slot, slotBase string
-	slotDev, slotIno           uint64
-	origMemory                 json.RawMessage
-	reverted                   bool
+	restoreDir, slot string
+	slotDev, slotIno uint64
+	origMemory       json.RawMessage
+	reverted         bool
 }
 
 // startZeroCopyRestore rewrites restoreDir to map lease's tmpfs slot directly as guest RAM and claims the slot for the VM.
@@ -615,7 +512,7 @@ func startZeroCopyRestore(ctx context.Context, actorUID, restoreDir string, leas
 	}
 	return &zeroCopyRestore{
 		restoreDir: restoreDir, slot: slot, slotDev: uint64(st.Dev), slotIno: st.Ino,
-		slotBase: lease.pool.baseFile, origMemory: orig,
+		origMemory: orig,
 	}, "", nil
 }
 
