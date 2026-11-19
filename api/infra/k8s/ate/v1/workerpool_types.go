@@ -19,6 +19,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// WorkerPoolDNSCorrelationAnnotation, set to "true" on a WorkerPool, answers
+// the DNS lookups of every actor placed on the pool with fake addresses, so
+// that the actor's connections are tunneled to the egress gateway by name. It
+// needs the DnsCorrelation preview gate and is ignored without it.
+const WorkerPoolDNSCorrelationAnnotation = "workerpool.ate.dev/dns-correlation"
+
 // WorkerPoolLabelValue is a Kubernetes label value for generated worker
 // workloads.
 //

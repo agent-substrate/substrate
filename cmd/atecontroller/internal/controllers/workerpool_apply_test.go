@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1172,6 +1173,34 @@ func TestBuildDeploymentPreview(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("--preview args mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestBuildDeploymentDNSCorrelation(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		gates      []string
+		annotation string
+		want       bool
+	}{
+		{name: "annotated with the gate", gates: []string{string(preview.GateDNSCorrelation)}, annotation: "true", want: true},
+		{name: "annotated without the gate", annotation: "true"},
+		{name: "not annotated", gates: []string{string(preview.GateDNSCorrelation)}},
+		{name: "annotated false", gates: []string{string(preview.GateDNSCorrelation)}, annotation: "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preview.InitForTest(t, tc.gates...)
+			wp := testWorkerPoolApplyConfig(nil)
+			if tc.annotation != "" {
+				wp.Annotations = map[string]string{atev1.WorkerPoolDNSCorrelationAnnotation: tc.annotation}
+			}
+			c := buildDeploymentApplyConfig(wp, workerOTelSettings{},
+				installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).
+				Spec.Template.Spec.Containers[0]
+			if got := slices.Contains(c.Args, "--dns-correlation"); got != tc.want {
+				t.Errorf("--dns-correlation passed to the worker = %v, want %v; args: %v", got, tc.want, c.Args)
 			}
 		})
 	}
