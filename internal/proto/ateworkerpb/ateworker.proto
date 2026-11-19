@@ -502,7 +502,9 @@ message CheckpointWorkloadResponse {
   repeated string snapshot_files = 1;
 
   // data_snapshot_files is the subset of snapshot_files that restores the
-  // actor at VOLUMES fidelity on its own. Empty when the capture holds no durable data.
+  // actor at VOLUMES fidelity on its own: its durable data, and its fake
+  // addresses if DNS correlation gave it any. Empty when the capture holds
+  // neither.
   repeated string data_snapshot_files = 2;
 }
 

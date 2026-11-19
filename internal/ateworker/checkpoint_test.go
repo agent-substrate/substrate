@@ -133,6 +133,79 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 	}
 }
 
+// A checkpoint that saved the actor's fake addresses is reusable only if the
+// file is listed as a data snapshot file too, which is how both workers list
+// it.
+func TestReuseCheckpointWithFakeAddresses(t *testing.T) {
+	const fakeAddresses = "dns-fake-addresses.json"
+	memory := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	volumes := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+
+	for _, tc := range []struct {
+		name      string
+		fidelity  ateworkerpb.SnapshotFidelity
+		files     []string
+		dataFiles []string
+		wantReuse bool
+	}{
+		{
+			name:      "MEMORY with durable data",
+			fidelity:  memory,
+			files:     []string{"checkpoint.img", fakeAddresses, "fs/fscheckpoint.pb"},
+			dataFiles: []string{"fs/fscheckpoint.pb", fakeAddresses},
+			wantReuse: true,
+		},
+		{
+			name:      "MEMORY without durable data",
+			fidelity:  memory,
+			files:     []string{"checkpoint.img", fakeAddresses},
+			dataFiles: []string{fakeAddresses},
+			wantReuse: true,
+		},
+		{
+			name:      "VOLUMES with durable data",
+			fidelity:  volumes,
+			files:     []string{fakeAddresses, "fs/fscheckpoint.pb"},
+			dataFiles: []string{"fs/fscheckpoint.pb", fakeAddresses},
+			wantReuse: true,
+		},
+		{
+			// A microVM actor whose only volumes are external ones.
+			name:      "VOLUMES without durable data",
+			fidelity:  volumes,
+			files:     []string{fakeAddresses},
+			dataFiles: []string{fakeAddresses},
+			wantReuse: true,
+		},
+		{
+			name:      "VOLUMES with the file left out of the data files",
+			fidelity:  volumes,
+			files:     []string{fakeAddresses, "fs/fscheckpoint.pb"},
+			dataFiles: []string{"fs/fscheckpoint.pb"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkpointDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(checkpointDir, "fs"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, rel := range tc.files {
+				if err := os.WriteFile(filepath.Join(checkpointDir, rel), []byte("data"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: tc.files, DataSnapshotFiles: tc.dataFiles}
+			if err := RecordCheckpoint(checkpointDir, testBootID, tc.fidelity, resp); err != nil {
+				t.Fatalf("RecordCheckpoint: %v", err)
+			}
+			got := ReuseCheckpoint(checkpointDir, testBootID, tc.fidelity)
+			if (got != nil) != tc.wantReuse {
+				t.Fatalf("ReuseCheckpoint() = %v, want reuse = %v", got, tc.wantReuse)
+			}
+		})
+	}
+}
+
 // TestCheckpointContext checks that a checkpoint outlives its canceled caller
 // but keeps the caller's deadline.
 func TestCheckpointContext(t *testing.T) {

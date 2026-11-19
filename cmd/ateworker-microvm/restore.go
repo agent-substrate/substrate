@@ -163,6 +163,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
+	// Loaded before the network serves, so an address the actor kept leads
+	// to the same name from its first connection.
+	p.fakeIPs = s.tunnel.LoadFakeIPs(ctx, attribution, restoreDir)
 
 	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
 		return nil, err
@@ -172,7 +175,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
 	resumesGuest := includesMemory(req.GetFidelity())
-	if _, err := s.hostActor(ctx, attribution, resumesGuest, p.size.MemoryBytes); err != nil {
+	if _, err := s.hostActor(ctx, attribution, resumesGuest, p.size.MemoryBytes, p.fakeIPs); err != nil {
 		return nil, err
 	}
 	defer func() {

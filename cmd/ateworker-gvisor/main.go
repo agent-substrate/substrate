@@ -689,7 +689,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes, s.tunnel.NewFakeIPs())
 	if err != nil {
 		return nil, err
 	}
@@ -984,6 +984,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		return nil, err
 	}
 
+	// Saved now that the sandbox is gone, so the table holds every address the
+	// actor was given.
+	var fakeIPsFile string
+	if hosted != nil {
+		fakeIPsFile = atunnel.SaveFakeIPs(ctx, attribution, hosted.fakeIPs, checkpointPath)
+	}
+
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img and its page files, plus the fs/ and rootfs/ bundle files),
 	// rather than a hardcoded list.
@@ -1002,6 +1009,10 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.WarnContext(ctx, "Failed to start checkpoint writeback", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 	durableFiles := durableSnapshotFiles(snapshotFiles)
+	if fakeIPsFile != "" {
+		// Restored at every fidelity: the durable data can hold the addresses.
+		durableFiles = append(durableFiles, fakeIPsFile)
+	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
@@ -1176,7 +1187,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
+	// Loaded before the network serves, so an address the actor kept leads
+	// to the same name from its first connection.
+	fakeIPs := s.tunnel.LoadFakeIPs(ctx, attribution, req.GetActorDirs().GetRestoreDir())
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes, fakeIPs)
 	timing.netSetup = lap(&tLast)
 	if err != nil {
 		return nil, err
