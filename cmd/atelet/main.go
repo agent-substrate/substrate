@@ -302,6 +302,10 @@ func main() {
 		}
 		defer c.Close()
 		imageProvider = c
+		if !preview.IsEnabled(preview.GateImageProviderPlugin) {
+			slog.InfoContext(ctx, "The ImageProviderPlugin preview gate is off; atelet takes no new image provider leases",
+				slog.String("socket", *imageProviderSocket))
+		}
 	}
 
 	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())

@@ -32,6 +32,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
@@ -85,6 +86,8 @@ func TestImageSourceEnsure(t *testing.T) {
 		name string
 		// noProvider leaves imageSource.provider nil.
 		noProvider bool
+		// gateOff leaves the ImageProviderPlugin preview gate off.
+		gateOff bool
 		// cached pulls ref into the cache first.
 		cached     bool
 		canProvide func(context.Context, *providerclient.PrepareRequest) (bool, error)
@@ -98,6 +101,10 @@ func TestImageSourceEnsure(t *testing.T) {
 	}{{
 		name:       "no provider",
 		noProvider: true,
+	}, {
+		name:    "gate off",
+		gateOff: true,
+		result:  streamedResult,
 	}, {
 		name:         "provider serves the image",
 		result:       streamedResult,
@@ -146,6 +153,11 @@ func TestImageSourceEnsure(t *testing.T) {
 		wantReleases: 1,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.gateOff {
+				preview.InitForTest(t)
+			} else {
+				preview.InitForTest(t, string(preview.GateImageProviderPlugin))
+			}
 			ctx := t.Context()
 			inst, reader := newTestInstruments(t)
 			images := imageSource{cache: newImageVolumeStore(t), keychain: keychain, instruments: inst}
@@ -220,6 +232,7 @@ func TestImageSourceEnsure(t *testing.T) {
 // prepareOCIDirectory records the provider's leases in the overlay spec, and
 // returns them when it fails.
 func TestPrepareOCIDirectoryProviderLeases(t *testing.T) {
+	preview.InitForTest(t, string(preview.GateImageProviderPlugin))
 	useTempNodeDirs(t)
 	host := imageVolumeTestRegistry(t)
 	ref := pushTestImage(t, host+"/app:v1", singleFileLayer(t, "app-bin", "hello"))
