@@ -109,7 +109,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 
 	// Volume creation is completed asynchronously after the actor is recorded.
 	var initVols []*ateapi.ExternalVolumeStatus
-	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
+	if iv, err := initialExternalVolumes(ctx, s, template); err != nil {
 		return nil, err
 	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
 		initVols = iv

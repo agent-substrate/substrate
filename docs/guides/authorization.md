@@ -129,6 +129,8 @@ one **atespace**.
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
 | Workers: get, list, list assignments | ✅ | ✅ | | | |
 | Workers: create, update, delete, drain | ✅ | | | | |
+| External volume classes: get, list, get access policies | ✅ | ✅ | get only (allowed) | get only (allowed) | |
+| External volume classes: create, delete, manage access policies | ✅ | | | | |
 
 ### System roles
 
@@ -177,7 +179,7 @@ viewer, and a global role holds the same role in every atespace. So
 
 | RPC | Permission, on | Allowed for |
 |---|---|---|
-| `CreateActorTemplate` | `can_create_actor_template`, `metadata.atespace` | Atespace editor |
+| `CreateActorTemplate` | 1. `can_create_actor_template`, `metadata.atespace`<br>2. `can_reference`, each `volumes[].external.template.external_volume_class` (subject: `atespace:<metadata.atespace>`) | 1. Atespace editor<br>2. The template's atespace must be listed under `allowed_atespace` in the class's access policy. Global owners do not bypass this check. |
 | `GetActorTemplate` | `can_get`, the template | Viewer of its atespace |
 | `DeleteActorTemplate` | `can_delete`, the template | Editor of its atespace |
 | `ListActorTemplates` | `can_list_actor_templates`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
@@ -216,6 +218,21 @@ Workers have no atespace; their permissions come from the global scope.
 | `DrainWorker` | `can_drain`, the worker | Global owner; `ate-controller` |
 | `ListWorkerActorAssignments` | `can_list_actor_assignments`, the worker | Global viewer |
 
+### External volume classes
+
+External volume classes have no atespace; their permissions come from the
+global scope, and editors of atespaces granted `allowed_atespace` by a class's
+access policy may read that class.
+
+| RPC | Permission, on | Allowed for |
+|---|---|---|
+| `CreateExternalVolumeClass` | `can_create_external_volume_class`, global | Global owner |
+| `ListExternalVolumeClasses` | `can_list_external_volume_classes`, global | Global viewer |
+| `GetExternalVolumeClass` | `can_get`, the class | Global viewer; editor of an allowed atespace |
+| `DeleteExternalVolumeClass` | `can_delete`, the class | Global owner |
+| `GetExternalVolumeClassAccessPolicy` | `can_get_access_policy`, the class | Global viewer |
+| `CreateExternalVolumeClassAccessPolicy`, `UpdateExternalVolumeClassAccessPolicy`, `DeleteExternalVolumeClassAccessPolicy` | `can_create_access_policy` / `can_update_access_policy` / `can_delete_access_policy`, the class | Global owner |
+
 ### WorkerService
 
 The interceptor skips these; each handler requires `atelet`'s pod
@@ -246,7 +263,7 @@ certificate.
 ## Managing access
 
 Each scope has one access policy, named `default`, managed with `kubectl ate`
-using `--global` or `-a <atespace>`:
+using `--global`, `-a <atespace>`, or `-c <external-volume-class>`:
 
 ```yaml
 # policy.yaml
@@ -266,17 +283,25 @@ kubectl ate --token-file me.token create access-policy -a team-a -f policy.yaml
 kubectl ate --token-file me.token get access-policy -a team-a -o yaml > current.yaml
 kubectl ate --token-file me.token update access-policy -a team-a -f current.yaml
 kubectl ate --token-file me.token delete access-policy -a team-a
+
+# Grant or revoke an atespace on an external volume class in place:
+kubectl ate --preview --token-file me.token update access-policy -c csi-nfs --add-member atespace:team-a
+kubectl ate --preview --token-file me.token update access-policy -c csi-nfs --remove-member atespace:team-a
 ```
 
 - Global policies accept `owner` and `viewer`; atespace policies also accept
-  `editor`.
-- `update` replaces the whole policy and needs the `uid` and `version` from
+  `editor`; external volume class policies accept `allowed_atespace` with
+  `atespace:<name>` members.
+- `update -f` replaces the whole policy and needs the `uid` and `version` from
   `get -o yaml`. It fails if the policy changed, or was deleted and recreated,
-  since.
+  since. `update --add-member` and `update --remove-member` read the stored
+  policy (or create one if adding members when none exists) and retry on
+  version conflicts.
 - The global policy can't be deleted; update it with no bindings instead.
-- Deleting an atespace deletes its policy, so a recreated atespace starts
-  with none. A request authorized against the old atespace and still in
-  flight across the delete and recreate can apply to the new one. See
+- Deleting an atespace deletes its policy and scrubs that atespace from every
+  external volume class access policy, so a recreated atespace starts with no
+  grants. A request authorized against the old atespace and still in flight
+  across the delete and recreate can apply to the new one. See
   [Known limitations](#known-limitations).
 - Changes take effect on the next call.
 
@@ -313,13 +338,23 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 ## Known limitations
 
-- **Atespace names must not be reused.** Grants are keyed by atespace name,
-  and calls are authorized before the write runs. If an atespace is deleted
-  and recreated under the same name, a request authorized against the old
-  atespace and still in flight across the delete and recreate can land on
+- **Atespace names must not be reused.** Grants are keyed by atespace name
+  (both on the atespace itself and in external volume class `allowed_atespace`
+  bindings), and calls are authorized before the write runs. If an atespace is
+  deleted and recreated under the same name, a request authorized against the
+  old atespace and still in flight across the delete and recreate can land on
   the new one, including granting access to it or deleting it. Nothing
   enforces unique names. Once an atespace is deleted, don't create another
   one under that name; use a fresh name instead.
+- **Allowed-atespace editors can `Get` an external volume class, not `List`.**
+  `ListExternalVolumeClasses` requires global `viewer`; an editor of an
+  atespace granted `allowed_atespace` on a class can inspect that class by
+  name with `GetExternalVolumeClass`.
+- **External volume class revocation is not retroactive.** `can_reference` is
+  checked only on `CreateActorTemplate`. Revoking an `allowed_atespace` grant
+  does not stop actors created from existing templates, and cloning a tag
+  across atespaces (`CreateActor` with `sourceTag`) does not re-check the
+  original template's class grant.
 - **Tags can copy an actor's data.** A tag is a durable copy of an actor's
   memory and disk, including secrets, and outlives the actor. Any atespace
   editor can tag, publish and clone any actor in the atespace.

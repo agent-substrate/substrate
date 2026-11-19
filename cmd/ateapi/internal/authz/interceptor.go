@@ -50,8 +50,14 @@ func UnaryServerInterceptor(authorizer *Authorizer) grpc.UnaryServerInterceptor 
 			return nil, err
 		}
 		for _, c := range checks {
-			if err := authorizer.Check(ctx, c.relation, c.object); err != nil {
-				return nil, err
+			var checkErr error
+			if c.subject != "" {
+				checkErr = authorizer.CheckSubject(ctx, c.subject, c.relation, c.object)
+			} else {
+				checkErr = authorizer.Check(ctx, c.relation, c.object)
+			}
+			if checkErr != nil {
+				return nil, checkErr
 			}
 		}
 

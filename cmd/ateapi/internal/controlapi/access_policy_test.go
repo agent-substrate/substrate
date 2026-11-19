@@ -19,14 +19,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
@@ -48,7 +51,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, "", nil, nil, "", nil, "")
+	svc := NewRPCService(persistence, nil, nil, nil, nil, "", nil, nil, "", nil, "")
 	interceptor := authz.UnaryServerInterceptor(authorizer)
 
 	userCtx := func(id string) context.Context {
@@ -343,5 +346,320 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		return svc.UpdateAtespaceAccessPolicy(c, r.(*ateapi.UpdateAtespaceAccessPolicyRequest))
 	}); apierror.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "UID conflict") {
 		t.Fatalf("expected Aborted UID conflict for UpdateAtespaceAccessPolicy with old UID, got %v", err)
+	}
+}
+
+func TestAccessPolicy_ExternalVolumeClassGovernance(t *testing.T) {
+	preview.InitForTest(t, string(preview.GateExternalVolumes))
+	persistence := storetest.SetupPostgresPersistence(t)
+	ctx := context.Background()
+
+	pool := persistence.Pool()
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"}, storetest.DefaultSystemPrincipals())
+	if err != nil {
+		t.Fatalf("authz.New failed: %v", err)
+	}
+	persistence.SetPolicyManager(policyManager)
+
+	svc := NewRPCService(persistence, nil, nil, nil, nil, "", nil, nil, "", nil, "")
+	interceptor := authz.UnaryServerInterceptor(authorizer)
+
+	userCtx := func(id string) context.Context {
+		return principal.InjectContext(ctx, principal.PrincipalInfo{ID: id, Kind: principal.KindJWT})
+	}
+	aliceCtx := userCtx("alice@example.com")
+	bobCtx := userCtx("bob@example.com")
+	charlieCtx := userCtx("charlie@example.com")
+	daveCtx := userCtx("dave@example.com")
+
+	invoke := func(c context.Context, method string, req any, handler func(context.Context, any) (any, error)) (any, error) {
+		return interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: method}, handler)
+	}
+	getClass := func(c context.Context, name string) error {
+		_, err := invoke(c, ateapi.Control_GetExternalVolumeClass_FullMethodName, &ateapi.GetExternalVolumeClassRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: name},
+		}, func(c context.Context, r any) (any, error) {
+			return svc.GetExternalVolumeClass(c, r.(*ateapi.GetExternalVolumeClassRequest))
+		})
+		return err
+	}
+	getClassPol := func(c context.Context, name string) (*ateapi.AccessPolicy, error) {
+		got, err := invoke(c, ateapi.Control_GetExternalVolumeClassAccessPolicy_FullMethodName, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: name},
+			Name:                resources.SingletonName,
+		}, func(c context.Context, r any) (any, error) {
+			return svc.GetExternalVolumeClassAccessPolicy(c, r.(*ateapi.GetExternalVolumeClassAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapi.AccessPolicy), nil
+	}
+	createClassPol := func(c context.Context, req *ateapi.CreateExternalVolumeClassAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
+		got, err := invoke(c, ateapi.Control_CreateExternalVolumeClassAccessPolicy_FullMethodName, req, func(c context.Context, r any) (any, error) {
+			return svc.CreateExternalVolumeClassAccessPolicy(c, r.(*ateapi.CreateExternalVolumeClassAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapi.AccessPolicy), nil
+	}
+	updateClassPol := func(c context.Context, req *ateapi.UpdateExternalVolumeClassAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
+		got, err := invoke(c, ateapi.Control_UpdateExternalVolumeClassAccessPolicy_FullMethodName, req, func(c context.Context, r any) (any, error) {
+			return svc.UpdateExternalVolumeClassAccessPolicy(c, r.(*ateapi.UpdateExternalVolumeClassAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapi.AccessPolicy), nil
+	}
+	deleteClassPol := func(c context.Context, req *ateapi.DeleteExternalVolumeClassAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
+		got, err := invoke(c, ateapi.Control_DeleteExternalVolumeClassAccessPolicy_FullMethodName, req, func(c context.Context, r any) (any, error) {
+			return svc.DeleteExternalVolumeClassAccessPolicy(c, r.(*ateapi.DeleteExternalVolumeClassAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapi.AccessPolicy), nil
+	}
+
+	// Seed global viewer Dave, class nfs-gold, atespace team-alpha, and
+	// team-alpha's policy granting Charlie editor and Bob viewer.
+	if _, err := svc.CreateGlobalAccessPolicy(aliceCtx, &ateapi.CreateGlobalAccessPolicyRequest{
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: "default"},
+			Bindings: []*ateapi.Binding{
+				{Role: authz.RoleViewer, Members: []string{"user:dave@example.com"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateGlobalAccessPolicy failed: %v", err)
+	}
+	if _, err := svc.CreateExternalVolumeClass(aliceCtx, &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:   &ateapi.ResourceMetadata{Name: "nfs-gold"},
+			DriverName: "nfs.csi.k8s.io",
+		},
+	}); err != nil {
+		t.Fatalf("CreateExternalVolumeClass(nfs-gold) failed: %v", err)
+	}
+	if _, err := svc.CreateAtespace(aliceCtx, &ateapi.CreateAtespaceRequest{
+		Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "team-alpha"}},
+	}); err != nil {
+		t.Fatalf("CreateAtespace(team-alpha) failed: %v", err)
+	}
+	if _, err := svc.CreateAtespaceAccessPolicy(aliceCtx, &ateapi.CreateAtespaceAccessPolicyRequest{
+		Atespace: &ateapi.ObjectRef{Name: "team-alpha"},
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: "default"},
+			Bindings: []*ateapi.Binding{
+				{Role: authz.RoleEditor, Members: []string{"user:charlie@example.com"}},
+				{Role: authz.RoleViewer, Members: []string{"user:bob@example.com"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateAtespaceAccessPolicy(team-alpha) failed: %v", err)
+	}
+
+	// 1. Before grant: Charlie (team-alpha editor) cannot Get nfs-gold or manage its policy.
+	if err := getClass(charlieCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied GetExternalVolumeClass before grant, got %v", err)
+	}
+	if _, err := getClassPol(aliceCtx, "nfs-gold"); apierror.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound before CreateExternalVolumeClassAccessPolicy, got %v", err)
+	}
+
+	ref := &ateapi.ObjectRef{Name: "nfs-gold"}
+	grantReq := &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: "default"},
+			Bindings: []*ateapi.Binding{
+				{Role: authz.RoleAllowedAtespace, Members: []string{"atespace:team-alpha"}},
+			},
+		},
+	}
+	if _, err := createClassPol(charlieCtx, grantReq); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied CreateExternalVolumeClassAccessPolicy, got %v", err)
+	}
+	if _, err := createClassPol(daveCtx, grantReq); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Dave (global viewer) denied CreateExternalVolumeClassAccessPolicy, got %v", err)
+	}
+
+	// 2. Grant team-alpha access to nfs-gold: global viewer Dave can read the
+	// class policy (but not mutate it), Charlie (editor) gains can_get on
+	// nfs-gold, while Bob (viewer) stays denied and Charlie still cannot read or
+	// mutate nfs-gold's access policy.
+	created, err := createClassPol(aliceCtx, grantReq)
+	if err != nil {
+		t.Fatalf("CreateExternalVolumeClassAccessPolicy failed: %v", err)
+	}
+	gotByViewer, err := getClassPol(daveCtx, "nfs-gold")
+	if err != nil {
+		t.Fatalf("expected Dave (global viewer) allowed GetExternalVolumeClassAccessPolicy, got %v", err)
+	}
+	if diff := cmp.Diff(created, gotByViewer, protocmp.Transform()); diff != "" {
+		t.Fatalf("GetExternalVolumeClassAccessPolicy mismatch (-created +got):\n%s", diff)
+	}
+	if _, err := updateClassPol(daveCtx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        created,
+	}); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Dave (global viewer) denied UpdateExternalVolumeClassAccessPolicy, got %v", err)
+	}
+	if _, err := deleteClassPol(daveCtx, &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	}); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Dave (global viewer) denied DeleteExternalVolumeClassAccessPolicy, got %v", err)
+	}
+	if err := getClass(charlieCtx, "nfs-gold"); err != nil {
+		t.Fatalf("expected Charlie (allowed-atespace editor) allowed GetExternalVolumeClass, got %v", err)
+	}
+	if err := getClass(bobCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Bob (allowed-atespace viewer) denied GetExternalVolumeClass, got %v", err)
+	}
+	if _, err := getClassPol(charlieCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied GetExternalVolumeClassAccessPolicy, got %v", err)
+	}
+	if _, err := updateClassPol(charlieCtx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        created,
+	}); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied UpdateExternalVolumeClassAccessPolicy, got %v", err)
+	}
+	if _, err := deleteClassPol(charlieCtx, &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	}); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied DeleteExternalVolumeClassAccessPolicy, got %v", err)
+	}
+
+	// 3. Revoke via Update (empty bindings) -> Charlie loses GetExternalVolumeClass.
+	revoked, err := updateClassPol(aliceCtx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        &ateapi.AccessPolicy{Metadata: created.GetMetadata()},
+	})
+	if err != nil || revoked.GetMetadata().GetVersion() != 2 {
+		t.Fatalf("UpdateExternalVolumeClassAccessPolicy revoke = %v, %v; want version 2", revoked, err)
+	}
+	if err := getClass(charlieCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied GetExternalVolumeClass after revoke, got %v", err)
+	}
+
+	// 4. Re-grant via Update, then revoke via DeleteExternalVolumeClassAccessPolicy.
+	if _, err := updateClassPol(aliceCtx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: revoked.GetMetadata(),
+			Bindings: grantReq.GetAccessPolicy().GetBindings(),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateExternalVolumeClassAccessPolicy re-grant failed: %v", err)
+	}
+	if err := getClass(charlieCtx, "nfs-gold"); err != nil {
+		t.Fatalf("expected Charlie allowed GetExternalVolumeClass after re-grant, got %v", err)
+	}
+	if _, err := deleteClassPol(aliceCtx, &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	}); err != nil {
+		t.Fatalf("DeleteExternalVolumeClassAccessPolicy failed: %v", err)
+	}
+	if err := getClass(charlieCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied GetExternalVolumeClass after policy delete, got %v", err)
+	}
+
+	// 5. CreateActorTemplate enforces can_reference for every ExternalVolumeClass
+	// referenced by the template. Even global owner Alice cannot bypass it
+	// because can_reference is checked with subject atespace:<name>.
+	if _, err := invoke(aliceCtx, ateapi.Control_CreateExternalVolumeClass_FullMethodName, &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:   &ateapi.ResourceMetadata{Name: "ssd-fast"},
+			DriverName: "pd.csi.storage.gke.io",
+		},
+	}, func(c context.Context, r any) (any, error) {
+		return svc.CreateExternalVolumeClass(c, r.(*ateapi.CreateExternalVolumeClassRequest))
+	}); err != nil {
+		t.Fatalf("CreateExternalVolumeClass(ssd-fast) failed: %v", err)
+	}
+	checkCreateTemplate := func(ctx context.Context, classes ...string) error {
+		vols := make([]*ateapi.Volume, 0, len(classes))
+		for _, c := range classes {
+			vols = append(vols, &ateapi.Volume{
+				Name: "vol-" + c,
+				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+					CapacityBytes:       1 << 30,
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: c},
+				}},
+			})
+		}
+		req := &ateapi.CreateActorTemplateRequest{
+			ActorTemplate: &ateapi.ActorTemplate{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-alpha", Name: "tmpl"},
+				Volumes:  vols,
+			},
+		}
+		_, err := invoke(ctx, ateapi.Control_CreateActorTemplate_FullMethodName, req, func(context.Context, any) (any, error) {
+			return &ateapi.ActorTemplate{}, nil
+		})
+		return err
+	}
+
+	// Zero external volume classes: allowed for editor Charlie and owner Alice.
+	if err := checkCreateTemplate(charlieCtx); err != nil {
+		t.Fatalf("expected Charlie allowed CreateActorTemplate without external volume classes, got %v", err)
+	}
+	// Ungranted class: denied for both editor Charlie and bootstrap global owner Alice.
+	if err := checkCreateTemplate(charlieCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied CreateActorTemplate on ungranted class, got %v", err)
+	}
+	if err := checkCreateTemplate(aliceCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected bootstrap owner Alice denied CreateActorTemplate on ungranted class, got %v", err)
+	}
+	// Grant team-alpha on nfs-gold: 1-class template succeeds, 2-class template still denied.
+	if _, err := createClassPol(aliceCtx, grantReq); err != nil {
+		t.Fatalf("CreateExternalVolumeClassAccessPolicy(nfs-gold) failed: %v", err)
+	}
+	if err := checkCreateTemplate(charlieCtx, "nfs-gold"); err != nil {
+		t.Fatalf("expected Charlie allowed CreateActorTemplate on granted class, got %v", err)
+	}
+	if err := checkCreateTemplate(aliceCtx, "nfs-gold"); err != nil {
+		t.Fatalf("expected Alice allowed CreateActorTemplate on granted class, got %v", err)
+	}
+	if err := checkCreateTemplate(charlieCtx, "nfs-gold", "ssd-fast"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied CreateActorTemplate when second class is ungranted, got %v", err)
+	}
+	// Grant team-alpha on ssd-fast too: 2-class template succeeds.
+	if _, err := createClassPol(aliceCtx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: "ssd-fast"},
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: resources.SingletonName},
+			Bindings: []*ateapi.Binding{{
+				Role:    authz.RoleAllowedAtespace,
+				Members: []string{"atespace:team-alpha"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("CreateExternalVolumeClassAccessPolicy(ssd-fast) failed: %v", err)
+	}
+	if err := checkCreateTemplate(charlieCtx, "nfs-gold", "ssd-fast"); err != nil {
+		t.Fatalf("expected Charlie allowed CreateActorTemplate when both classes are granted, got %v", err)
+	}
+	// Delete nfs-gold policy: 1-class template is denied again.
+	if _, err := deleteClassPol(aliceCtx, &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	}); err != nil {
+		t.Fatalf("DeleteExternalVolumeClassAccessPolicy(nfs-gold) failed: %v", err)
+	}
+	if err := checkCreateTemplate(charlieCtx, "nfs-gold"); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Charlie denied CreateActorTemplate after policy delete, got %v", err)
 	}
 }

@@ -422,3 +422,345 @@ func TestValidateDeleteAtespaceAccessPolicyRequest(t *testing.T) {
 		})
 	}
 }
+
+func validExternalVolumeClassAccessPolicy(mutate ...func(*ateapi.AccessPolicy)) *ateapi.AccessPolicy {
+	p := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{
+			{Role: authz.RoleAllowedAtespace, Members: []string{"atespace:team-a", "atespace:team-b"}},
+		},
+	}
+	for _, m := range mutate {
+		m(p)
+	}
+	return p
+}
+
+func TestValidateCreateExternalVolumeClassAccessPolicyRequest(t *testing.T) {
+	evcPath := field.NewPath("external_volume_class")
+	classRef := &ateapi.ObjectRef{Name: "nfs-gold"}
+	tests := []struct {
+		name            string
+		req             *ateapi.CreateExternalVolumeClassAccessPolicyRequest
+		want            field.ErrorList
+		wantWithPreview field.ErrorList
+	}{{
+		name: "valid",
+		req:  &ateapi.CreateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: classRef, AccessPolicy: validExternalVolumeClassAccessPolicy()},
+		want: field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+	}, {
+		name: "valid without bindings",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings = nil }),
+		},
+		want: field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+	}, {
+		name:            "missing external_volume_class",
+		req:             &ateapi.CreateExternalVolumeClassAccessPolicyRequest{AccessPolicy: validExternalVolumeClassAccessPolicy()},
+		want:            field.ErrorList{field.Required(evcPath, ""), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Required(evcPath, "")},
+	}, {
+		name: "external_volume_class atespace forbidden",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Atespace: "team-a", Name: "nfs-gold"},
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(),
+		},
+		want:            field.ErrorList{field.Forbidden(evcPath.Child("atespace"), ""), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Forbidden(evcPath.Child("atespace"), "")},
+	}, {
+		name: "missing external_volume_class name",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{},
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(),
+		},
+		want:            field.ErrorList{field.Required(evcPath.Child("name"), ""), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Required(evcPath.Child("name"), "")},
+	}, {
+		name: "invalid external_volume_class name",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "Bad_Name"},
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(),
+		},
+		want:            field.ErrorList{field.Invalid(evcPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name"), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(evcPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:            "missing access_policy",
+		req:             &ateapi.CreateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: classRef},
+		want:            field.ErrorList{field.Required(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Required(accessPolicyPath, "")},
+	}, {
+		name: "metadata atespace set",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Metadata.Atespace = "team-a" }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Forbidden(accessPolicyPath.Child("metadata", "atespace"), "")},
+	}, {
+		name: "name not default",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Metadata.Name = "other" }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("custom=default")},
+	}, {
+		name: "owner role rejected",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Role = authz.RoleOwner }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}, {
+		name: "duplicate allowed_atespace role",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy: validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) {
+				p.Bindings = append(p.Bindings, &ateapi.Binding{Role: authz.RoleAllowedAtespace, Members: []string{"atespace:team-c"}})
+			}),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Duplicate(policyBindings.Index(1).Child("role"), nil)},
+	}, {
+		name: "user member rejected",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Members = []string{"user:alice@example.com"} }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}, {
+		name: "member without atespace prefix",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Members = []string{"team-a"} }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}, {
+		name: "wildcard member rejected",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Members = []string{"atespace:*"} }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}, {
+		name: "userset member rejected",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Members = []string{"atespace:team-a#editor"} }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}, {
+		name: "invalid DNS-1123 atespace name rejected",
+		req: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Members = []string{"atespace:Team-A"} }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidate(t, func() field.ErrorList {
+				return ValidateCreateExternalVolumeClassAccessPolicyRequest(context.Background(), tt.req)
+			}, tt.want, map[string]field.ErrorList{"ExternalVolumes": tt.wantWithPreview})
+		})
+	}
+}
+
+func TestValidateGetExternalVolumeClassAccessPolicyRequest(t *testing.T) {
+	ctx := context.Background()
+	evcPath := field.NewPath("external_volume_class")
+	tests := []struct {
+		name      string
+		req       *ateapi.GetExternalVolumeClassAccessPolicyRequest
+		wantError field.ErrorList
+	}{{
+		name: "valid",
+		req:  &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}, Name: resources.SingletonName},
+	}, {
+		name:      "missing external_volume_class",
+		req:       &ateapi.GetExternalVolumeClassAccessPolicyRequest{Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Required(evcPath, "")},
+	}, {
+		name:      "external_volume_class atespace forbidden",
+		req:       &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Atespace: "team-a", Name: "nfs-gold"}, Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Forbidden(evcPath.Child("atespace"), "")},
+	}, {
+		name:      "missing external_volume_class name",
+		req:       &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{}, Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Required(evcPath.Child("name"), "")},
+	}, {
+		name:      "invalid external_volume_class name",
+		req:       &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "Bad_Name"}, Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Invalid(evcPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:      "missing name",
+		req:       &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}, Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateGetExternalVolumeClassAccessPolicyRequest(ctx, tt.req), tt.wantError)
+		})
+	}
+}
+
+func TestValidateUpdateExternalVolumeClassAccessPolicyRequest(t *testing.T) {
+	evcPath := field.NewPath("external_volume_class")
+	classRef := &ateapi.ObjectRef{Name: "nfs-gold"}
+	tests := []struct {
+		name            string
+		req             *ateapi.UpdateExternalVolumeClassAccessPolicyRequest
+		want            field.ErrorList
+		wantWithPreview field.ErrorList
+	}{{
+		name: "valid",
+		req:  &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: classRef, AccessPolicy: validExternalVolumeClassAccessPolicy()},
+		want: field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+	}, {
+		name:            "missing external_volume_class",
+		req:             &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{AccessPolicy: validExternalVolumeClassAccessPolicy()},
+		want:            field.ErrorList{field.Required(evcPath, ""), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Required(evcPath, "")},
+	}, {
+		name: "external_volume_class atespace forbidden",
+		req: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Atespace: "team-a", Name: "nfs-gold"},
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(),
+		},
+		want:            field.ErrorList{field.Forbidden(evcPath.Child("atespace"), ""), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Forbidden(evcPath.Child("atespace"), "")},
+	}, {
+		name: "missing external_volume_class name",
+		req: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{},
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(),
+		},
+		want:            field.ErrorList{field.Required(evcPath.Child("name"), ""), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Required(evcPath.Child("name"), "")},
+	}, {
+		name: "invalid external_volume_class name",
+		req: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "Bad_Name"},
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(),
+		},
+		want:            field.ErrorList{field.Invalid(evcPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name"), field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(evcPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:            "missing access_policy",
+		req:             &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: classRef},
+		want:            field.ErrorList{field.Required(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Required(accessPolicyPath, "")},
+	}, {
+		name: "viewer role rejected",
+		req: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Role = authz.RoleViewer }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}, {
+		name: "user member rejected",
+		req: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy:        validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings[0].Members = []string{"user:bob"} }),
+		},
+		want:            field.ErrorList{field.Forbidden(accessPolicyPath, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidate(t, func() field.ErrorList {
+				return ValidateUpdateExternalVolumeClassAccessPolicyRequest(context.Background(), tt.req)
+			}, tt.want, map[string]field.ErrorList{"ExternalVolumes": tt.wantWithPreview})
+		})
+	}
+}
+
+func TestValidateExternalVolumeClassAccessPolicyUpdate(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		newVal    *ateapi.AccessPolicy
+		wantError field.ErrorList
+	}{{
+		name:   "valid",
+		newVal: validExternalVolumeClassAccessPolicy(),
+	}, {
+		name: "owner role rejected",
+		newVal: validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) {
+			p.Bindings[0].Role = authz.RoleOwner
+		}),
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}, {
+		name: "invalid atespace member",
+		newVal: validExternalVolumeClassAccessPolicy(func(p *ateapi.AccessPolicy) {
+			p.Bindings[0].Members = []string{"atespace:Bad_Name"}
+		}),
+		wantError: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateExternalVolumeClassAccessPolicyUpdate(ctx, accessPolicyPath, tt.newVal, validExternalVolumeClassAccessPolicy()), tt.wantError)
+		})
+	}
+}
+
+func TestValidateDeleteExternalVolumeClassAccessPolicyRequest(t *testing.T) {
+	ctx := context.Background()
+	evcPath := field.NewPath("external_volume_class")
+	tests := []struct {
+		name      string
+		req       *ateapi.DeleteExternalVolumeClassAccessPolicyRequest
+		wantError field.ErrorList
+	}{{
+		name: "valid",
+		req:  &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}, Name: resources.SingletonName},
+	}, {
+		name: "valid with delete options",
+		req:  &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Version: 2}},
+	}, {
+		name:      "missing external_volume_class",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Required(evcPath, "")},
+	}, {
+		name:      "external_volume_class atespace forbidden",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Atespace: "team-a", Name: "nfs-gold"}, Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Forbidden(evcPath.Child("atespace"), "")},
+	}, {
+		name:      "missing external_volume_class name",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{}, Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Required(evcPath.Child("name"), "")},
+	}, {
+		name:      "invalid external_volume_class name",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "Bad_Name"}, Name: resources.SingletonName},
+		wantError: field.ErrorList{field.Invalid(evcPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:      "missing name",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}, Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
+	}, {
+		name:      "invalid delete options",
+		req:       &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Version: -1}},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("options", "version"), int64(-1), "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateDeleteExternalVolumeClassAccessPolicyRequest(ctx, tt.req), tt.wantError)
+		})
+	}
+}

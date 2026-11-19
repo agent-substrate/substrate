@@ -15,12 +15,30 @@
 package authz
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"go.ate.dev/substrate/internal/apierror"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 )
+
+func TestCheckSubjectGuards(t *testing.T) {
+	const subject, relation, object = "atespace:team-a", "can_reference", "external_volume_class:nfs-gold"
+
+	var nilAuthorizer *Authorizer
+	if err := nilAuthorizer.CheckSubject(WithBypass(context.Background()), subject, relation, object); err != nil {
+		t.Errorf("CheckSubject with a bypassed context = %v, want nil", err)
+	}
+	for name, a := range map[string]*Authorizer{"nil": nil, "no OpenFGA server": {}} {
+		err := a.CheckSubject(context.Background(), subject, relation, object)
+		if got := apierror.Code(err); got != codes.Internal {
+			t.Errorf("CheckSubject on a %s Authorizer = %v, want code %v", name, err, codes.Internal)
+		}
+	}
+}
 
 func TestContextualTuples(t *testing.T) {
 	parentGlobal := func(atespace string) *openfgav1.TupleKey {
@@ -49,6 +67,11 @@ func TestContextualTuples(t *testing.T) {
 			name:   "worker",
 			object: WorkerObject("w-1"),
 			want:   []*openfgav1.TupleKey{parentGlobal("worker:w-1")},
+		},
+		{
+			name:   "external volume class",
+			object: ExternalVolumeClassObject("nfs-gold"),
+			want:   []*openfgav1.TupleKey{parentGlobal("external_volume_class:nfs-gold")},
 		},
 		{
 			name:   "actor",

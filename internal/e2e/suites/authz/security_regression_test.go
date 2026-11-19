@@ -16,15 +16,20 @@ package authz
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -41,6 +46,7 @@ func testSecurityRegression(t *testing.T, ctx context.Context, f *fixture) {
 	t.Run("recreated atespace drops old grants", func(t *testing.T) { testAtespaceRecreated(t, ctx, f) })
 	t.Run("recreated AccessPolicy rejects stale updates", func(t *testing.T) { testAccessPolicyRecreated(t, ctx, f) })
 	t.Run("WorkerService accepts only atelet", func(t *testing.T) { testWorkerServiceRequiresAtelet(t, ctx, f) })
+	t.Run("external volume class governance is enforced", func(t *testing.T) { testExternalVolumeClassGovernance(t, ctx, f) })
 }
 
 // testEnforcedByDefault checks that a default install enforces
@@ -334,5 +340,148 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 		{"MintWorkerActorJwt", ateletToken, mintWorkerJWT, rejected},
 		{"ReportActorSnapshotState", f.bootstrap, reportSnapshotState, rejected},
 		{"ReportActorSnapshotState", ateletToken, reportSnapshotState, rejected},
+	})
+}
+
+// testExternalVolumeClassGovernance checks that:
+//  1. A non-owner (atespace editor) cannot create/delete an ExternalVolumeClass
+//     or write its AccessPolicy.
+//  2. CreateActorTemplate referencing an ExternalVolumeClass is denied for an
+//     ungranted atespace, including for the bootstrap global owner, and
+//     succeeds once the atespace is granted allowed_atespace.
+//  3. Deleting and recreating the atespace scrubs its class grant so
+//     CreateActorTemplate is denied again.
+func testExternalVolumeClassGovernance(t *testing.T, ctx context.Context, f *fixture) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
+
+	// Leave room for the "-denied" suffix below within a 63-character name,
+	// and never end on "-".
+	className := "authz-evc-" + f.atespace
+	if len(className) > 56 {
+		className = className[:56]
+	}
+	className = strings.TrimRight(className, "-")
+	classRef := &ateapi.ObjectRef{Name: className}
+	targetAtespace := f.atespace + "-evc"
+	createAtespace(t, ctx, f.clients, targetAtespace)
+
+	editor := newPrincipal(t, ctx, f.clients, f.atespace, "evc-editor")
+	setAtespacePolicy(t, ctx, f.clients, targetAtespace, binding("editor", editor))
+
+	// Positive control: bootstrap owner creates the ExternalVolumeClass.
+	if _, err := f.clients.SubstrateAPI.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:   &ateapi.ResourceMetadata{Name: className},
+			DriverName: "nfs.csi.k8s.io",
+		},
+	}); err != nil {
+		t.Fatalf("CreateExternalVolumeClass(%q): %v", className, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if _, err := f.clients.SubstrateAPI.DeleteExternalVolumeClass(cleanupCtx, &ateapi.DeleteExternalVolumeClassRequest{
+			ExternalVolumeClass: classRef,
+		}); err != nil && status.Code(err) != codes.NotFound {
+			t.Logf("cleanup: DeleteExternalVolumeClass(%q): %v", className, err)
+		}
+	})
+
+	createClass := func(name string) rpc {
+		return func(ctx context.Context, api *ateclient.Client) error {
+			_, err := api.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{
+				ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+					Metadata:   &ateapi.ResourceMetadata{Name: name},
+					DriverName: "nfs.csi.k8s.io",
+				},
+			})
+			return err
+		}
+	}
+	deleteClass := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.DeleteExternalVolumeClass(ctx, &ateapi.DeleteExternalVolumeClassRequest{
+			ExternalVolumeClass: classRef,
+		})
+		return err
+	}
+	createClassPolicy := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: classRef,
+			AccessPolicy: &ateapi.AccessPolicy{
+				Metadata: &ateapi.ResourceMetadata{Name: resources.SingletonName},
+				Bindings: []*ateapi.Binding{{
+					Role:    "allowed_atespace",
+					Members: []string{"atespace:" + targetAtespace},
+				}},
+			},
+		})
+		return err
+	}
+
+	// 1. Atespace editor cannot create/delete classes or write class access policies.
+	expectAll(t, ctx, []call{
+		{"CreateExternalVolumeClass", editor, createClass(className + "-denied"), denied},
+		{"DeleteExternalVolumeClass", editor, deleteClass, denied},
+		{"CreateExternalVolumeClassAccessPolicy", editor, createClassPolicy, denied},
+	})
+
+	// Build a valid ActorTemplate referencing className by copying the fixture template.
+	srcTmpl, err := f.clients.SubstrateAPI.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{
+		ActorTemplate: f.template,
+	})
+	if err != nil {
+		t.Fatalf("GetActorTemplate(%v): %v", f.template, err)
+	}
+	createTemplateWithClass := func(tmplName string) rpc {
+		return func(ctx context.Context, api *ateclient.Client) error {
+			tmpl := &ateapi.ActorTemplate{
+				Metadata:       &ateapi.ResourceMetadata{Atespace: targetAtespace, Name: tmplName},
+				WorkerSelector: proto.CloneOf(srcTmpl.GetWorkerSelector()),
+				Containers:     srcTmpl.GetContainers(),
+				Resources:      proto.CloneOf(srcTmpl.GetResources()),
+				SnapshotConfig: &ateapi.SnapshotConfig{
+					StorageLocation:      e2e.SnapshotLocation(t, "authz-evc-"+tmplName),
+					GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+				},
+				Volumes: append(slices.Clone(srcTmpl.GetVolumes()), &ateapi.Volume{
+					Name: "ext-data",
+					External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+						CapacityBytes:       1 << 30,
+						ExternalVolumeClass: classRef,
+					}},
+				}),
+			}
+			_, err := api.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl})
+			return err
+		}
+	}
+
+	// 2. Ungranted atespace is rejected on CreateActorTemplate (even for bootstrap owner).
+	expectAll(t, ctx, []call{
+		{"CreateActorTemplate ungranted (editor)", editor, createTemplateWithClass("evc-denied-ed"), denied},
+		{"CreateActorTemplate ungranted (bootstrap)", f.bootstrap, createTemplateWithClass("evc-denied-boot"), denied},
+	})
+
+	// Grant targetAtespace access to className -> editor can now create the template.
+	e2e.AllowAtespaceOnExternalVolumeClass(ctx, t, f.clients, className, targetAtespace)
+	expectAll(t, ctx, []call{
+		{"CreateActorTemplate granted (editor)", editor, createTemplateWithClass("evc-allowed"), allowed},
+	})
+	if t.Failed() {
+		return
+	}
+	if _, err := f.clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{
+		ActorTemplate: &ateapi.ObjectRef{Atespace: targetAtespace, Name: "evc-allowed"},
+	}); err != nil && status.Code(err) != codes.NotFound {
+		t.Fatalf("DeleteActorTemplate(evc-allowed): %v", err)
+	}
+
+	// 3. Delete and recreate targetAtespace -> grant is scrubbed and CreateActorTemplate is denied again.
+	if err := deleteAtespace(ctx, f.clients, targetAtespace); err != nil {
+		t.Fatalf("DeleteAtespace(%q): %v", targetAtespace, err)
+	}
+	createAtespace(t, ctx, f.clients, targetAtespace)
+	expectAll(t, ctx, []call{
+		{"CreateActorTemplate after atespace recreate (bootstrap)", f.bootstrap, createTemplateWithClass("evc-after-recreate"), denied},
 	})
 }

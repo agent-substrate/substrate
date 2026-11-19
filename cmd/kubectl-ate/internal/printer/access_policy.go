@@ -25,13 +25,13 @@ import (
 
 // PrintAccessPolicyTo prints an access policy, one table row per binding.
 // json and yaml emit the bare AccessPolicy. The policy's metadata carries no
-// atespace, so the caller passes it; empty means the global policy.
-func PrintAccessPolicyTo(out io.Writer, atespace string, policy *ateapi.AccessPolicy, format string) error {
+// parent scope, so the caller passes scopeLabel; empty means the global policy.
+func PrintAccessPolicyTo(out io.Writer, scopeLabel string, policy *ateapi.AccessPolicy, format string) error {
 	switch format {
 	case "json", "yaml":
 		return printProto(out, policy, format)
 	case "table":
-		scope := atespace
+		scope := scopeLabel
 		if scope == "" {
 			scope = "<global>"
 		}

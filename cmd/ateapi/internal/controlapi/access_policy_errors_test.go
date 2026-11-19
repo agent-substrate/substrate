@@ -17,6 +17,7 @@ package controlapi
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -32,19 +33,25 @@ func TestMapAccessPolicyWrite_Codes(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
+		msg  string
 		want codes.Code
 	}{
-		{name: "nonstandard backend code", err: openFGAErr, want: codes.Internal},
-		{name: "wrapped nonstandard backend code", err: fmt.Errorf("reconciling: %w", openFGAErr), want: codes.Internal},
-		{name: "apierror passes through", err: apierror.InvalidArgument("bad"), want: codes.InvalidArgument},
-		{name: "plain error", err: errors.New("boom"), want: codes.Internal},
-		{name: "not found", err: store.ErrNotFound, want: codes.NotFound},
+		{name: "nonstandard backend code", err: openFGAErr, msg: "custom precondition message", want: codes.Internal},
+		{name: "wrapped nonstandard backend code", err: fmt.Errorf("reconciling: %w", openFGAErr), msg: "custom precondition message", want: codes.Internal},
+		{name: "apierror passes through", err: apierror.InvalidArgument("bad"), msg: "custom precondition message", want: codes.InvalidArgument},
+		{name: "plain error", err: errors.New("boom"), msg: "custom precondition message", want: codes.Internal},
+		{name: "not found", err: store.ErrNotFound, msg: "custom precondition message", want: codes.NotFound},
+		{name: "failed precondition", err: store.ErrFailedPrecondition, msg: "custom precondition message", want: codes.FailedPrecondition},
+		{name: "unexpected failed precondition falls through", err: store.ErrFailedPrecondition, msg: "", want: codes.Internal},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := mapAccessPolicyWrite(nil, tc.err)
+			_, err := mapAccessPolicyWrite(nil, tc.err, tc.msg)
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("mapAccessPolicyWrite(%v) code = %v, want %v", tc.err, got, tc.want)
+			}
+			if tc.want == codes.FailedPrecondition && !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("mapAccessPolicyWrite(ErrFailedPrecondition) = %q, want %q", err.Error(), tc.msg)
 			}
 		})
 	}

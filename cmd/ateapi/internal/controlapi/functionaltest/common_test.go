@@ -53,7 +53,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
@@ -156,8 +155,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 
 	// 3. Initialize Informers
 	ateletFactory, ateletInformer := controlapi.AteletInformer(k8sClient, installdefaults.SystemNamespace)
-	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
-	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
 	csiDriverConfigLister := substrateInformerFactory.Ate().V1().CSIDriverConfigs().Lister()
@@ -166,11 +163,9 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
-	scFactory.Start(ctx.Done())
 
 	ateletFactory.WaitForCacheSync(ctx.Done())
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
-	scFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
 	wc := workercache.New(persistence, 5*time.Minute)
@@ -224,7 +219,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		persistence,
 		wc,
 		csiDriverConfigLister,
-		scLister,
 		dialer,
 		instruments,
 		"",

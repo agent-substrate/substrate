@@ -23,8 +23,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// check is one OpenFGA permission check: the caller must have relation on object.
+// check is one OpenFGA permission check. When subject is empty, the caller
+// principal from context must have relation on object; when subject is set
+// (e.g. "atespace:team-a"), subject itself must have relation on object.
 type check struct {
+	subject  string
 	relation string
 	object   string
 }
@@ -88,6 +91,13 @@ func onWorker(relation, name string, fldPath *field.Path) ([]check, field.ErrorL
 	return []check{{relation: relation, object: WorkerObject(name)}}, nil
 }
 
+func onExternalVolumeClass(relation, name string, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateName(name, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: ExternalVolumeClassObject(name)}}, nil
+}
+
 // resourceRef identifies an atespaced resource. Both *ateapi.ObjectRef and
 // *ateapi.ResourceMetadata satisfy it, including as nil pointers.
 type resourceRef interface {
@@ -130,6 +140,38 @@ func onSourceTag(ref *ateapi.ObjectRef, fldPath *field.Path) ([]check, field.Err
 		return nil, nil
 	}
 	return onTag(RelationCanUseTag, ref, fldPath)
+}
+
+// onExternalVolumeClassRefs checks can_reference for atespace on every distinct
+// ExternalVolumeClass referenced by an ActorTemplate's external volumes.
+func onExternalVolumeClassRefs(atespace string, volumes []*ateapi.Volume, fldPath *field.Path) ([]check, field.ErrorList) {
+	var (
+		checks []check
+		errs   field.ErrorList
+		seen   = make(map[string]struct{})
+	)
+	subject := AtespaceObject(atespace)
+	for i, v := range volumes {
+		ref := v.GetExternal().GetTemplate().GetExternalVolumeClass()
+		if ref == nil {
+			continue
+		}
+		name := ref.GetName()
+		if nameErrs := validateName(name, fldPath.Index(i).Child("external", "template", "external_volume_class", "name")); len(nameErrs) > 0 {
+			errs = append(errs, nameErrs...)
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		checks = append(checks, check{
+			subject:  subject,
+			relation: RelationCanReference,
+			object:   ExternalVolumeClassObject(name),
+		})
+	}
+	return checks, errs
 }
 
 // both requires the checks from a and b, reporting the validation errors of
@@ -200,9 +242,13 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onAtespace(RelationCanDeleteAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
 
-	// Actor templates.
+	// Actor templates. Creating a template that references an ExternalVolumeClass
+	// also requires that the template's atespace has can_reference on each class.
 	ateapi.Control_CreateActorTemplate_FullMethodName: rule(checksOf(func(r *ateapi.CreateActorTemplateRequest) ([]check, field.ErrorList) {
-		return onAtespace(RelationCanCreateActorTemplate, r.GetActorTemplate().GetMetadata().GetAtespace(), field.NewPath("actor_template", "metadata", "atespace"))
+		atespace := r.GetActorTemplate().GetMetadata().GetAtespace()
+		atespaceChecks, atespaceErrs := onAtespace(RelationCanCreateActorTemplate, atespace, field.NewPath("actor_template", "metadata", "atespace"))
+		evcChecks, evcErrs := onExternalVolumeClassRefs(atespace, r.GetActorTemplate().GetVolumes(), field.NewPath("actor_template", "volumes"))
+		return both(atespaceChecks, atespaceErrs, evcChecks, evcErrs)
 	})),
 	ateapi.Control_GetActorTemplate_FullMethodName: rule(checksOf(func(r *ateapi.GetActorTemplateRequest) ([]check, field.ErrorList) {
 		return onActorTemplate(RelationCanGet, r.GetActorTemplate(), field.NewPath("actor_template"))
@@ -292,6 +338,32 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapi.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapi.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+
+	// External volume classes. Global-scoped like workers.
+	ateapi.Control_CreateExternalVolumeClass_FullMethodName: rule(checksOf(func(*ateapi.CreateExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanCreateExternalVolumeClass)
+	})),
+	ateapi.Control_ListExternalVolumeClasses_FullMethodName: rule(checksOf(func(*ateapi.ListExternalVolumeClassesRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanListExternalVolumeClasses)
+	})),
+	ateapi.Control_GetExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanGet, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_DeleteExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanDelete, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_GetExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanGetAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_CreateExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.CreateExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanCreateAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_UpdateExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.UpdateExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanUpdateAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_DeleteExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanDeleteAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
 	})),
 
 	// Actor identity credentials.
