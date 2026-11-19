@@ -39,7 +39,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 		return nil, fmt.Errorf("locking worker %s: %w", name, err)
 	}
 	worker := &ateapi.Worker{}
-	if err := proto.Unmarshal(protoBytes, worker); err != nil {
+	if err := unmarshalStored(protoBytes, worker); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return worker, nil
@@ -190,7 +190,7 @@ func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Work
 		return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
 	}
 	assignment := &ateapi.ActorAssignment{}
-	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, fmt.Errorf("unmarshaling released assignment: %w", err)
 	}
 	worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
@@ -216,7 +216,7 @@ func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.
 		return nil, "", fmt.Errorf("getting assignment for actor %s: %w", actorUID, err)
 	}
 	assignment := &ateapi.ActorAssignment{}
-	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, "", fmt.Errorf("unmarshaling assignment: %w", err)
 	}
 	return assignment, workerName, nil
@@ -269,7 +269,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("scanning assignment of worker %s: %w", workerName, err)
 		}
 		assignment := &ateapi.ActorAssignment{}
-		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+		if err := unmarshalStored(protoBytes, assignment); err != nil {
 			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment of actor %s: %w", actorUID, err)
 		}
 		result = append(result, assignment)
