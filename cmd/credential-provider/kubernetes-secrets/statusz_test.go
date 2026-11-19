@@ -34,7 +34,8 @@ func TestGrants(t *testing.T) {
 	authz, err := newNamespaceAuthorizer(namespacePolicyFile{
 		Policies: []atespaceNamespacePolicy{
 			{Atespace: "team-a", AllowedNamespaces: []string{"ns2", "ns1"}},
-			{Atespace: "team-b", AllowedNamespaces: []string{"ns3"}},
+			{Atespace: "team-b", AllowedNamespaces: []string{"ns3"},
+				SecretSelector: &secretSelector{MatchLabels: map[string]string{"env": "prod"}}},
 		},
 	})
 	if err != nil {
@@ -48,23 +49,50 @@ func TestGrants(t *testing.T) {
 		t.Errorf("Grants() = %v, want %v", got, want)
 	}
 
+	wantDetails := map[string][]NamespaceGrant{
+		"team-a": {{Namespace: "ns1"}, {Namespace: "ns2"}},
+		"team-b": {{Namespace: "ns3", MatchLabels: map[string]string{"env": "prod"}}},
+	}
+	gotDetails := authz.GrantDetails()
+	if !reflect.DeepEqual(gotDetails, wantDetails) {
+		t.Fatalf("GrantDetails() = %+v, want %+v", gotDetails, wantDetails)
+	}
+	gotDetails["team-b"][0].MatchLabels["env"] = "dev"
+	if !authz.AllowedSecret("team-b", "ns3", map[string]string{"env": "prod"}) {
+		t.Error("mutating GrantDetails() output altered AllowedSecret()")
+	}
+
 	var disabled *NamespaceAuthorizer
 	if got := disabled.Grants(); got != nil {
 		t.Errorf("nil authorizer Grants() = %v, want nil", got)
 	}
+	if got := disabled.GrantDetails(); got != nil {
+		t.Errorf("nil authorizer GrantDetails() = %v, want nil", got)
+	}
 }
 
-// statuszServer builds a provider that has resolved a secret, so the tests
-// can assert the value never surfaces on the page.
+// statuszServer builds a provider that has resolved a labeled secret, so the
+// tests can assert policy selectors appear while secret data and non-policy
+// secret metadata stay hidden.
 func statuszServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	const secretValue = "statusz-must-never-show-this"
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "example-api", Namespace: "ns1"},
-		Data:       map[string][]byte{"token": []byte(secretValue)},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-api",
+			Namespace: "ns1",
+			Labels:    map[string]string{"env": "prod", "app": "web", "unreferenced": "secret-only-label"},
+		},
+		Data: map[string][]byte{"token": []byte(secretValue)},
 	}
 	authz, err := newNamespaceAuthorizer(namespacePolicyFile{
-		Policies: []atespaceNamespacePolicy{{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}}},
+		Policies: []atespaceNamespacePolicy{
+			{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
+				SecretSelector: &secretSelector{MatchLabels: map[string]string{"env": "prod", "app": "web"}}},
+			{Atespace: "team-a", AllowedNamespaces: []string{"ns1"},
+				SecretSelector: &secretSelector{MatchLabels: map[string]string{"team": "x"}}},
+			{Atespace: "team-b", AllowedNamespaces: []string{"ns2"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("newNamespaceAuthorizer: %v", err)
@@ -93,8 +121,19 @@ func TestStatuszJSON(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
 		t.Fatalf("decoding statusz JSON: %v (body %q)", err, rec.Body.String())
 	}
-	if !reflect.DeepEqual(data.PolicyGrants, map[string][]string{"team-a": {"ns1"}}) {
-		t.Errorf("policy_grants = %v, want team-a → ns1", data.PolicyGrants)
+	wantGrants := map[string][]string{"team-a": {"ns1"}, "team-b": {"ns2"}}
+	if !reflect.DeepEqual(data.PolicyGrants, wantGrants) {
+		t.Errorf("policy_grants = %v, want %v", data.PolicyGrants, wantGrants)
+	}
+	wantDetails := map[string][]NamespaceGrant{
+		"team-a": {
+			{Namespace: "ns1", MatchLabels: map[string]string{"env": "prod", "app": "web"}},
+			{Namespace: "ns1", MatchLabels: map[string]string{"team": "x"}},
+		},
+		"team-b": {{Namespace: "ns2"}},
+	}
+	if !reflect.DeepEqual(data.PolicyGrantDetails, wantDetails) {
+		t.Errorf("policy_grant_details = %+v, want %+v", data.PolicyGrantDetails, wantDetails)
 	}
 	if data.InjectorSAN != *injectorIdentity {
 		t.Errorf("injector_san = %q, want %q", data.InjectorSAN, *injectorIdentity)
@@ -105,6 +144,9 @@ func TestStatuszJSON(t *testing.T) {
 
 	if strings.Contains(rec.Body.String(), secretValue) {
 		t.Fatal("statusz JSON contains the secret value")
+	}
+	if strings.Contains(rec.Body.String(), "secret-only-label") {
+		t.Fatal("statusz JSON leaked a label from a Kubernetes Secret rather than the policy")
 	}
 }
 
@@ -122,10 +164,20 @@ func TestStatuszHTMLNeverShowsSecret(t *testing.T) {
 	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Errorf("Content-Type = %q, want text/html", rec.Header().Get("Content-Type"))
 	}
-	if !strings.Contains(body, "team-a") {
-		t.Errorf("HTML page is missing the policy grants")
+	wantRows := []string{
+		"<tr><td>team-a</td><td>ns1</td><td>app=web env=prod </td></tr>",
+		"<tr><td>team-a</td><td>ns1</td><td>team=x </td></tr>",
+		"<tr><td>team-b</td><td>ns2</td><td>*</td></tr>",
+	}
+	for _, want := range wantRows {
+		if !strings.Contains(body, want) {
+			t.Errorf("HTML page is missing row %q:\n%s", want, body)
+		}
 	}
 	if strings.Contains(body, secretValue) {
 		t.Fatal("statusz HTML contains the secret value")
+	}
+	if strings.Contains(body, "secret-only-label") {
+		t.Fatal("statusz HTML leaked a label from a Kubernetes Secret rather than the policy")
 	}
 }
