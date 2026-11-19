@@ -2,7 +2,7 @@ module go.ate.dev/substrate/hack/tools/ko
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0 // indirect
