@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -297,6 +298,11 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	return dbTag, nil
 }
 
+// snapshotTagFKName matches external_volume_snapshots_tag_fk. Partitioning
+// tags gives each partition its own copy of the constraint, named with a
+// numeric suffix.
+var snapshotTagFKName = regexp.MustCompile(`^external_volume_snapshots_tag_fk(_[0-9]+)?$`)
+
 func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
@@ -311,6 +317,12 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 		var version int64
 		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM tags WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
 		return nil, mapDeleteError(err, uid, version, precondition)
+	}
+	if isForeignKeyViolation(err) {
+		if snapshotTagFKName.MatchString(pgErrConstraint(err)) {
+			return nil, fmt.Errorf("%w: tag %s/%s still owns external volume snapshots", store.ErrFailedPrecondition, atespace, name)
+		}
+		return nil, fmt.Errorf("deleting tag %s/%s violated unknown foreign key %q: %w", atespace, name, pgErrConstraint(err), err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deleting tag %s/%s: %w", atespace, name, err)

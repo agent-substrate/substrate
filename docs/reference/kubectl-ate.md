@@ -255,6 +255,11 @@ kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 # Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
 # After an asynchronous suspend, create tag uploads the local snapshot first if needed.
 kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
+
+# Also snapshot the actor's external volumes: all of them, or only those named.
+# Names must be joined to the flag with =.
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes=data,cache
 kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 
@@ -262,6 +267,35 @@ kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
+
+#### External volume snapshots
+
+An `ExternalVolumeSnapshot` is owned by the tag named in its
+`origin.tag_capture.tag`. `create tag --with-volumes` records one for each
+volume it captures, and `delete tag` deletes them and their storage snapshots
+with the tag.
+
+```bash
+# List an Atespace's snapshots, all Atespaces' snapshots, or one tag's snapshots.
+# --tag takes <atespace>/<tag-name>, or <tag-name> with -a, since a tag name is
+# unique only within an atespace.
+kubectl ate get external-volume-snapshots -a <atespace>
+kubectl ate get external-volume-snapshots -A
+kubectl ate get external-volume-snapshots --tag <atespace>/<tag-name>
+kubectl ate get external-volume-snapshot <snapshot-name> -a <atespace> -o yaml
+```
+
+#### `kubectl ate get external-volume-snapshot` output columns
+
+| Column | Meaning |
+|---|---|
+| `ATESPACE` | The atespace the snapshot and its tag belong to. |
+| `NAME` | The snapshot's name. |
+| `TAG` | The tag that owns the snapshot. |
+| `VOLUME` | The volume of the tag's source actor the snapshot was taken from. |
+| `STATE` | Derived from `status`: `Failed` if `error_message` is set, otherwise `Pending` until `snapshot_id` is recorded, `Captured` until `ready_to_use` is true, and `Ready` once the snapshot can seed new volumes. |
+| `SIZE` | The minimum size of a volume restored from the snapshot; `<unknown>` until the driver reports it. |
+| `AGE` | Time elapsed since the snapshot was created. |
 
 ### Egress Policies
 

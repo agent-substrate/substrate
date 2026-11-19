@@ -655,6 +655,143 @@ team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                        
 	}
 }
 
+func TestPrintExternalVolumeSnapshotsTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	snapshot := func(atespace, name string, status *ateapi.ExternalVolumeSnapshotStatus) *ateapi.ExternalVolumeSnapshot {
+		return &ateapi.ExternalVolumeSnapshot{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace:   atespace,
+				Name:       name,
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			Origin: &ateapi.ExternalVolumeSnapshotOrigin{TagCapture: &ateapi.TagVolumeSnapshotOrigin{
+				Tag:              &ateapi.ObjectRef{Atespace: atespace, Name: "v1"},
+				SourceVolumeName: "data",
+			}},
+			Status: status,
+		}
+	}
+	snapshots := []*ateapi.ExternalVolumeSnapshot{
+		snapshot("team-b", "snap-a", nil),
+		snapshot("team-a", "snap-ready", &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "h", ReadyToUse: true, RestoreSizeBytes: 10 << 30}),
+		snapshot("team-a", "snap-captured", &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "h"}),
+		snapshot("team-a", "snap-failed", &ateapi.ExternalVolumeSnapshotStatus{ErrorMessage: "quota exceeded"}),
+		snapshot("team-a", "snap-pending", nil),
+	}
+
+	var buf bytes.Buffer
+	if err := PrintExternalVolumeSnapshotsTo(&buf, snapshots, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Sorted by atespace, then name.
+	expected := `ATESPACE   NAME            TAG   VOLUME   STATE      SIZE        AGE
+team-a     snap-captured   v1    data     Captured   <unknown>   5m
+team-a     snap-failed     v1    data     Failed     <unknown>   5m
+team-a     snap-pending    v1    data     Pending    <unknown>   5m
+team-a     snap-ready      v1    data     Ready      10Gi        5m
+team-b     snap-a          v1    data     Pending    <unknown>   5m
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeSnapshotsTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	snapshots := []*ateapi.ExternalVolumeSnapshot{{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "snap"}}}
+
+	if err := PrintExternalVolumeSnapshotsTo(&buf, snapshots, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "externalVolumeSnapshots": [
+    {
+      "metadata": {
+        "atespace": "team-a",
+        "name": "snap"
+      }
+    }
+  ]
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeSnapshotsTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	snapshots := []*ateapi.ExternalVolumeSnapshot{{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "snap"}}}
+
+	if err := PrintExternalVolumeSnapshotsTo(&buf, snapshots, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `externalVolumeSnapshots:
+- metadata:
+    atespace: team-a
+    name: snap
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeSnapshotsTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintExternalVolumeSnapshotsTo(&buf, nil, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintExternalVolumeSnapshotTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	snapshot := &ateapi.ExternalVolumeSnapshot{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "snap"}}
+
+	if err := PrintExternalVolumeSnapshotTo(&buf, snapshot, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "snap"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeSnapshotTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	snapshot := &ateapi.ExternalVolumeSnapshot{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "snap"}}
+
+	if err := PrintExternalVolumeSnapshotTo(&buf, snapshot, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  atespace: team-a
+  name: snap
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeSnapshotTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintExternalVolumeSnapshotTo(&buf, &ateapi.ExternalVolumeSnapshot{}, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
 func TestPrintTagsTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	if err := PrintTagsTo(&buf, nil, "xml"); err == nil {

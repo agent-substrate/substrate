@@ -34,6 +34,9 @@ const (
 	// that need a well-formed snapshot URI but never exercise who owns it. Those
 	// seed their Actor in a single call, before a real UID exists.
 	someActorUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
+
+	// someTagUID stands in for the UID the store assigns a Tag.
+	someTagUID = "0d3e7a91-5c2b-4f68-a1d4-8e9b2c7f6a35"
 )
 
 // assertValidate checks validate against want with no preview gates enabled.

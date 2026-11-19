@@ -26,14 +26,15 @@ import (
 )
 
 var (
-	getTagAtespaceFlag     string
-	getTagAllAtespacesFlag bool
-	createTagAtespaceFlag  string
-	createTagActorFlag     string
-	createTagScopeFlag     string
-	updateTagAtespaceFlag  string
-	updateTagScopeFlag     string
-	deleteTagAtespaceFlag  string
+	getTagAtespaceFlag       string
+	getTagAllAtespacesFlag   bool
+	createTagAtespaceFlag    string
+	createTagActorFlag       string
+	createTagScopeFlag       string
+	createTagWithVolumesFlag volumeSelectionValue
+	updateTagAtespaceFlag    string
+	updateTagScopeFlag       string
+	deleteTagAtespaceFlag    string
 )
 
 var getTagsCmd = &cobra.Command{
@@ -93,7 +94,7 @@ var createTagCmd = &cobra.Command{
 	Long: "Tag the external snapshot a suspended actor holds.\n\n" +
 		"The tag gets its own copy of that snapshot, so suspending the actor\n" +
 		"again or deleting it cannot collect what the tag names.",
-	Args: exactlyOneArg("<tag-name>", "atespace", "actor"),
+	Args: createTagArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseTagScope(createTagScopeFlag)
 		if err != nil {
@@ -112,6 +113,7 @@ var createTagCmd = &cobra.Command{
 				Scope:       scope,
 				SourceActor: &ateapi.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			},
+			VolumeSelection: createTagWithVolumesFlag.sel,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create tag: %w", err)
@@ -204,6 +206,7 @@ func init() {
 	createTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "the actor's atespace; the tag is created here")
 	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "suspended actor whose external snapshot to tag")
 	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "tag scope: atespace or published")
+	addWithVolumesFlag(createTagCmd, &createTagWithVolumesFlag)
 	createCmd.AddCommand(createTagCmd)
 
 	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "the tag's atespace")
@@ -212,4 +215,74 @@ func init() {
 
 	deleteTagCmd.Flags().StringVarP(&deleteTagAtespaceFlag, "atespace", "a", "", "the tag's atespace")
 	deleteCmd.AddCommand(deleteTagCmd)
+}
+
+// allVolumes is what a bare --with-volumes sets. pflag lets a flag go without
+// a value only if NoOptDefVal is non-empty, and "*" cannot be mistaken for a
+// volume name, which must be a k8s-short-name.
+const allVolumes = "*"
+
+// volumeSelectionValue backs --with-volumes. A bare --with-volumes selects
+// every external volume; --with-volumes=a,b (comma-separated or repeated)
+// selects only those. Left unset, sel stays nil and no volume is captured.
+type volumeSelectionValue struct {
+	sel *ateapi.ExternalVolumeSelection
+}
+
+// all reports whether every external volume is selected.
+func (v *volumeSelectionValue) all() bool {
+	return v.sel != nil && len(v.sel.GetNames()) == 0
+}
+
+func (v *volumeSelectionValue) String() string {
+	if v.all() {
+		return allVolumes
+	}
+	return strings.Join(v.sel.GetNames(), ",")
+}
+
+func (v *volumeSelectionValue) Set(s string) error {
+	if s == "" {
+		return fmt.Errorf("no volume names after =; drop the = to capture every volume")
+	}
+	if v.sel != nil && (s == allVolumes) != v.all() {
+		return fmt.Errorf("cannot both capture every volume and name volumes")
+	}
+	if v.sel == nil {
+		v.sel = &ateapi.ExternalVolumeSelection{}
+	}
+	if s == allVolumes {
+		return nil
+	}
+	for name := range strings.SplitSeq(s, ",") {
+		switch name {
+		case "":
+			return fmt.Errorf("empty volume name in %q", s)
+		case allVolumes:
+			return fmt.Errorf("cannot both capture every volume and name volumes")
+		}
+		v.sel.Names = append(v.sel.Names, name)
+	}
+	return nil
+}
+
+func (v *volumeSelectionValue) Type() string { return "names" }
+
+// addWithVolumesFlag registers --with-volumes on cmd, backed by v.
+func addWithVolumesFlag(cmd *cobra.Command, v *volumeSelectionValue) {
+	cmd.Flags().Var(v, "with-volumes", "also snapshot the actor's external volumes (preview): all of them, or only those named with --with-volumes=a,b")
+	cmd.Flags().Lookup("with-volumes").NoOptDefVal = allVolumes
+}
+
+// createTagArgs checks create tag's arguments. On top of exactlyOneArg, it
+// explains the likely cause of an extra argument after a bare --with-volumes:
+// the names were separated from the flag by a space instead of =, so pflag
+// read them as an argument.
+func createTagArgs(cmd *cobra.Command, args []string) error {
+	err := exactlyOneArg("<tag-name>", "atespace", "actor")(cmd, args)
+	if f := cmd.Flags().Lookup("with-volumes"); err != nil && len(args) > 1 && f != nil && f.Value.String() == allVolumes {
+		last := args[len(args)-1]
+		return usageErrorf("%v; if %q names volumes, join them to the flag with =, e.g. --with-volumes=%s", err, last, last)
+	}
+	return err
 }
