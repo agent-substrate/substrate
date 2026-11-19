@@ -754,6 +754,9 @@ type Atelet struct {
 	// provider leases, and for writing while atelet reconciles the plugin's
 	// leases with the overlay specs.
 	providerLeaseMu sync.RWMutex
+	// providerAuth is what the plugin reported in auth_refresh for each
+	// provider lease.
+	providerAuth providerAuthModes
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
@@ -2394,7 +2397,7 @@ func (s *Atelet) releaseProviderLeases(ctx context.Context, actorUID string) {
 }
 
 func (s *Atelet) imageSource() imageSource {
-	return imageSource{cache: s.imageCache, provider: s.imageProvider, keychain: s.imageKeychain, instruments: s.instruments}
+	return imageSource{cache: s.imageCache, provider: s.imageProvider, keychain: s.imageKeychain, authModes: &s.providerAuth, instruments: s.instruments}
 }
 
 // dialWorker opens (or reuses) the gRPC connection to the target worker
