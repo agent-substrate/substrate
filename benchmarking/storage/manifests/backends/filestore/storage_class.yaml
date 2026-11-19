@@ -20,7 +20,9 @@ provisioner: filestore.csi.storage.gke.io
 parameters:
   volume-pool: projects/${PROJECT_ID}/locations/${REGION}/volumePools/${POOL}
   # Substrate passes only parameters to the driver and ignores mountOptions,
-  # so mount options go here. Pinning NFSv3 over TCP skips version negotiation.
-  mount-options: "vers=3,proto=tcp,mountproto=tcp,nolock"
+  # so mount options go here. Pin NFSv3 over TCP, open 8 connections per node,
+  # set 512 KiB transfer sizes, and cache attributes for 60 s. Close-to-open
+  # stays on so actors can move across nodes safely.
+  mount-options: "vers=3,proto=tcp,mountproto=tcp,nolock,nconnect=8,rsize=524288,wsize=524288,actimeo=60"
 reclaimPolicy: Delete
 volumeBindingMode: Immediate

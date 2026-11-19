@@ -218,20 +218,27 @@ P50 / P90 over 30 cycles:
 | Call | Time |
 |---|---|
 | CreateActor | 0.01 / 0.09 s |
-| First ResumeActor, which creates the volume | 0.25 / 0.28 s |
-| SuspendActor | 0.22 / 0.28 s |
-| ResumeActor | 0.14 / 0.15 s |
-| DeleteActor | 0.22 / 0.30 s |
+| First ResumeActor, which creates the volume | 0.28 / 0.41 s |
+| SuspendActor | 0.23 / 0.28 s |
+| ResumeActor | 0.15 / 0.20 s |
+| DeleteActor | 0.20 / 0.22 s |
 
-The CSI driver logs from the same run give the volume calls at P50:
-`CreateVolume` 93 ms, mount (`NodeStageVolume`) 32 ms, unmount
-(`NodeUnstageVolume`) 15 ms and `DeleteVolume` 93 ms. A resume mounts the
-volume but does not create it.
+The CSI driver logs from the same run give mount (`NodeStageVolume`) at
+37 / 53 ms and unmount (`NodeUnstageVolume`) at 15 / 17 ms. A resume mounts
+the volume but does not create it.
 
-Environment: Substrate at `94e0a26a`, gVisor, `c3-standard-4` nodes in
-`us-west1-c` (two infra, one worker), Filestore agent volumes from a pool with
-the [reference layout](manifests/backends/filestore/README.md#2-create-a-volume-pool),
-and `mount-options: vers=3,proto=tcp,mountproto=tcp,nolock`.
+With only the default options (`vers=3,proto=tcp,mountproto=tcp,nolock`) and
+the kernel's 128 KiB read ahead, the same pool gave a first resume of
+0.25 / 0.34 s, a resume of 0.13 / 0.15 s and a mount of 28 / 46 ms. The tuned
+options cost about 9 ms per mount here, because this workload reads no files.
+They are the Filestore recommendation for workloads that read and write data.
+
+Environment: Substrate at `905e2a65`, gVisor `release-20261102.0`,
+`c3-standard-4` nodes in `us-west1-c` (two infra, one worker), Filestore agent
+volumes from a zone aware pool with the
+[reference layout](manifests/backends/filestore/README.md#2-create-a-volume-pool),
+`mount-options: vers=3,proto=tcp,mountproto=tcp,nolock,nconnect=8,rsize=524288,wsize=524288,actimeo=60`,
+and a 16 MiB read ahead (`read_ahead_kb=16384`).
 
 ## Scenario 2: Density
 
@@ -261,33 +268,34 @@ message show what ran out.
 
 ### Reference results
 
-One `c3-standard-4` worker node with 16 GB of memory:
+One `c3-standard-4` worker node with 16 GiB of memory:
 
 | Running actors | First resume P50 / P90 | NFS mounts | Node memory free | Worker node working set |
 |---|---|---|---|---|
-| 40 | 2.38 / 2.92 s | 80 | 12,941 MiB | 3,054 MiB |
-| 100 | 1.42 / 1.72 s | 200 | 12,014 MiB | 3,981 MiB |
-| 200 | 1.30 / 1.83 s | 400 | 10,359 MiB | 5,636 MiB |
-| 300 | 1.76 / 2.14 s | 600 | 8,842 MiB | 7,153 MiB |
-| 400 | 1.75 / 2.29 s | 800 | 6,965 MiB | 9,030 MiB |
-| 500 | 1.78 / 2.64 s | 1,000 | 4,940 MiB | 11,056 MiB |
-| 600 | 1.83 / 2.95 s | 1,200 | 3,268 MiB | 12,727 MiB |
-| 700 | 3.13 / 4.56 s | 1,400 | 3,239 MiB | 12,757 MiB |
+| 40 | 2.49 / 3.13 s | 80 | 13,439 MiB | 2,556 MiB |
+| 100 | 1.36 / 1.71 s | 200 | 12,509 MiB | 3,486 MiB |
+| 200 | 1.65 / 1.95 s | 400 | 10,890 MiB | 5,105 MiB |
+| 300 | 1.86 / 2.22 s | 600 | 9,332 MiB | 6,664 MiB |
+| 400 | 2.20 / 2.59 s | 800 | 7,780 MiB | 8,215 MiB |
+| 500 | 1.74 / 2.55 s | 1,000 | 6,275 MiB | 9,721 MiB |
+| 600 | 2.22 / 2.91 s | 1,200 | 4,615 MiB | 11,381 MiB |
+| 700 | 5.28 / 7.42 s | 1,400 | 3,180 MiB | 12,815 MiB |
 | 720 | 20 failed with `Unavailable` | worker evicted | | |
 
-**700 actors fit, and node memory is the limit.** Each running actor uses
+**700 actors fit, and node memory is the limit.** Both the tuned and default
+mount settings reached 700 actors and evicted at 720. Each running actor uses
 about 17 MiB. At 720, the node fell below kubelet's 100 MiB eviction threshold
-while the new actors resumed. Kubelet evicted the worker pod, which held
-12 GiB, and all its actors crashed. Each actor has two NFS mounts, and neither
-the mount count nor the mount time was a limit. Node CPU stayed under 900m.
+while the new actors resumed. Kubelet evicted the worker pod, which held about
+12.5 GiB, and all its actors crashed. Each actor has two NFS mounts, and neither
+the mount count nor the mount time was a limit.
 
 The free memory that the kubelet summary API reports stopped falling at about
 3.2 GiB after 600 actors, so the `MIN_FREE_MIB` check never stopped the run.
 The working set column shows the node filling up.
 
-Environment: Substrate at `94e0a26a`, gVisor, one worker on one
-`c3-standard-4` in `us-west1-c` plus two infra nodes, and the same pool and
-StorageClass as scenario 1.
+Environment: Substrate at `905e2a65`, gVisor `release-20261102.0`, one worker
+on one `c3-standard-4` in `us-west1-c` plus two infra nodes, and the same pool,
+StorageClass and read ahead as scenario 1.
 
 ## Troubleshooting
 
@@ -308,6 +316,9 @@ StorageClass as scenario 1.
   more spare volumes.
 - **NFS mount options have no effect**: they are in `mountOptions`. Move them
   to `parameters.mount-options`.
+- **Changing `nconnect` has no effect on an existing node**: the Linux NFS
+  client reuses the first active mount's connection count per Filestore IP.
+  Suspend or delete running actors on the node before mounting with new options.
 - **Volume calls fail after about a day**: the Filestore CSI controller's mTLS
   certificate expired. Restart `gcp-filestore-csi-controller`.
 - **Volume calls fail with `Unavailable` after you reinstall Substrate**: the

@@ -70,17 +70,29 @@ All pods should be `Running`. The overlay's
 [README](https://github.com/kubernetes-sigs/gcp-filestore-csi-driver/tree/master/deploy/kubernetes/overlays/substrate)
 explains the service account and the `CSIDriverConfig` it creates.
 
-## 4. Create the StorageClass
+## 4. Create the StorageClass and set the read ahead
+
+The StorageClass sets the recommended NFSv3 mount options: `nconnect=8`,
+`rsize=524288`, `wsize=524288` and `actimeo=60`. Read ahead is a node setting.
+Every resume makes a new mount with the kernel default of 128 KiB, so a
+DaemonSet raises it to 16 MiB on every worker node:
 
 ```bash
 envsubst < benchmarking/storage/manifests/backends/filestore/storage_class.yaml | kubectl apply -f -
+kubectl create configmap nfs-readahead-tuner -n kube-system \
+  --from-file=tune_readahead.sh=benchmarking/storage/manifests/backends/filestore/tune_readahead.sh \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f benchmarking/storage/manifests/backends/filestore/readahead_daemonset.yaml
 ```
 
 ## Cleanup
 
-Delete the volume pool once no actor uses it:
+Delete the read ahead DaemonSet, the StorageClass and the volume pool once no
+actor uses them:
 
 ```bash
+kubectl delete -f benchmarking/storage/manifests/backends/filestore/readahead_daemonset.yaml
+kubectl delete configmap nfs-readahead-tuner -n kube-system
 curl -s -X DELETE -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "x-goog-user-project: ${PROJECT_ID}" \
   "https://file.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${REGION}/volumePools/${POOL}"
 kubectl delete storageclass "${STORAGE_CLASS}"
