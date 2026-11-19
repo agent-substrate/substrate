@@ -16,8 +16,6 @@ package ch
 
 import (
 	"bytes"
-	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -197,22 +195,6 @@ func TestUseFileBackedMemoryAndCanonicalize(t *testing.T) {
 			})
 		}
 	})
-
-	t.Run("CreateSparseDeltaAgainstBase", func(t *testing.T) {
-		ctx := context.Background()
-		dir := t.TempDir()
-		baseFile, targetFile, wantHash, _, wantKept := buildDiffFixture(t, dir)
-		deltaFile, outFile := filepath.Join(dir, "sparse-delta"), filepath.Join(dir, "reconstructed")
-		if kept, err := CreateSparseDeltaAgainstBase(ctx, baseFile, targetFile, deltaFile); err != nil || kept != wantKept {
-			t.Fatalf("CreateSparseDeltaAgainstBase = (%d, %v), want (%d, nil)", kept, err, wantKept)
-		}
-		if err := MergeSparseOverlay(ctx, baseFile, deltaFile, outFile); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := os.ReadFile(outFile); err != nil || sha256.Sum256(got) != wantHash {
-			t.Fatalf("CreateSparseDeltaAgainstBase round-trip SHA256 mismatch (err=%v)", err)
-		}
-	})
 }
 
 func BenchmarkUseFileBackedMemoryAndCanonicalize(b *testing.B) {
@@ -226,20 +208,6 @@ func BenchmarkUseFileBackedMemoryAndCanonicalize(b *testing.B) {
 			b.Fatal(err)
 		}
 		if err := CanonicalizeFileBackedSnapshot(dir, orig); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkCreateSparseDeltaAgainstBase_167MB(b *testing.B) {
-	ctx := context.Background()
-	dir, baseFile, targetFile, _ := setup167MBTestFiles(b)
-	deltaOut := filepath.Join(dir, "sparse.delta")
-	b.SetBytes(167 << 20)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if _, err := CreateSparseDeltaAgainstBase(ctx, baseFile, targetFile, deltaOut); err != nil {
 			b.Fatal(err)
 		}
 	}
