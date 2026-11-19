@@ -546,6 +546,69 @@ class WaitForIdleTest(unittest.TestCase):
                 ["suspend", "delete"],
             )
 
+    def test_cleanup_skips_suspend_for_suspended_or_terminal_actors(self):
+        events: list[tuple[str, str]] = []
+
+        class FakeStub:
+            def __init__(self, _ch):
+                pass
+
+            def ListActors(self, _req, timeout=None):
+                return types.SimpleNamespace(
+                    actors=[
+                        types.SimpleNamespace(
+                            metadata=types.SimpleNamespace(name="running"),
+                            status=types.SimpleNamespace(state=2),
+                        ),
+                        types.SimpleNamespace(
+                            metadata=types.SimpleNamespace(name="suspended"),
+                            status=types.SimpleNamespace(state=4),
+                        ),
+                        types.SimpleNamespace(
+                            metadata=types.SimpleNamespace(name="crashed"),
+                            status=types.SimpleNamespace(state=5),
+                        ),
+                        types.SimpleNamespace(
+                            metadata=types.SimpleNamespace(name="deleting"),
+                            status=types.SimpleNamespace(state=6),
+                        ),
+                    ],
+                    next_page_token="",
+                )
+
+            def SuspendActor(self, req, timeout=None):
+                events.append(("suspend", req.actor.name))
+
+            def DeleteActor(self, req, timeout=None):
+                events.append(("delete", req.actor.name))
+
+        fake_pb2 = types.SimpleNamespace(
+            ACTOR_STATE_RUNNING=2,
+            ACTOR_STATE_SUSPENDED=4,
+            ACTOR_STATE_CRASHED=5,
+            ACTOR_STATE_DELETING=6,
+            ListActorsRequest=types.SimpleNamespace,
+            ListOptions=types.SimpleNamespace,
+            SuspendActorRequest=types.SimpleNamespace,
+            DeleteActorRequest=types.SimpleNamespace,
+            ObjectRef=types.SimpleNamespace,
+        )
+        fake_pb2_grpc = types.SimpleNamespace(ControlStub=FakeStub)
+        with (
+            mock.patch("density_runner.ateapi_channel"),
+            mock.patch.dict(
+                sys.modules,
+                {
+                    "common.ateapi_pb2": fake_pb2,
+                    "common.ateapi_pb2_grpc": fake_pb2_grpc,
+                },
+            ),
+        ):
+            self.assertEqual(density_runner.cleanup_benchmark_actors(), 4)
+        self.assertEqual([op for op, n in events if n == "running"], ["suspend", "delete"])
+        for name in ("suspended", "crashed", "deleting"):
+            self.assertEqual([op for op, n in events if n == name], ["delete"])
+
     def test_cleanup_does_not_import_locust_or_gevent(self):
         locust_dir = str(Path(__file__).resolve().parent.parent)
         code = """

@@ -461,11 +461,21 @@ def cleanup_benchmark_actors(logs: TextIO | None = None) -> int:
     # repo, so importing them at module level would break the unit tests.
     from common import ateapi_pb2, ateapi_pb2_grpc
 
-    # 30s per RPC and 32 threads bound cleanup latency outside Locust's window
-    # so an unresponsive API server surfaces well inside SETTLE_TIMEOUT_S.
+    # Skip SuspendActor when the actor is already suspended or terminal; the
+    # server returns SUSPENDED as-is and rejects CRASHED/DELETING anyway.
+    skip_suspend = {
+        getattr(ateapi_pb2, name, None)
+        for name in (
+            "ACTOR_STATE_SUSPENDED",
+            "ACTOR_STATE_CRASHED",
+            "ACTOR_STATE_DELETING",
+        )
+    } - {None}
+
+    # 30s per RPC and 32 threads bound per-call latency outside Locust's window.
     with ateapi_channel(ATE_API_HOST) as channel:
         stub = ateapi_pb2_grpc.ControlStub(channel)
-        names: list[str] = []
+        actors: list[tuple[str, Any]] = []
         token = ""
         while True:
             resp = stub.ListActors(
@@ -475,24 +485,27 @@ def cleanup_benchmark_actors(logs: TextIO | None = None) -> int:
                 ),
                 timeout=30,
             )
-            names.extend(a.metadata.name for a in resp.actors)
+            actors.extend(
+                (a.metadata.name, getattr(getattr(a, "status", None), "state", None))
+                for a in resp.actors
+            )
             token = resp.next_page_token
             if not token:
                 break
 
-        def suspend_and_delete(name: str) -> str | None:
+        def suspend_and_delete(item: tuple[str, Any]) -> str | None:
+            name, state = item
             ref = ateapi_pb2.ObjectRef(atespace=BENCHMARK_ATESPACE, name=name)
-            # Suspend first, matching agentsession's suspendAndDelete: deleting
-            # an awake actor risks leaving it CRASHED and leaked on the worker.
-            # Already-SUSPENDED actors return as-is; ignore errors (e.g.
-            # CRASHED/DELETING/NOT_FOUND) and still proceed to DeleteActor.
-            try:
-                stub.SuspendActor(
-                    ateapi_pb2.SuspendActorRequest(actor=ref),
-                    timeout=30,
-                )
-            except grpc.RpcError:
-                pass
+            # Suspend active actors first, matching agentsession's suspendAndDelete:
+            # deleting an awake actor risks leaving it CRASHED and leaked on the worker.
+            if state not in skip_suspend:
+                try:
+                    stub.SuspendActor(
+                        ateapi_pb2.SuspendActorRequest(actor=ref),
+                        timeout=30,
+                    )
+                except grpc.RpcError:
+                    pass
             try:
                 stub.DeleteActor(
                     ateapi_pb2.DeleteActorRequest(actor=ref),
@@ -503,15 +516,21 @@ def cleanup_benchmark_actors(logs: TextIO | None = None) -> int:
                     return f"{name}: {e.code()} ({e.details()})"
             return None
 
-        with ThreadPoolExecutor(max_workers=32) as pool:
-            errors = [err for err in pool.map(suspend_and_delete, names) if err]
+        pool = ThreadPoolExecutor(max_workers=32)
+        try:
+            errors = [err for err in pool.map(suspend_and_delete, actors) if err]
+        except BaseException:
+            # Don't block on in-flight 30s RPCs when SIGTERM/SIGINT arrives.
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown(wait=True)
         if errors:
-            msg = f"DeleteActor failed for {len(errors)}/{len(names)} actors (first: {errors[0]})"
+            msg = f"DeleteActor failed for {len(errors)}/{len(actors)} actors (first: {errors[0]})"
             if logs is not None:
                 tee(logs, msg)
             else:
                 print(msg, flush=True)
-        return len(names)
+        return len(actors)
 
 
 def wait_for_idle(check_pods: bool, logs: TextIO) -> bool:
