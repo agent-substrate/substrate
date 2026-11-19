@@ -299,6 +299,7 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 	slot := ""
 	if ra != nil && ra.memSlot != "" {
 		if err := checkSlotSnapshot(checkpointDir, ra); err != nil {
+			s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
 			return 0, err
 		}
 		slot = ra.memSlot
