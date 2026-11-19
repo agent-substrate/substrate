@@ -402,6 +402,34 @@ class ParseAndSweepTest(unittest.TestCase):
             self.assertEqual(rows["density_limit"]["abort_reason"], "received SIGTERM")
             self.assertIn("density_step_0008", rows)
 
+    def test_final_publish_ignores_sigterm_and_uploads_status_last(self):
+        uploaded: list[str] = []
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            dest, work = root / "out", root / "work"
+            work.mkdir()
+            args = _make_args(dest=str(dest), density_step_duration="1m", users=8)
+
+            def recording_upload(src: Path, dst: str) -> None:
+                name = Path(dst).name
+                uploaded.append(name)
+                # Send SIGTERM during the final stats.jsonl upload (second upload).
+                if name == "stats.jsonl" and uploaded.count("stats.jsonl") == 2:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                runner.upload(src, dst)
+
+            with (
+                mock.patch("density_runner.tempfile.mkdtemp", return_value=str(work)),
+                mock.patch("density_runner.run_step", side_effect=lambda _a, u, _d, _l: self._passing_step(u)),
+                mock.patch("density_runner.wait_for_idle", return_value=True),
+            ):
+                density_runner.run_density_sweep(args, recording_upload)
+
+            # Incremental publish: logs.txt, stats.jsonl; final publish: logs.txt, stats.jsonl, status.json.
+            self.assertEqual(uploaded, ["logs.txt", "stats.jsonl", "logs.txt", "stats.jsonl", "status.json"])
+            status = json.loads(next(dest.rglob("status.json")).read_text(encoding="utf-8"))
+            self.assertEqual(status, {"locust_exit_code": 0, "stats_generated": True})
+
     def test_run_step_enforces_child_timeout_and_kills_grandchildren(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

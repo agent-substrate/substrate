@@ -602,7 +602,7 @@ def run_density_sweep(
                 ),
                 encoding="utf-8",
             )
-            to_upload.insert(0, (status_path, "status.json"))
+            to_upload.append((status_path, "status.json"))
 
         ok = True
         for src, basename in to_upload:
@@ -667,6 +667,8 @@ def run_density_sweep(
         abort_reason = f"density runner error: {e}"
         raise
     finally:
+        if on_main_thread:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
         try:
             sweep_ok = summarize_sweep(steps)["max_actors"] >= 1 and abort_reason is None
             upload_ok = publish(final=True)
