@@ -118,7 +118,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 	return store.ListResponse[*ateapi.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Atespace, error) {
+func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.OptionalPrecondition) (*ateapi.Atespace, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning atespace delete: %w", err)

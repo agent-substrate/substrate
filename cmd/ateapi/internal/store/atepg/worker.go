@@ -103,14 +103,14 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return p.updateWorker(ctx, name, store.DeletePreconditions(precondition), mutate, false)
+	return p.updateWorker(ctx, name, store.OptionalPrecondition(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
+func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.OptionalPrecondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
 	return p.updateWorker(ctx, name, precondition, mutate, true)
 }
 
-func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error, markForDeletion bool) (*ateapi.Worker, error) {
+func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.OptionalPrecondition, mutate func(*ateapi.Worker) error, markForDeletion bool) (*ateapi.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		dbWorker, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
@@ -156,7 +156,7 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Worker, error) {
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.OptionalPrecondition) (*ateapi.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		// Locked rather than plainly read so the incarnation precondition was evaluated
 		// against is the one the DELETE removes.

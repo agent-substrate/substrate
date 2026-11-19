@@ -376,7 +376,7 @@ func TestWorkerEvents_OneRowPerTransaction(t *testing.T) {
 			t.Fatalf("UpdateWorker %d failed: %v", i, err)
 		}
 	}
-	if _, err := s.DeleteWorker(ctx, "one-row-worker", store.DeletePreconditions{}); err != nil {
+	if _, err := s.DeleteWorker(ctx, "one-row-worker", store.OptionalPrecondition{}); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 
@@ -1109,7 +1109,7 @@ func TestLocalPublishReachesWatchers(t *testing.T) {
 		t.Error("locally published Worker aliases the caller's returned Worker; it must be a copy")
 	}
 
-	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.OptionalPrecondition{}); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 	ev = nextEvent("delete", store.WorkerEventDeleted)
@@ -1153,7 +1153,7 @@ func TestLocalPublishSurvivesWatchClose(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		if _, err := p.DeleteWorker(ctx, w.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+		if _, err := p.DeleteWorker(ctx, w.GetMetadata().GetName(), store.OptionalPrecondition{}); err != nil {
 			t.Fatalf("DeleteWorker failed: %v", err)
 		}
 		<-done

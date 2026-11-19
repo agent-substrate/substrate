@@ -195,7 +195,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.OptionalPrecondition) (*ateapi.AccessPolicy, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning access policy delete for %s: %w", name, err)

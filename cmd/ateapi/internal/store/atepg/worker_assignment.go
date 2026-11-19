@@ -110,7 +110,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		}
 		// The Actor's version check settles concurrent binds of it: every bind
 		// updates the Actor, so all but the first fail it.
-		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
+		if updated, err = updateActor(ctx, tx, actorRef, store.OptionalPrecondition(precondition), mutate, false); err != nil {
 			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -144,7 +144,7 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 		}
 		// A row released since the caller read the Actor also moved the
 		// Actor on, so its version check fails here.
-		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
+		if updated, err = updateActor(ctx, tx, actorRef, store.OptionalPrecondition(precondition), mutate, false); err != nil {
 			return nil, err
 		}
 		return released, nil

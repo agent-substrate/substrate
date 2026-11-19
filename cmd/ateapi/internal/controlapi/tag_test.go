@@ -325,10 +325,10 @@ func TestUpdateTag_DeleteRecreateRace(t *testing.T) {
 		Interface: persistence,
 		inject: func() {
 			tagRef := resources.TagRef{Atespace: testAtespace, Name: tagName}
-			if _, err := persistence.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{}, nil); err != nil {
+			if _, err := persistence.MarkTagForDeletion(ctx, tagRef, store.OptionalPrecondition{}, nil); err != nil {
 				t.Fatalf("Racing writer: MarkTagForDeletion: %v", err)
 			}
-			if _, err := persistence.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+			if _, err := persistence.DeleteTag(ctx, tagRef, store.OptionalPrecondition{}); err != nil {
 				t.Fatalf("Racing writer: DeleteTag: %v", err)
 			}
 			recreatedTag = storetest.MustCreateTag(t, ctx, persistence, newTestTag(t, tagName, actorTwo))

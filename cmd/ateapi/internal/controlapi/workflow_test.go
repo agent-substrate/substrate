@@ -90,11 +90,11 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "delete marks the actor deleting",
 			seedState: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapi.Actor, _ *ateapi.ActorTemplate) {
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}); err != nil {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.OptionalPrecondition{}); err != nil {
 					t.Fatalf("ensureMarkedDeleting: %v", err)
 				}
 				// A retry finds the actor already marked and writes no second record.
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}); err != nil {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.OptionalPrecondition{}); err != nil {
 					t.Fatalf("retried ensureMarkedDeleting: %v", err)
 				}
 			},
@@ -244,7 +244,7 @@ func TestActorDeletedRecord(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_DELETING)
-	actor, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
+	actor, err := persistence.MarkActorForDeletion(ctx, actorRef, store.OptionalPrecondition{}, nil)
 	if err != nil {
 		t.Fatalf("mark actor: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: stale.GetMetadata().GetVersion()}); apierror.Code(err) != codes.Aborted {
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, store.OptionalPrecondition{Version: stale.GetMetadata().GetVersion()}); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("ensureMarkedDeleting with a stale guard = %v, want ABORTED", err)
 	}
 	if len(*records) != 0 {
