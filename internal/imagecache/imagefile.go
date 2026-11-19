@@ -20,8 +20,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 )
@@ -36,6 +34,11 @@ const maxImageFileSize = 1 << 20
 // missing file wraps fs.ErrNotExist. Symlinks resolve within their own layer;
 // one whose target lives only in a lower layer reads as absent there, and the
 // lookup falls through to the layer below.
+//
+// Store layers record their whiteouts and opaque dirs beside the tree. Other
+// lowerdirs mark whiteouts as overlayfs does. ReadFile sees their whiteout
+// devices, but not their opaque dirs: reading trusted.* xattrs needs
+// CAP_SYS_ADMIN, which atelet drops.
 func (img *Image) ReadFile(name string) ([]byte, error) {
 	rel, skip, err := validateTarName(name)
 	if err != nil {
@@ -44,18 +47,23 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 	if skip {
 		return nil, fmt.Errorf("image file %q: %w", name, fs.ErrInvalid)
 	}
-	for _, layerDir := range slices.Backward(img.LayerDirs) {
-		b, err := readLayerFile(layerDir, rel)
+	lowerDirs := img.LowerDirs()
+	for i := len(lowerDirs) - 1; i >= 0; i-- {
+		b, err := readLayerFile(lowerDirs[i], rel)
 		switch {
 		case err == nil:
 			return b, nil
-		case errors.Is(err, syscall.ENOTDIR):
-			// A non-directory ancestor here shadows the path in every layer below.
+		case errors.Is(err, syscall.ENOTDIR), errors.Is(err, errWhiteout):
+			// A non-directory ancestor or a whiteout here shadows the path in
+			// every layer below.
 			return nil, fmt.Errorf("image file %q: %w", name, fs.ErrNotExist)
 		case !errors.Is(err, fs.ErrNotExist):
 			return nil, fmt.Errorf("image file %q: %w", name, err)
 		}
-		hidden, err := layerHides(layerDir, rel)
+		if i >= len(img.LayerDirs) {
+			continue
+		}
+		hidden, err := layerHides(img.LayerDirs[i], rel)
 		if err != nil {
 			return nil, fmt.Errorf("image file %q: %w", name, err)
 		}
@@ -66,13 +74,19 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 	return nil, fmt.Errorf("image file %q: %w", name, fs.ErrNotExist)
 }
 
-// readLayerFile reads rel from one layer's tree, confined to it.
-func readLayerFile(layerDir, rel string) ([]byte, error) {
-	root, err := os.OpenRoot(filepath.Join(layerDir, layerFSDirName))
+// errWhiteout reports an overlayfs whiteout device at the path.
+var errWhiteout = errors.New("whited out")
+
+// readLayerFile reads rel from one layer's lowerdir, confined to it.
+func readLayerFile(lower, rel string) ([]byte, error) {
+	root, err := os.OpenRoot(lower)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
+	if fi, err := root.Lstat(rel); err == nil && isWhiteout(fi) {
+		return nil, errWhiteout
+	}
 	f, err := root.Open(rel)
 	if err != nil {
 		return nil, err
@@ -86,6 +100,15 @@ func readLayerFile(layerDir, rel string) ([]byte, error) {
 		return nil, fmt.Errorf("larger than %d bytes", maxImageFileSize)
 	}
 	return b, nil
+}
+
+// isWhiteout reports whether fi is an overlayfs whiteout, a 0:0 char device.
+func isWhiteout(fi fs.FileInfo) bool {
+	if fi.Mode()&fs.ModeCharDevice == 0 {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && st.Rdev == 0
 }
 
 // layerHides reports whether the layer's recorded whiteouts or opaque dirs
