@@ -26,7 +26,14 @@ sole owner of SweperfUser load.
 
 import os
 
-if os.environ.get("LOCUST_NO_SWEPERF_USER") != "1":
+
+def workloads(test):
+    """deploy.sh's default workloads, sized from the test's tests.yaml entry."""
+    return [("deploy_sh", test)]
+
+
+# The orchestrator sets LOCUST_NO_USERS=1 to call workloads() without locust.
+if os.environ.get("LOCUST_NO_SWEPERF_USER") != "1" and os.environ.get("LOCUST_NO_USERS") != "1":
     from locust import User, task
     from common.boomer_config import init_boomer_config
 

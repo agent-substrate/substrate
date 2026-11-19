@@ -40,17 +40,6 @@ class SelectTestsTest(unittest.TestCase):
             orchestrator.select_tests(self.TESTS, ["a", "y", "x"])
 
 
-class DeployWorkloadsFakeAteletTest(unittest.TestCase):
-    @mock.patch("orchestrator.run")
-    def test_fake_atelet_tuning_goes_to_deploy_sh(self, run):
-        orchestrator.deploy_workloads(
-            fake_atelet_args=["--fake-atelet-env", "FAKE_ATELET_DELAY=500ms"],
-        )
-        cmd = run.call_args.args[0]
-        i = cmd.index("--fake-atelet-env")
-        self.assertEqual(cmd[i + 1], "FAKE_ATELET_DELAY=500ms")
-
-
 class SubstrateArgsTest(unittest.TestCase):
     def test_ate_args_only(self):
         self.assertEqual(
@@ -122,65 +111,6 @@ class DeploySubstrateTest(unittest.TestCase):
         run_no_check.assert_called_once_with(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
 
 
-class DeployWorkloadsTest(unittest.TestCase):
-    @mock.patch("orchestrator.run")
-    def test_defaults_omit_optional_flags(self, run):
-        orchestrator.deploy_workloads()
-        run.assert_called_once_with(
-            [
-                "benchmarking/workloads/deploy.sh",
-                "--deploy",
-                "--worker-count",
-                "1",
-                "--sandbox-class",
-                "gvisor",
-            ]
-        )
-
-    @mock.patch("orchestrator.run")
-    def test_worker_memory(self, run):
-        orchestrator.deploy_workloads(worker_memory="12Gi")
-        cmd = run.call_args.args[0]
-        i = cmd.index("--worker-memory")
-        self.assertEqual(cmd[i + 1], "12Gi")
-
-    @mock.patch("orchestrator.run")
-    def test_whole_core_actor_cpu_is_a_string(self, run):
-        orchestrator.deploy_workloads(actor_cpu=1)
-        cmd = run.call_args.args[0]
-        i = cmd.index("--actor-cpu")
-        self.assertEqual(cmd[i + 1], "1")
-
-    @mock.patch("orchestrator.run")
-    def test_all_options(self, run):
-        orchestrator.deploy_workloads(
-            worker_count=3,
-            sandbox_class="microvm",
-            actor_memory="1536Mi",
-            wait_timeout_secs=600,
-            worker_memory="5Gi",
-            actor_cpu="250m",
-        )
-        run.assert_called_once_with(
-            [
-                "benchmarking/workloads/deploy.sh",
-                "--deploy",
-                "--worker-count",
-                "3",
-                "--sandbox-class",
-                "microvm",
-                "--actor-memory",
-                "1536Mi",
-                "--actor-cpu",
-                "250m",
-                "--worker-memory",
-                "5Gi",
-                "--wait-timeout",
-                "600",
-            ]
-        )
-
-
 class RunnerSizingTest(unittest.TestCase):
     TMPL = os.path.join(os.path.dirname(__file__), "manifests", "runner-job.yaml.tmpl")
 
@@ -192,19 +122,19 @@ class RunnerSizingTest(unittest.TestCase):
         return job["spec"]["template"]["spec"]["containers"][0]["resources"]
 
     def test_defaults(self):
-        res = self.render({"file": "f", "duration": "1m", "users": 1})
+        res = self.render({"file": "/app/tests/glutton.py", "duration": "1m", "users": 1})
         self.assertEqual(res, {"requests": {"cpu": "500m", "memory": "512Mi"}})
 
     def test_runner_cpu_and_memory(self):
         res = self.render(
-            {"file": "f", "duration": "1m", "users": 1000, "runnerCpu": "4", "runnerMemory": "8Gi"}
+            {"file": "/app/tests/glutton.py", "duration": "1m", "users": 1000, "runnerCpu": "4", "runnerMemory": "8Gi"}
         )
         self.assertEqual(res["requests"], {"cpu": "4", "memory": "8Gi"})
         self.assertNotIn("limits", res)
 
     def test_no_placeholder_survives(self):
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
-        subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
+        subs.update(locust.job_subs({"file": "/app/tests/glutton.py", "duration": "1m", "users": 1}))
         self.assertNotIn("${", orchestrator.render_template(self.TMPL, subs))
 
 
@@ -341,7 +271,7 @@ class RunMetadataTest(unittest.TestCase):
 
         # Caught by validation, before any cluster work.
         test = {"name": "n", "type": "locust", "targetCluster": "t",
-                "file": "f", "duration": "1m", "users": 1,
+                "file": "/app/tests/glutton.py", "duration": "1m", "users": 1,
                 "flags": ["--metadata", "{bad"]}
         with self.assertRaisesRegex(ValueError, "not valid JSON"):
             orchestrator.validate_and_normalize_tests([test])
@@ -349,7 +279,7 @@ class RunMetadataTest(unittest.TestCase):
     def test_metadata_survives_yaml(self):
         md = json.dumps({"cluster_name": "c: d", "q": "\"'"})
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
-        subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
+        subs.update(locust.job_subs({"file": "/app/tests/glutton.py", "duration": "1m", "users": 1}))
         text = orchestrator.render_template(RunnerSizingTest.TMPL, subs, ["--metadata", md])
         job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
         self.assertEqual(job["spec"]["template"]["spec"]["containers"][0]["args"][-1], md)

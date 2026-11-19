@@ -21,8 +21,10 @@ Each module implements the TestType hooks, called in lifecycle order:
                         (nighthawk-ingress requires workerCount).
   build_image(commit)   builds + pushes the runner image; called lazily,
                         once per (target cluster, type).
-  pre_test(test)        after deploy_substrate, before deploy_workloads —
-                        the type's chance to shape the cluster.
+  pre_test(test)        after deploy_substrate, before workloads: the
+                        type's chance to shape the cluster.
+  workloads(test)       installs the workloads the test needs (see
+                        workloads/) and waits until they are ready.
   job_tmpl(manifests_dir)
                         path of the type's own Job template.
   job_subs(test)        the type's ${...} substitutions for it. The test
@@ -48,6 +50,7 @@ class TestType(Protocol):
     def validate(self, test: dict[str, Any]) -> None: ...
     def build_image(self, commit: str) -> str: ...
     def pre_test(self, test: dict[str, Any]) -> None: ...
+    def workloads(self, test: dict[str, Any]) -> None: ...
     def job_tmpl(self, manifests_dir: str) -> str: ...
     def job_subs(self, test: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -62,5 +65,5 @@ TYPES: dict[str, TestType] = {
 # (orchestrator, run-dev.sh, the unit tests) fails at import instead of
 # mid-benchmark.
 for _name, _mod in TYPES.items():
-    for _hook in ("validate", "build_image", "pre_test", "job_tmpl", "job_subs"):
+    for _hook in ("validate", "build_image", "pre_test", "workloads", "job_tmpl", "job_subs"):
         assert hasattr(_mod, _hook), f"test type {_name!r} missing hook {_hook!r}"
