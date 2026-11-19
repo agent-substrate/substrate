@@ -30,6 +30,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -224,10 +225,11 @@ func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
 
 func TestDeleteActorTemplate(t *testing.T) {
 	tests := []struct {
-		name         string
-		actorDeleted bool
-		tagDeleted   bool
-		pendingTag   bool
+		name            string
+		actorDeleted    bool
+		tagDeleted      bool
+		pendingTag      bool
+		completedGolden bool
 		// failPrefix makes object storage fail cleanup for this resource kind.
 		failPrefix            string
 		wantActorAfterFailure bool
@@ -238,6 +240,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 		{name: "golden tag absent", tagDeleted: true},
 		{name: "no golden resources", actorDeleted: true, tagDeleted: true},
 		{name: "incomplete golden tag", pendingTag: true},
+		{name: "actor recreated after golden snapshot completes", completedGolden: true},
 		{name: "actor cleanup failure", failPrefix: "/actors/", wantActorAfterFailure: true},
 		{name: "tag cleanup failure", failPrefix: "/tags/"},
 		{name: "stale guard refused before cleanup", staleGuard: true},
@@ -265,7 +268,17 @@ func TestDeleteActorTemplate(t *testing.T) {
 			})
 			var tag *ateapi.Tag
 			if tt.pendingTag {
-				tag = storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, goldenRef.Name, actor))
+				tagRef := resources.TagRef(goldenRef)
+				snapshot := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
+				var err error
+				tag, err = workflow.ensureTagReserved(ctx, tagRef, actor, snapshot, tagToCreate(goldenRef, goldenRef.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				tag, _, err = workflow.ensureTagSnapshotRecorded(ctx, tag, tmpl, snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
 			} else {
 				var err error
 				tag, err = workflow.TagActorSnapshot(ctx, tagToCreate(goldenRef, goldenRef.Name))
@@ -281,6 +294,25 @@ func TestDeleteActorTemplate(t *testing.T) {
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			})
+			var replacement *ateapi.Actor
+			if tt.completedGolden {
+				reconciler := &ActorTemplateReconciler{persistence: persistence, control: svc}
+				if err := reconciler.saveGoldenTag(ctx, tmpl, goldenRef.ToObjectRef()); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				tmpl, err = persistence.GetActorTemplate(ctx, templateRef)
+				if err != nil {
+					t.Fatal(err)
+				}
+				replacement, err = svc.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+					Metadata:      &ateapi.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
+					ActorTemplate: templateRef.ToObjectRef(),
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tt.actorDeleted {
 				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
 					t.Fatal(err)
@@ -363,7 +395,15 @@ func TestDeleteActorTemplate(t *testing.T) {
 			if _, err := persistence.GetActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("GetActorTemplate after delete = %v, want NotFound", err)
 			}
-			if _, err := persistence.GetActor(ctx, goldenRef); !errors.Is(err, store.ErrNotFound) {
+			gotActor, err := persistence.GetActor(ctx, goldenRef)
+			if replacement != nil {
+				if err != nil {
+					t.Fatalf("replacement actor after template deletion: %v", err)
+				}
+				if diff := cmp.Diff(replacement, gotActor, protocmp.Transform()); diff != "" {
+					t.Errorf("replacement actor changed (-want +got):\n%s", diff)
+				}
+			} else if !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("GetActor after delete = %v, want NotFound", err)
 			}
 			if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
@@ -376,6 +416,245 @@ func TestDeleteActorTemplate(t *testing.T) {
 			}
 			if _, err := svc.DeleteActorTemplate(ctx, req); apierror.Code(err) != codes.NotFound {
 				t.Fatalf("delete missing template = %v, want NotFound", err)
+			}
+		})
+	}
+}
+
+func TestDeleteActorTemplatePreservesUnrelatedResources(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		disabled      bool
+		sameTemplate  bool
+		otherAtespace bool
+	}{
+		{name: "disabled golden snapshots", disabled: true},
+		{name: "disabled golden snapshots with matching template", disabled: true, sameTemplate: true},
+		{name: "another template"},
+		{name: "another actor from the same template", sameTemplate: true},
+		{name: "same template name in another atespace", otherAtespace: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			workflow, objects := newFinalizeWorkflow(persistence)
+			workflow.clusterSnapshotLocation = testStorageLocation
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = testStorageLocation
+			svc := &RPCService{impl: impl, actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
+			mode := ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED
+			if tt.disabled {
+				mode = ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED
+			}
+			template, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "team-a", Name: "target"}
+				tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: mode}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actorTemplate := template
+			if !tt.sameTemplate {
+				atespace, name := "team-a", "other"
+				if tt.otherAtespace {
+					atespace, name = "team-b", template.GetMetadata().GetName()
+					storetest.MustCreateAtespace(t, ctx, persistence, atespace)
+				}
+				actorTemplate, err = svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+					tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: atespace, Name: name}
+					tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+				})})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			actorName := template.GetMetadata().GetUid()
+			if tt.sameTemplate && !tt.disabled {
+				actorName = "ordinary-actor"
+			}
+			actor, err := svc.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: actorName},
+				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(actorTemplate).ToObjectRef(),
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actorRef := resources.ActorRefFromActor(actor)
+			actorURI, err := resources.NewActorSnapshotURI(testStorageLocation, actorRef.Atespace, actor.GetMetadata().GetUid(), "snapshot")
+			if err != nil {
+				t.Fatal(err)
+			}
+			objects.PutSnapshot(t, actorURI, "manifest.json")
+			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+				s.LastAssignedGeneration = 1
+				s.Snapshots = []*ateapi.Snapshot{newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, actorTemplate.GetMetadata().GetUid(), actorURI.Name(), actorURI.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)}
+			})
+			tagRequest := tagToCreate(actorRef, template.GetMetadata().GetUid())
+			tagRequest.Metadata.Atespace = actorRef.Atespace
+			tag, err := svc.CreateTag(ctx, &ateapi.CreateTagRequest{Tag: tagRequest})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tagURI := mustReservedTagSnapshotURI(t, tag)
+			if _, err := svc.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(template).ToObjectRef()}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template)); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetActorTemplate after deletion = %v, want NotFound", err)
+			}
+			retainedActor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Errorf("unrelated actor after template deletion: %v", err)
+			} else if diff := cmp.Diff(actor, retainedActor, protocmp.Transform()); diff != "" {
+				t.Errorf("unrelated actor changed (-want +got):\n%s", diff)
+			}
+			retainedTag, err := persistence.GetTag(ctx, resources.TagRefFromTag(tag))
+			if err != nil {
+				t.Errorf("unrelated tag after template deletion: %v", err)
+			} else if diff := cmp.Diff(tag, retainedTag, protocmp.Transform()); diff != "" {
+				t.Errorf("unrelated tag changed (-want +got):\n%s", diff)
+			}
+			for _, uri := range []resources.SnapshotURI{actorURI, tagURI} {
+				if got := objects.Snapshot(t, uri); len(got) == 0 {
+					t.Errorf("unrelated snapshot %s was collected", uri)
+				}
+			}
+		})
+	}
+}
+
+func TestDeleteActorTemplateResourcesChangedBeforeCleanup(t *testing.T) {
+	for _, name := range []string{"actor repointed", "actor replaced", "tag replaced"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			workflow, objects := newFinalizeWorkflow(persistence)
+			workflow.clusterSnapshotLocation = testStorageLocation
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = testStorageLocation
+			svc := &RPCService{impl: impl, actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
+			createTemplate := func(name string) *ateapi.ActorTemplate {
+				t.Helper()
+				tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+					tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "team-a", Name: name}
+				})})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return tmpl
+			}
+			createActor := func(tmpl *ateapi.ActorTemplate, name string) *ateapi.Actor {
+				t.Helper()
+				actor, err := svc.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+					Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: name},
+					ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				uri, err := resources.NewActorSnapshotURI(testStorageLocation, "team-a", actor.GetMetadata().GetUid(), "snapshot")
+				if err != nil {
+					t.Fatal(err)
+				}
+				objects.PutSnapshot(t, uri, "manifest.json")
+				return mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+					s.LastAssignedGeneration = 1
+					s.Snapshots = []*ateapi.Snapshot{newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)}
+				})
+			}
+			tmpl, other := createTemplate("target"), createTemplate("other")
+			goldenName := tmpl.GetMetadata().GetUid()
+			actor := createActor(tmpl, goldenName)
+			actorRef := resources.ActorRefFromActor(actor)
+			createTag := func(source *ateapi.Actor) *ateapi.Tag {
+				t.Helper()
+				req := tagToCreate(resources.ActorRefFromActor(source), goldenName)
+				req.Metadata.Atespace = "team-a"
+				tag, err := svc.CreateTag(ctx, &ateapi.CreateTagRequest{Tag: req})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return tag
+			}
+			var retainedActor *ateapi.Actor
+			var retainedTag *ateapi.Tag
+			hooked := &hookedStore{Interface: persistence, beforeLeaseKey: actorLeaseKey(actorRef)}
+			switch name {
+			case "actor repointed":
+				hooked.beforeLease = func() {
+					var err error
+					retainedActor, err = svc.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
+						Metadata:      proto.CloneOf(actor.GetMetadata()),
+						ActorTemplate: resources.ActorTemplateRefFromActorTemplate(other).ToObjectRef(),
+					}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if retainedActor.GetMetadata().GetUid() != actor.GetMetadata().GetUid() || retainedActor.GetMetadata().GetVersion() == actor.GetMetadata().GetVersion() {
+						t.Fatal("repoint must preserve the UID and change the version")
+					}
+				}
+			case "actor replaced":
+				hooked.beforeLease = func() {
+					if _, err := svc.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+						t.Fatal(err)
+					}
+					retainedActor = createActor(other, goldenName)
+					if retainedActor.GetMetadata().GetUid() == actor.GetMetadata().GetUid() || retainedActor.GetMetadata().GetVersion() != actor.GetMetadata().GetVersion() {
+						t.Fatal("replacement must change the UID at the same version")
+					}
+				}
+			case "tag replaced":
+				tag := createTag(actor)
+				tagRef := resources.TagRefFromTag(tag)
+				retainedActor = createActor(other, "other-actor")
+				hooked.beforeLeaseKey = "lease:tag:" + tagRef.Atespace + ":" + tagRef.Name
+				hooked.beforeLease = func() {
+					if _, err := svc.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
+						t.Fatal(err)
+					}
+					retainedTag = createTag(retainedActor)
+					if retainedTag.GetMetadata().GetUid() == tag.GetMetadata().GetUid() || retainedTag.GetMetadata().GetVersion() != tag.GetMetadata().GetVersion() {
+						t.Fatal("replacement must change the UID at the same version")
+					}
+				}
+			}
+			workflow.store = hooked
+			req := &ateapi.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
+			for _, wantCode := range []codes.Code{codes.Aborted, codes.OK} {
+				if _, err := svc.DeleteActorTemplate(ctx, req); apierror.Code(err) != wantCode {
+					t.Errorf("DeleteActorTemplate = %v, want code %v", err, wantCode)
+				}
+				if hooked.beforeLease != nil || retainedActor == nil {
+					t.Fatal("cleanup did not reach the resource lease")
+				}
+				got, err := persistence.GetActor(ctx, resources.ActorRefFromActor(retainedActor))
+				if err != nil {
+					t.Errorf("retained actor: %v", err)
+				} else if diff := cmp.Diff(retainedActor, got, protocmp.Transform()); diff != "" {
+					t.Errorf("retained actor changed (-want +got):\n%s", diff)
+				}
+				if retainedTag != nil {
+					got, err := persistence.GetTag(ctx, resources.TagRefFromTag(retainedTag))
+					if err != nil {
+						t.Errorf("retained tag: %v", err)
+					} else if diff := cmp.Diff(retainedTag, got, protocmp.Transform()); diff != "" {
+						t.Errorf("retained tag changed (-want +got):\n%s", diff)
+					}
+					if len(objects.Snapshot(t, mustReservedTagSnapshotURI(t, retainedTag))) == 0 {
+						t.Error("retained tag snapshot was collected")
+					}
+				}
+				uri, err := resources.NewActorSnapshotURI(testStorageLocation, "team-a", retainedActor.GetMetadata().GetUid(), "snapshot")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(objects.Snapshot(t, uri)) == 0 {
+					t.Error("retained actor snapshot was collected")
+				}
+			}
+			if _, err := persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl)); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("template after retry = %v, want NotFound", err)
 			}
 		})
 	}

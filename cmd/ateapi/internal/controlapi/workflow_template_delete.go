@@ -45,12 +45,17 @@ func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef res
 		return nil, err
 	}
 
+	// Disabled templates never create golden resources.
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+		return w.finalizeTemplateDeleted(ctx, tmpl)
+	}
+
 	// Both are named after the template's UID, in the template's atespace.
 	goldenName := tmpl.GetMetadata().GetUid()
-	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: templateRef.Atespace, Name: goldenName}); err != nil {
+	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: templateRef.Atespace, Name: goldenName}, tmpl); err != nil {
 		return nil, err
 	}
-	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: templateRef.Atespace, Name: goldenName}); err != nil {
+	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: templateRef.Atespace, Name: goldenName}, tmpl); err != nil {
 		return nil, err
 	}
 	return w.finalizeTemplateDeleted(ctx, tmpl)
@@ -93,11 +98,31 @@ func (w *ActorWorkflow) ensureTemplateMarkedForDeletion(ctx context.Context, tem
 // ensureGoldenActorDeleted removes the template's golden actor, whatever state
 // it is in. Absent is the ordinary case for a template whose golden snapshot
 // never finished.
-func (w *ActorWorkflow) ensureGoldenActorDeleted(ctx context.Context, goldenRef resources.ActorRef) (err error) {
+func (w *ActorWorkflow) ensureGoldenActorDeleted(ctx context.Context, goldenRef resources.ActorRef, tmpl *ateapi.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DeleteGoldenActor")
 	defer func() { err = done(err) }()
 
-	if _, err := w.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
+	// Recording the golden tag follows deletion of the temporary actor.
+	if tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil {
+		markSkipped(ctx, "golden actor already deleted")
+		return nil
+	}
+
+	actor, err := w.store.GetActor(ctx, goldenRef)
+	if errors.Is(err, store.ErrNotFound) {
+		markSkipped(ctx, "golden actor already deleted")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while getting golden actor: %w", err)
+	}
+	if resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate()) != resources.ActorTemplateRefFromActorTemplate(tmpl) {
+		markSkipped(ctx, "actor belongs to another template")
+		return nil
+	}
+	// The actor may be replaced or repointed before its lease is acquired.
+	precondition := store.DeletePreconditions(store.PreconditionFrom(actor))
+	if _, err := w.DeleteActor(ctx, goldenRef, precondition); err != nil {
 		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden actor already deleted")
 			return nil
@@ -109,11 +134,25 @@ func (w *ActorWorkflow) ensureGoldenActorDeleted(ctx context.Context, goldenRef 
 
 // ensureGoldenTagDeleted removes the template's golden tag and the snapshot it
 // holds.
-func (w *ActorWorkflow) ensureGoldenTagDeleted(ctx context.Context, goldenTagRef resources.TagRef) (err error) {
+func (w *ActorWorkflow) ensureGoldenTagDeleted(ctx context.Context, goldenTagRef resources.TagRef, tmpl *ateapi.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DeleteGoldenTag")
 	defer func() { err = done(err) }()
 
-	if _, err := w.DeleteTag(ctx, goldenTagRef, store.DeletePreconditions{}); err != nil {
+	tag, err := w.store.GetTag(ctx, goldenTagRef)
+	if errors.Is(err, store.ErrNotFound) {
+		markSkipped(ctx, "golden tag already deleted")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while getting golden tag: %w", err)
+	}
+	goldenActorRef := resources.ActorRef(goldenTagRef)
+	if tag.GetStatus().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() || resources.ActorRefFromObjectRef(tag.GetSourceActor()) != goldenActorRef {
+		markSkipped(ctx, "tag belongs to another actor or template")
+		return nil
+	}
+	precondition := store.DeletePreconditions(store.PreconditionFrom(tag))
+	if _, err := w.DeleteTag(ctx, goldenTagRef, precondition); err != nil {
 		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden tag already deleted")
 			return nil

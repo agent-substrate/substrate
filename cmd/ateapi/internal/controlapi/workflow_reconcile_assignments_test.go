@@ -264,6 +264,7 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 type hookedStore struct {
 	store.Interface
 	beforeLease        func()
+	beforeLeaseKey     string
 	beforeUpdateWorker func()
 }
 
@@ -276,7 +277,9 @@ func runOnce(hook *func()) {
 }
 
 func (s *hookedStore) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
-	runOnce(&s.beforeLease)
+	if s.beforeLeaseKey == "" || s.beforeLeaseKey == key {
+		runOnce(&s.beforeLease)
+	}
 	return s.Interface.AcquireLease(ctx, key)
 }
 
