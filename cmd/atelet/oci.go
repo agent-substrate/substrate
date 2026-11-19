@@ -67,7 +67,10 @@ type imageSource struct {
 	// provider is nil when --image-provider-socket is empty.
 	provider providerclient.Client
 	// keychain resolves the registry credentials the provider gets.
-	keychain    authn.Keychain
+	keychain authn.Keychain
+	// authModes records what the provider reports in auth_refresh for each
+	// lease.
+	authModes   *providerAuthModes
 	instruments *Instruments
 }
 
@@ -132,6 +135,7 @@ func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imageca
 		s.release(ctx, leaseID, res.ImageDigest)
 		return nil, err
 	}
+	s.authModes.set(leaseID, res.AuthRefresh)
 	return img, nil
 }
 
@@ -154,6 +158,7 @@ func streamedImage(res *providerclient.PrepareResult, leaseID string) (*imagecac
 // release drops the provider lease leaseID on the image with digest. A failed
 // release is logged.
 func (s imageSource) release(ctx context.Context, leaseID, digest string) {
+	s.authModes.forget(leaseID)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerReleaseTimeout)
 	defer cancel()
 	if err := s.provider.ReleaseImage(ctx, &providerclient.ReleaseRequest{LeaseID: leaseID, ImageDigest: digest}); err != nil {
