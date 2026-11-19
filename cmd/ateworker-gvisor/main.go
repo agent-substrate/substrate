@@ -291,8 +291,10 @@ func do(ctx context.Context) error {
 	)
 	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
+	var sandboxRuntimes register.SandboxRuntimes
 	readiness := &serverboot.Readiness{}
 	readiness.AddCheck("registered", ateworkerService.epoch.Registered)
+	readiness.AddCheck("sandbox-runtimes", sandboxRuntimes.Reported)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
 	// grace period) and propagate it into the sandbox so the actor can save its
@@ -333,7 +335,7 @@ func do(ctx context.Context) error {
 		ateworkerService.crashReporter = reporter
 	}
 	go func() {
-		err := register.Report(ctx, reportConfig, &ateworkerService.epoch)
+		err := register.Report(ctx, reportConfig, &ateworkerService.epoch, &sandboxRuntimes)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -395,7 +397,7 @@ type AteWorkerService struct {
 	shuttingDown atomic.Bool
 
 	// epoch is the epoch this process registered with. It starts no workload
-	// before reporting its sandbox runtimes.
+	// before registering.
 	epoch register.Epoch
 
 	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
