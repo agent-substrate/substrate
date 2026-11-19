@@ -262,3 +262,32 @@ func TestEgressManifestsConnectAccessLogIncludesProtocol(t *testing.T) {
 		}
 	}
 }
+
+// Envoy's default circuit breakers allow 1024 connections, pending requests
+// and requests per cluster, shared by all traffic on the replica. Each dynamic
+// forward proxy cluster carries long-lived streams or tunnels, so each sets
+// its own circuit breaker limits above Envoy's defaults.
+func TestEgressManifestsForwardProxiesRaiseCircuitBreakers(t *testing.T) {
+	t.Parallel()
+	var checked int
+	for _, c := range clusters(bootstrapTree(t)) {
+		if str(child(c, "cluster_type"), "name") != dfpClusterType {
+			continue
+		}
+		checked++
+		name := str(c, "name")
+		thresholds := list(child(c, "circuit_breakers"), "thresholds")
+		if len(thresholds) == 0 {
+			t.Errorf("cluster %q sets no circuit_breakers, so Envoy's default of 1024 applies", name)
+			continue
+		}
+		for _, key := range []string{"max_connections", "max_pending_requests", "max_requests"} {
+			if n, _ := thresholds[0][key].(float64); n <= 1024 {
+				t.Errorf("cluster %q circuit_breakers %s = %v, want more than Envoy's default of 1024", name, key, thresholds[0][key])
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no dynamic forward proxy cluster; the manifest changed shape and this test is checking nothing")
+	}
+}
