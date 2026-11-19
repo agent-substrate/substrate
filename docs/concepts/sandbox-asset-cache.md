@@ -36,7 +36,7 @@ cannot cross mounts.
 | `workers/<pod uid>/sandbox-runtimes.json` | What each worker advertises to the control plane, written by `atelet`. |
 | `workers/<pod uid>/default-runtime/<hash>/` | The worker's default runtimes, one directory per default its file advertises, by bundle hash, one per sandbox class, linked in from the cache by the prewarmer. These links are what keeps a default runtime cached while no actor runs it; the syncer removes a directory when the file stops naming its runtime, and they all go with the worker's directory when the pod does. |
 | `sandbox-asset-scratch/` | Short-lived destinations for fetches that have no actor and no worker directory to link into: the assets the worker sandbox syncer stages when checking a version (and probes `runsc` for CPU features). Wiped at startup. |
-| `sandbox-runtime-index.json` | The runtime index serialized: every runtime a worker on this node has advertised, by hash, with the asset record the hash was computed from. |
+| `sandbox-runtime-index.json` | The runtime index serialized: every runtime a worker on this node has advertised, by hash, with the asset record the hash was computed from. A spec that names the same assets at other URLs replaces the record. |
 | `cache-boot-id` | The node's boot ID when `atelet` last started. A different ID at startup means the node rebooted, so `atelet` empties the cache first. |
 
 A cache entry is keyed by the asset's sha256, so the same binaries under
