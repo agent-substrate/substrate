@@ -138,14 +138,14 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	if len(got) != 1 || got[0].Name != "agent" {
 		t.Fatalf("resolveImageVolumes = %+v, want one entry named %q", got, "agent")
 	}
-	if len(got[0].Layers) != 1 {
-		t.Errorf("layers = %v, want 1", got[0].Layers)
+	if len(got[0].StoreLayers) != 1 {
+		t.Errorf("layers = %v, want 1", got[0].StoreLayers)
 	}
 	if !strings.HasPrefix(got[0].ImageDigest, "sha256:") {
 		t.Errorf("image digest = %q, want a sha256 digest", got[0].ImageDigest)
 	}
 	// The returned path is a layer directory; the binary lives under its fs/ subtree.
-	if _, err := os.Stat(filepath.Join(got[0].Layers[0], "fs", "payload-binary")); err != nil {
+	if _, err := os.Stat(filepath.Join(got[0].StoreLayers[0], "fs", "payload-binary")); err != nil {
 		t.Errorf("recorded path is not a layer directory: %v", err)
 	}
 }
@@ -169,11 +169,11 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
-	if len(got) != 1 || len(got[0].Layers) != 2 {
+	if len(got) != 1 || len(got[0].StoreLayers) != 2 {
 		t.Fatalf("resolveImageVolumes = %+v, want one entry with 2 layers", got)
 	}
 	for i, want := range []string{"base", "payload-binary"} {
-		if _, err := os.Stat(filepath.Join(got[0].Layers[i], "fs", want)); err != nil {
+		if _, err := os.Stat(filepath.Join(got[0].StoreLayers[i], "fs", want)); err != nil {
 			t.Errorf("layer %d does not hold %q: %v", i, want, err)
 		}
 	}
