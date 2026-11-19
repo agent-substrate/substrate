@@ -173,7 +173,7 @@ func TestEvictUnusedRootSet(t *testing.T) {
 	if err := os.MkdirAll(bundle1, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSpec(bundle1, &OverlaySpec{ImageDigest: imgRooted.Digest.String(), Layers: imgRooted.LayerDirs}); err != nil {
+	if err := WriteSpec(bundle1, &OverlaySpec{ImageDigest: imgRooted.Digest.String(), StoreLayers: imgRooted.LayerDirs}); err != nil {
 		t.Fatal(err)
 	}
 	// A digestless (pre-ImageDigest) spec roots only imgLayerRooted's layers.
@@ -181,7 +181,7 @@ func TestEvictUnusedRootSet(t *testing.T) {
 	if err := os.MkdirAll(bundle2, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSpec(bundle2, &OverlaySpec{Layers: imgLayerRooted.LayerDirs}); err != nil {
+	if err := WriteSpec(bundle2, &OverlaySpec{StoreLayers: imgLayerRooted.LayerDirs}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,11 +256,11 @@ func TestEvictUnusedRootSetImageVolumes(t *testing.T) {
 	}
 	if err := WriteSpec(bundle, &OverlaySpec{
 		ImageDigest: imgRootfs.Digest.String(),
-		Layers:      imgRootfs.LayerDirs,
+		StoreLayers: imgRootfs.LayerDirs,
 		ImageVolumes: []ImageVolumeOverlay{{
 			Name:        "agent",
 			ImageDigest: imgVolume.Digest.String(),
-			Layers:      imgVolume.LayerDirs,
+			StoreLayers: imgVolume.LayerDirs,
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -378,7 +378,7 @@ func TestEvictUnusedSkipsPassOnUnreadableRoots(t *testing.T) {
 			if err := os.MkdirAll(bundleDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := WriteSpec(bundleDir, &OverlaySpec{ImageDigest: img.Digest.String(), Layers: img.LayerDirs}); err != nil {
+			if err := WriteSpec(bundleDir, &OverlaySpec{ImageDigest: img.Digest.String(), StoreLayers: img.LayerDirs}); err != nil {
 				t.Fatal(err)
 			}
 			backdateStore(t, store, 3*time.Hour)

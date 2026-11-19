@@ -55,14 +55,18 @@ type OverlaySpec struct {
 	// can report the image provider plugin's lease for it after a restart.
 	// Optional: older specs lack it.
 	ImageRef string `json:"imageRef,omitempty"`
-	// LeaseID is the image provider plugin's lease on Layers, which atelet
-	// releases on checkpoint and terminate. When it is empty, Layers are
-	// unpacked layers in the local Store.
+	// LeaseID is the image provider plugin's lease on LowerDirs, which atelet
+	// releases on checkpoint and terminate.
 	LeaseID string `json:"leaseID,omitempty"`
-	// Layers are the cached layer directories (each holding its tree under
-	// fs/), bottom-most layer first — the order the image manifest lists
-	// them. Consumers reverse this into overlayfs's top-first lowerdir.
-	Layers []string `json:"layers"`
+	// LowerDirs are the image's overlayfs lowerdirs, bottom-most layer first,
+	// the order the image manifest lists them. Consumers reverse this into
+	// overlayfs's top-first lowerdir and use each as it is.
+	LowerDirs []string `json:"lowerDirs,omitempty"`
+	// StoreLayers are the Store layer directories behind LowerDirs, one per
+	// lowerdir, when the image came from the Store. Each holds its tree under
+	// fs/. The consumer prepares them: it materializes their recorded
+	// whiteouts before mounting and repairs implicit dirs after.
+	StoreLayers []string `json:"layers,omitempty"`
 	// ExtraDirs are absolute in-rootfs directories the consumer creates after
 	// mounting (they land in the actor's private upper): bind-mount targets
 	// that must exist for the runtime to attach them, e.g. the actor identity
@@ -83,12 +87,81 @@ type ImageVolumeOverlay struct {
 	// same form and for the same reason as OverlaySpec.ImageDigest: the GC's
 	// root-set scan protects an image by digest.
 	ImageDigest string `json:"imageDigest,omitempty"`
-	// ImageRef and LeaseID mean what they do in OverlaySpec, for the
-	// volume's image.
-	ImageRef string `json:"imageRef,omitempty"`
-	LeaseID  string `json:"leaseID,omitempty"`
-	// Layers are the cached layer directories, bottom-most first.
-	Layers []string `json:"layers"`
+	// ImageRef, LeaseID, LowerDirs and StoreLayers mean what they do in
+	// OverlaySpec, for the volume's image.
+	ImageRef    string   `json:"imageRef,omitempty"`
+	LeaseID     string   `json:"leaseID,omitempty"`
+	LowerDirs   []string `json:"lowerDirs,omitempty"`
+	StoreLayers []string `json:"layers,omitempty"`
+}
+
+// Spec versions. On disk, an image records either its Store layers or, when
+// it has none, its lowerDirs. A Store layer's lowerdir is its fs/ tree.
+// Version 1 has no lowerDirs. Version 2 has an image with lowerDirs, such as
+// one the image provider plugin prepared. WriteSpec writes version 1 when it
+// can, so a worker that knows only version 1 keeps working with Store images.
+const (
+	specVersionStore     = 1
+	specVersionLowerDirs = 2
+)
+
+// storeLowerDirs returns the lowerdirs of Store layers: their fs/ trees.
+func storeLowerDirs(storeLayers []string) []string {
+	if storeLayers == nil {
+		return nil
+	}
+	lowers := make([]string, len(storeLayers))
+	for i, l := range storeLayers {
+		lowers[i] = filepath.Join(l, layerFSDirName)
+	}
+	return lowers
+}
+
+// encoded returns spec as WriteSpec stores it, without the lowerdirs that
+// Store layers imply.
+func (s OverlaySpec) encoded() OverlaySpec {
+	s.Version = specVersionStore
+	encode := func(lowerDirs *[]string, storeLayers []string) {
+		if len(storeLayers) > 0 {
+			*lowerDirs = nil
+		} else if len(*lowerDirs) > 0 {
+			s.Version = specVersionLowerDirs
+		}
+	}
+	encode(&s.LowerDirs, s.StoreLayers)
+	s.ImageVolumes = slices.Clone(s.ImageVolumes)
+	for i := range s.ImageVolumes {
+		encode(&s.ImageVolumes[i].LowerDirs, s.ImageVolumes[i].StoreLayers)
+	}
+	return s
+}
+
+// decoded fills in the lowerdirs of the spec's Store images.
+func (s *OverlaySpec) decoded() error {
+	if s.Version != specVersionStore && s.Version != specVersionLowerDirs {
+		return fmt.Errorf("version %d, want %d or %d", s.Version, specVersionStore, specVersionLowerDirs)
+	}
+	decode := func(name string, lowerDirs *[]string, storeLayers []string) error {
+		switch {
+		case len(storeLayers) > 0 && len(*lowerDirs) > 0:
+			return fmt.Errorf("%s has both Store layers and lowerDirs", name)
+		case len(*lowerDirs) > 0 && s.Version == specVersionStore:
+			return fmt.Errorf("%s has lowerDirs in a version %d spec", name, specVersionStore)
+		case len(storeLayers) > 0:
+			*lowerDirs = storeLowerDirs(storeLayers)
+		}
+		return nil
+	}
+	if err := decode("rootfs", &s.LowerDirs, s.StoreLayers); err != nil {
+		return err
+	}
+	for i := range s.ImageVolumes {
+		v := &s.ImageVolumes[i]
+		if err := decode("image volume "+v.Name, &v.LowerDirs, v.StoreLayers); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WriteSpec writes spec into the bundle at bundlePath.
@@ -98,8 +171,9 @@ type ImageVolumeOverlay struct {
 // could parse with layers missing and leave them eligible for eviction
 // while the actor is using them.
 func WriteSpec(bundlePath string, spec *OverlaySpec) error {
-	spec.Version = 1
-	b, err := json.MarshalIndent(spec, "", "  ")
+	enc := spec.encoded()
+	spec.Version = enc.Version
+	b, err := json.MarshalIndent(enc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while encoding overlay spec: %w", err)
 	}
@@ -139,15 +213,14 @@ func ReadSpec(bundlePath string) (*OverlaySpec, error) {
 	if err := json.Unmarshal(b, &spec); err != nil {
 		return nil, fmt.Errorf("while decoding overlay spec: %w", err)
 	}
-	if spec.Version != 1 {
-		return nil, fmt.Errorf("overlay spec %q has version %d, want 1", filepath.Join(bundlePath, OverlaySpecFileName), spec.Version)
+	if err := spec.decoded(); err != nil {
+		return nil, fmt.Errorf("overlay spec %q: %w", filepath.Join(bundlePath, OverlaySpecFileName), err)
 	}
 	return &spec, nil
 }
 
-// overlayLowerDirs returns the overlayfs lowerdir paths for the spec's
-// layers: top-most layer first (the reverse of the spec's bottom-first
-// order), each pointing at the layer's fs/ tree.
+// overlayLowerDirs returns an image's lowerdirs top-most first, the reverse
+// of the spec's bottom-first order.
 //
 // An image may legitimately list the same layer at several positions
 // (repeated identical build steps produce identical diffids; real images
@@ -159,11 +232,10 @@ func ReadSpec(bundlePath string) (*OverlaySpec, error) {
 //
 // Each path is handed to the kernel in its own fsconfig(2) "lowerdir+" call,
 // so no separator escaping or aggregate option-string length cap applies.
-func overlayLowerDirs(layers []string) []string {
-	lowers := make([]string, 0, len(layers))
-	seen := make(map[string]bool, len(layers))
-	for _, layer := range slices.Backward(layers) {
-		p := filepath.Join(layer, layerFSDirName)
+func overlayLowerDirs(lowerDirs []string) []string {
+	lowers := make([]string, 0, len(lowerDirs))
+	seen := make(map[string]bool, len(lowerDirs))
+	for _, p := range slices.Backward(lowerDirs) {
 		if seen[p] {
 			continue
 		}
