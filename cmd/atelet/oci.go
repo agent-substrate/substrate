@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.opentelemetry.io/otel"
@@ -57,9 +58,10 @@ const (
 // an image, which is not a failure of the plugin.
 var errProviderDeclined = errors.New("the image provider plugin declined the image")
 
-// imageSource resolves container and volume images. It asks the image provider
-// plugin first when one is configured, and pulls into the image cache when the
-// plugin declines or fails.
+// imageSource resolves container and volume images. With the
+// ImageProviderPlugin preview gate on, it asks the image provider plugin first
+// when one is configured, and pulls into the image cache when the plugin
+// declines or fails. With the gate off, it only pulls into the image cache.
 type imageSource struct {
 	cache *imagecache.Store
 	// provider is nil when --image-provider-socket is empty.
@@ -73,7 +75,7 @@ type imageSource struct {
 // it. If the provider prepares the image, it does so under the lease leaseID,
 // and the Image's LeaseID is set. The caller releases the lease with release.
 func (s imageSource) ensure(ctx context.Context, ref, leaseID string) (*imagecache.Image, error) {
-	if s.provider == nil {
+	if s.provider == nil || !preview.IsEnabled(preview.GateImageProviderPlugin) {
 		return s.cache.EnsureImage(ctx, ref)
 	}
 	if img, err := s.cache.CachedImage(ctx, ref); err != nil || img != nil {
