@@ -469,9 +469,9 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, uid string,
 // joins one still in flight.
 const probeFetchTimeout = 10 * time.Minute
 
-// cpuFeaturesTimeout bounds one `runsc cpu-features` run, which takes
-// milliseconds. A runsc that hangs would hold a sync worker. A var so tests
-// can shorten it.
+// cpuFeaturesTimeout bounds one `runsc cpu-features --bitmask` run, which
+// takes milliseconds. A runsc that hangs would hold a sync worker. A var so
+// tests can shorten it.
 var cpuFeaturesTimeout = 30 * time.Second
 
 // runRunscCPUFeatures executes `<runscPath> cpu-features --bitmask` and

@@ -41,6 +41,7 @@ func TestEncodeCPUFeatureMask(t *testing.T) {
 		{"0x00000003,0x00000000,0x00000000", "3"}, // trailing zero blocks
 		{"0x00000001,0x00000000,0x00000020", "20" + strings.Repeat("0", 15) + "1"}, // bits 0 and 69: a word boundary crossed
 		{strings.Repeat("0x00000000,", featureMaskWords*2-1) + "0x80000000", "8" + strings.Repeat("0", featureMaskWords*16-1)},
+		{strings.Repeat("0x00000000,", featureMaskWords*2) + "0x00000000", "0"}, // trailing zero block past featureMaskWords*2 blocks
 	} {
 		if got, err := EncodeCPUFeatureMask(tc.blocks); err != nil || got != tc.want {
 			t.Errorf("EncodeCPUFeatureMask(%q) = (%q, %v), want (%q, nil)", tc.blocks, got, err, tc.want)

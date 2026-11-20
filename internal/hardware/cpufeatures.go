@@ -89,13 +89,11 @@ func parseFeatureMask(s string) (featureMask, bool) {
 // EncodeCPUFeatureMask encodes the blocks `runsc cpu-features --bitmask`
 // prints as a cpu_features value: one "0x%08x" uint32 per 32 features,
 // lowest first, as many as the binary's newest feature needs, so trailing
-// zero blocks change nothing. More blocks than featureMask holds is an error.
+// zero blocks change nothing. A non-zero bit past what featureMask holds is an
+// error.
 func EncodeCPUFeatureMask(blocks string) (string, error) {
 	var m featureMask
 	for i, block := range strings.Split(strings.TrimSpace(blocks), ",") {
-		if i >= featureMaskWords*2 {
-			return "", fmt.Errorf("cpu_features bitmask %q has more than %d blocks", blocks, featureMaskWords*2)
-		}
 		digits, ok := strings.CutPrefix(block, "0x")
 		if !ok {
 			return "", fmt.Errorf("cpu_features bitmask block %q lacks the 0x prefix", block)
@@ -103,6 +101,12 @@ func EncodeCPUFeatureMask(blocks string) (string, error) {
 		v, err := strconv.ParseUint(digits, 16, 32)
 		if err != nil {
 			return "", fmt.Errorf("cpu_features bitmask block %q: %w", block, err)
+		}
+		if i >= featureMaskWords*2 {
+			if v != 0 {
+				return "", fmt.Errorf("cpu_features bitmask %q sets bits past %d blocks", blocks, featureMaskWords*2)
+			}
+			continue
 		}
 		m[i/2] |= v << (32 * (i % 2))
 	}
