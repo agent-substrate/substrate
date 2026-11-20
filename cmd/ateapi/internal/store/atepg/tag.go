@@ -188,38 +188,6 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 	return dbTag, nil
 }
 
-func isAllowedTagSnapshotTransition(stored, mutated *ateapi.Snapshot) bool {
-	if proto.Equal(stored, mutated) || stored == nil {
-		return true
-	}
-	if mutated == nil || stored.GetDurableSnapshot() == nil || mutated.GetDurableSnapshot() == nil {
-		return false
-	}
-	if stored.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING ||
-		mutated.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
-		return false
-	}
-	expected := proto.CloneOf(stored)
-	expected.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
-	return proto.Equal(expected, mutated)
-}
-
-func validateUpdateTagMutation(storedTag, mutatedTag *ateapi.Tag) error {
-	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); !isAllowedTagSnapshotTransition(stored, mutated) {
-		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
-		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
@@ -255,16 +223,11 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
 	}
-	tagBeforeMutation := proto.Clone(dbTag).(*ateapi.Tag)
 	oldMeta := proto.CloneOf(dbTag.Metadata)
 	if mutate != nil {
 		if err := mutate(dbTag); err != nil {
 			return nil, err
 		}
-	}
-	// TODO: this should be done through DV and removed from here
-	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
-		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	if err := validateSnapshotURIs(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetStatus().GetSnapshot()); err != nil {
 		return nil, err

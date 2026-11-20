@@ -440,6 +440,8 @@ func validateSnapshotURIs(resource string, snapshots ...*ateapi.Snapshot) error 
 }
 
 func setUpdateMetadata(newMeta, oldMeta *ateapi.ResourceMetadata) {
+	newMeta.Atespace = oldMeta.Atespace
+	newMeta.Name = oldMeta.Name
 	newMeta.Uid = oldMeta.Uid
 	newMeta.Version = oldMeta.Version + 1
 	newMeta.CreateTime = oldMeta.CreateTime

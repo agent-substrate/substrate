@@ -2497,14 +2497,20 @@ type TagStatus struct {
 	// moves between snapshots and is usable only once COMPLETED. Unset until it
 	// is recorded; a tag whose creation failed first never gets one.
 	//
+	// (-- Custom validation allows an update to record the snapshot once, and then
+	// only to move its durable_snapshot from PENDING to COMPLETED. --)
+	//
 	// +k8s:optional
+	// +k8s:update=NoUnset
 	// +k8s:subfield(durable_snapshot)=+k8s:required
+	// +k8s:customValidation
 	Snapshot *Snapshot `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// UID of the ActorTemplate the snapshot was taken under. Actors can only be
 	// seeded from a tag under the same template.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
+	// +k8s:immutable
 	ActorTemplateUid string `protobuf:"bytes,2,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -2568,6 +2574,7 @@ type Tag struct {
 	// status is set by the control plane; it is ignored on write.
 	//
 	// +k8s:optional
+	// +k8s:update=NoUnset
 	Status *TagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// scope controls who may create an Actor from this tag.
 	//
