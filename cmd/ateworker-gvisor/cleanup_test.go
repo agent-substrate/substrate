@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -129,4 +131,89 @@ func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
 		want = append(want, "kill "+c.GetName()+" SIGKILL", "wait "+c.GetName())
 	}
 	assertCalls(t, f, want...)
+}
+
+func TestTeardownContainers(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		deleteErr error
+		// leaf, if set, holds the files the sandbox's cgroup leaf starts with.
+		leaf map[string]string
+		// wantKilled is what cgroup.kill holds afterwards.
+		wantKilled string
+		// wantReleased is whether runsc's records are dropped.
+		wantReleased bool
+		// wantAppLeafRemoved is whether the app container's empty leaf is
+		// removed.
+		wantAppLeafRemoved bool
+		// wantCkptKilled is what the checkpoint cgroup's cgroup.kill holds
+		// afterwards.
+		wantCkptKilled string
+		wantErr        bool
+	}{{
+		name:         "deleted",
+		leaf:         map[string]string{"cgroup.kill": ""},
+		wantReleased: true,
+	}, {
+		name:               "delete failed, no sandbox leaf",
+		deleteErr:          errors.New("exit status 128"),
+		wantReleased:       true,
+		wantAppLeafRemoved: true,
+		wantCkptKilled:     "1",
+	}, {
+		// A missing cgroup.events fails the wait for the leaf to empty, as a
+		// sandbox that does not die would.
+		name:           "delete and kill failed",
+		deleteErr:      errors.New("exit status 128"),
+		leaf:           map[string]string{"cgroup.kill": ""},
+		wantKilled:     "1",
+		wantCkptKilled: "1",
+		wantErr:        true,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &AteWorkerService{cgroupRoot: t.TempDir()}
+			leaf := s.sandboxLeaf(testActor.UID)
+			if tc.leaf != nil {
+				if err := os.Mkdir(leaf, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeCgroupFiles(t, leaf, tc.leaf)
+			}
+			appLeaf := s.containerLeaf(testActor.UID, "app")
+			if err := os.Mkdir(appLeaf, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// The checkpoint cgroup of a checkpoint in progress, which empties
+			// once killed.
+			ckpt := checkpointCgroupDir(s.cgroupRoot, testActor.UID)
+			if err := os.Mkdir(ckpt, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeCgroupFiles(t, ckpt, map[string]string{"cgroup.kill": "", "cgroup.events": "populated 0\n"})
+			actorDirs := &ateworkerpb.ActorDirs{RootDir: t.TempDir(), OciBundleDir: t.TempDir()}
+			record := filepath.Join(runscStateDir(actorDirs), "app")
+			if err := os.MkdirAll(record, 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			err := s.teardownContainers(context.Background(), testActor.UID, actorDirs, []string{"app"}, func() error { return tc.deleteErr })
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("teardownContainers() = %v, want error %t", err, tc.wantErr)
+			}
+			if tc.leaf != nil {
+				if got, err := os.ReadFile(filepath.Join(leaf, "cgroup.kill")); err != nil || string(got) != tc.wantKilled {
+					t.Errorf("cgroup.kill = %q, %v; want %q", got, err, tc.wantKilled)
+				}
+			}
+			if _, err := os.Stat(record); os.IsNotExist(err) != tc.wantReleased {
+				t.Errorf("runsc record stat error = %v, want released %t", err, tc.wantReleased)
+			}
+			if _, err := os.Stat(appLeaf); os.IsNotExist(err) != tc.wantAppLeafRemoved {
+				t.Errorf("app leaf stat error = %v, want removed %t", err, tc.wantAppLeafRemoved)
+			}
+			if got, err := os.ReadFile(filepath.Join(ckpt, "cgroup.kill")); err != nil || string(got) != tc.wantCkptKilled {
+				t.Errorf("checkpoint cgroup.kill = %q, %v; want %q", got, err, tc.wantCkptKilled)
+			}
+		})
+	}
 }
