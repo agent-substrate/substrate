@@ -23,7 +23,6 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"google.golang.org/protobuf/encoding/protojson"
-	"sigs.k8s.io/yaml"
 )
 
 var (
@@ -159,12 +158,9 @@ The server also deletes the template's golden actor and golden snapshot.`,
 // document into an ActorTemplate. Parsing is strict: unknown fields are an
 // error, so typos don't silently drop configuration.
 func actorTemplateFromManifest(data []byte) (*ateapi.ActorTemplate, error) {
-	jsonData, err := yaml.YAMLToJSON(data)
+	jsonData, err := manifestToJSON(data)
 	if err != nil {
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	if string(jsonData) == "null" {
-		return nil, fmt.Errorf("manifest is empty")
+		return nil, err
 	}
 	template := &ateapi.ActorTemplate{}
 	if err := protojson.Unmarshal(jsonData, template); err != nil {
