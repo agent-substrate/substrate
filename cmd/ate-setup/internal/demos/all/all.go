@@ -30,4 +30,5 @@ import (
 	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/multitemplate"
 	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/parking"
 	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/sandbox"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/sandboxmicrovm"
 )
