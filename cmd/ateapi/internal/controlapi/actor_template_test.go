@@ -282,7 +282,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, store.OptionalPrecondition{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.Precondition{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -304,7 +304,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				stale := store.OptionalPrecondition{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
+				stale := store.Precondition{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
 				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); apierror.Code(err) != codes.Aborted {
 					t.Fatalf("DeleteActorTemplate with a stale version = %v, want code Aborted", err)
 				}
@@ -504,7 +504,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 		if _, err := impl.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), mutate); apierror.Code(err) != codes.Internal {
 			t.Errorf("UpdateActorTemplate mutating %s: error = %v, want an Internal error", name, err)
 		}
-		if _, err := impl.MarkActorTemplateForDeletion(ctx, ref, store.OptionalPrecondition{UID: updated.GetMetadata().GetUid(), Version: updated.GetMetadata().GetVersion()}, mutate); apierror.Code(err) != codes.Internal {
+		if _, err := impl.MarkActorTemplateForDeletion(ctx, ref, store.Precondition{UID: updated.GetMetadata().GetUid(), Version: updated.GetMetadata().GetVersion()}, mutate); apierror.Code(err) != codes.Internal {
 			t.Errorf("MarkActorTemplateForDeletion mutating %s: error = %v, want an Internal error", name, err)
 		}
 	}

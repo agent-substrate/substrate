@@ -112,6 +112,10 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 		t.Fatalf("second CreateAtespaceAccessPolicy = %v, want ErrAlreadyExists", err)
 	}
 
+	if _, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", store.Precondition{UID: created.GetMetadata().GetUid()}, func(*ateapi.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrPreconditionRequired) {
+		t.Fatalf("UpdateAtespaceAccessPolicy without a version = %v, want ErrPreconditionRequired", err)
+	}
+
 	updated, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", store.PreconditionFrom(created), func(toUpdate *ateapi.AccessPolicy) error {
 		toUpdate.Bindings = []*ateapi.Binding{
 			{Role: authz.RoleViewer, Members: []string{"user:dave"}},
@@ -122,14 +126,14 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 		t.Fatalf("UpdateAtespaceAccessPolicy = %v, %v; want version 2", updated, err)
 	}
 
-	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.OptionalPrecondition{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
+	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.Precondition{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("DeleteAtespaceAccessPolicy wrong version = %v, want ErrVersionConflict", err)
 	}
-	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.OptionalPrecondition{UID: "wrong-uid"}); !errors.Is(err, store.ErrUIDConflict) {
+	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.Precondition{UID: "wrong-uid"}); !errors.Is(err, store.ErrUIDConflict) {
 		t.Fatalf("DeleteAtespaceAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
 	}
 
-	deleted, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.OptionalPrecondition{
+	deleted, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.Precondition{
 		UID:     updated.GetMetadata().GetUid(),
 		Version: updated.GetMetadata().GetVersion(),
 	})
@@ -147,7 +151,7 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 	if _, err := p.CreateAtespaceAccessPolicy(ctx, "team-a", policy); err != nil {
 		t.Fatalf("re-creating access policy failed: %v", err)
 	}
-	if _, err := p.DeleteAtespace(ctx, "team-a", store.OptionalPrecondition{}); err != nil {
+	if _, err := p.DeleteAtespace(ctx, "team-a", store.Precondition{}); err != nil {
 		t.Fatalf("DeleteAtespace failed: %v", err)
 	}
 	if _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {

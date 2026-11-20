@@ -56,7 +56,7 @@ func (p *Persistence) GetEgressPolicy(ctx context.Context, actorRef resources.Ac
 }
 
 func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.EgressPolicy) error) (*ateapi.EgressPolicy, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	dbPolicy, err := getEgressPolicyRow(ctx, p.pool, `
@@ -96,7 +96,7 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.OptionalPrecondition) (*ateapi.EgressPolicy, error) {
+func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (*ateapi.EgressPolicy, error) {
 	var version int64
 	var uid string
 	var protoBytes []byte

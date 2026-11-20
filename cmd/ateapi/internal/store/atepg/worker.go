@@ -100,17 +100,17 @@ func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi
 // compare-and-set. The predicate cannot be pushed into SQL: the row stores an
 // opaque marshaled proto, so assignment is not addressable in a WHERE clause.
 func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
-	return p.updateWorker(ctx, name, store.OptionalPrecondition(precondition), mutate, false)
+	return p.updateWorker(ctx, name, precondition, mutate, false)
 }
 
-func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.OptionalPrecondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
+func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
 	return p.updateWorker(ctx, name, precondition, mutate, true)
 }
 
-func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.OptionalPrecondition, mutate func(*ateapi.Worker) error, markForDeletion bool) (*ateapi.Worker, error) {
+func (p *Persistence) updateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error, markForDeletion bool) (*ateapi.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		dbWorker, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
@@ -156,7 +156,7 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.OptionalPrecondition) (*ateapi.Worker, error) {
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.Precondition) (*ateapi.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		// Locked rather than plainly read so the incarnation precondition was evaluated
 		// against is the one the DELETE removes.

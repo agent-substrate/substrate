@@ -204,11 +204,11 @@ func (s *RPCService) DeleteTag(ctx context.Context, req *ateapi.DeleteTagRequest
 	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+func (s *ServiceImpl) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
 	return s.store.MarkTagForDeletion(ctx, tagRef, precondition, validatedTagMutation(ctx, mutate))
 }
 
-func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition) (*ateapi.Tag, error) {
+func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition) (*ateapi.Tag, error) {
 	// TODO: implement this
 	return s.store.DeleteTag(ctx, tagRef, precondition)
 }

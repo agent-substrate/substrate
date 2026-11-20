@@ -189,17 +189,17 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 }
 
 func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
-	return p.updateTag(ctx, tagRef, store.OptionalPrecondition(precondition), mutate, false)
+	return p.updateTag(ctx, tagRef, precondition, mutate, false)
 }
 
-func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
 	return p.updateTag(ctx, tagRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition, mutate func(*ateapi.Tag) error, markForDeletion bool) (*ateapi.Tag, error) {
+func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error, markForDeletion bool) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -260,7 +260,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	return dbTag, nil
 }
 
-func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition) (*ateapi.Tag, error) {
+func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `

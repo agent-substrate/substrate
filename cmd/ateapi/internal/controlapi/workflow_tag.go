@@ -126,7 +126,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 // Note that this destroys the external snapshot: an Actor created from the tag
 // and never suspended is still borrowing it and becomes unrecoverable. Do not
 // delete a tag while clones of it exist.
-func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition) (*ateapi.Tag, error) {
+func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition) (*ateapi.Tag, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
@@ -149,7 +149,7 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 // ensureTagMarkedForDeletion sets the tag's delete_time, checking precondition,
 // and returns the stored copy. Skips when a previous attempt already marked the
 // tag.
-func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.OptionalPrecondition) (_ *ateapi.Tag, err error) {
+func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "MarkTagForDeletion")
 	defer func() { err = done(err) }()
 
@@ -215,7 +215,7 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapi.Tag)
 	defer func() { err = done(err) }()
 
 	tagRef := resources.TagRefFromTag(tag)
-	precondition := store.OptionalPrecondition{UID: tag.GetMetadata().GetUid()}
+	precondition := store.Precondition{UID: tag.GetMetadata().GetUid()}
 	tag, err = w.store.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

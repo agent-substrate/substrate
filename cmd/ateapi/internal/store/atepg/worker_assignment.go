@@ -74,7 +74,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	if actorUID == "" {
 		return nil, fmt.Errorf("binding an assignment with no actor_uid to worker %s", workerName)
 	}
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	if precondition.UID != actorUID {
@@ -110,7 +110,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		}
 		// The Actor's version check settles concurrent binds of it: every bind
 		// updates the Actor, so all but the first fail it.
-		if updated, err = updateActor(ctx, tx, actorRef, store.OptionalPrecondition(precondition), mutate, false); err != nil {
+		if updated, err = updateActor(ctx, tx, actorRef, precondition, mutate, false); err != nil {
 			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -132,7 +132,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 }
 
 func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	actorUID := precondition.UID
@@ -144,7 +144,7 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 		}
 		// A row released since the caller read the Actor also moved the
 		// Actor on, so its version check fails here.
-		if updated, err = updateActor(ctx, tx, actorRef, store.OptionalPrecondition(precondition), mutate, false); err != nil {
+		if updated, err = updateActor(ctx, tx, actorRef, precondition, mutate, false); err != nil {
 			return nil, err
 		}
 		return released, nil

@@ -101,7 +101,7 @@ func (s *fakeTemplateStore) ListActorTemplates(_ context.Context, _ string, opts
 func (s *fakeTemplateStore) UpdateActorTemplate(_ context.Context, ref resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	tmpl, ok := s.templates[ref]

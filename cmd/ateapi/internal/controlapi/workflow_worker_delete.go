@@ -70,7 +70,7 @@ func (w *WorkerWorkflow) giveUpOnNode(nodeName string) {
 // record in place, and a retry fast-forwards past whatever the previous attempt
 // already did. An absent Worker is NOT_FOUND rather than success; idempotency
 // belongs to the caller, which knows whether that is the state it wanted.
-func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.OptionalPrecondition) (*ateapi.Worker, error) {
+func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.Precondition) (*ateapi.Worker, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	worker, err := w.ensureMarkedForDeletion(ctx, name, precondition)
 	if err != nil {
@@ -90,7 +90,7 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondi
 // ensureMarkedForDeletion sets the Worker's delete_time, checking
 // precondition, and drains it, returning the stored copy. Skips when a
 // previous attempt already marked the Worker.
-func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name string, precondition store.OptionalPrecondition) (_ *ateapi.Worker, err error) {
+func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name string, precondition store.Precondition) (_ *ateapi.Worker, err error) {
 	ctx, done := stepSpan(ctx, "MarkWorkerForDeletion")
 	defer func() { err = done(err) }()
 
@@ -369,7 +369,7 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapi.Wor
 	// Only the uid guards the delete. Each actor the sweep releases updates the
 	// Worker's allocation and moves its version. The uid still refuses a Worker
 	// replaced by a new incarnation.
-	precondition := store.OptionalPrecondition{UID: worker.GetMetadata().GetUid()}
+	precondition := store.Precondition{UID: worker.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteWorker(ctx, name, precondition)
 	if err != nil {
 		switch {
