@@ -95,9 +95,11 @@ const (
 type durDirKnobs struct {
 	dynconfig.WaitTime
 	dynconfig.Lifecycle
-	// FileSize is the file written and re-read each cycle, in bytes; 0
+	// FileSize is the total bytes spread over FileCount files each cycle; 0
 	// falls back to defaultFileSize.
 	FileSize int64 `json:"durdir_file_size_bytes"`
+	// FileCount is the number of files; values below 1 read as 1.
+	FileCount int `json:"durdir_file_count"`
 	// ReadMode is readModeData or readModeDigest; empty reads as data.
 	ReadMode string `json:"durdir_read_mode"`
 	// Template is the ActorTemplate name; empty falls back to
@@ -106,6 +108,7 @@ type durDirKnobs struct {
 }
 
 var durDirCodec = dynconfig.Typed[durDirKnobs]{
+	Defaults: durDirKnobs{FileCount: 1},
 	Validate: func(k durDirKnobs) error {
 		if err := k.WaitTime.Validate(); err != nil {
 			return err
@@ -118,6 +121,9 @@ var durDirCodec = dynconfig.Typed[durDirKnobs]{
 		}
 		if k.FileSize > math.MaxInt32 {
 			return fmt.Errorf("durdir_file_size_bytes cannot exceed %d (2 GiB), got: %d", math.MaxInt32, k.FileSize)
+		}
+		if k.FileCount > math.MaxInt32 {
+			return fmt.Errorf("durdir_file_count cannot exceed %d, got: %d", math.MaxInt32, k.FileCount)
 		}
 		if k.ReadMode != "" && k.ReadMode != readModeData && k.ReadMode != readModeDigest {
 			return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", k.ReadMode, readModeData, readModeDigest)
