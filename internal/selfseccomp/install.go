@@ -44,7 +44,7 @@ func InstallOnce() error {
 
 // ClearMarker removes the inheritance marker set by InstallOnce.
 func ClearMarker() {
-	os.Unsetenv(installedEnv)
+	_ = os.Unsetenv(installedEnv)
 }
 
 // Install compiles and installs the seccomp-bpf filter for runtime.GOARCH
