@@ -16,9 +16,10 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 patches:
-  # The base is the envoy gateway. agentgateway mints its own leaves
-  # (tls.mode: dynamicCa below), so drop envoy's minting sidecar and its
-  # volumes, and the non-root pod identity only that pod is set up for.
+  # The base is the envoy gateway. AgentGateway mints its own leaves through
+  # the static egress config's tls.mode: dynamicCa, so drop Envoy's minting
+  # sidecar and its volumes, and the non-root pod identity only that pod is
+  # set up for.
   - target:
       group: apps
       version: v1
@@ -45,107 +46,6 @@ patches:
               $patch: delete
             - name: ca-state
               $patch: delete
-  - target:
-      version: v1
-      kind: ConfigMap
-      name: atenet-egress-agentgateway-substrate-config
-      namespace: ate-system
-    patch: |-
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: atenet-egress-agentgateway-substrate-config
-        namespace: ate-system
-      data:
-        config.yaml: |
-          frontendPolicies:
-            connect:
-              mode: tunnel
-            accessLog:
-              add:
-                substrate.connect.authority: 'destination.address + ":" + string(destination.port)'
-            substrateEgressActorResolution:
-              host: api.ate-system.svc:443
-              policies:
-                backendTLS:
-                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  root: /run/servicedns-ca/trust-bundle.pem
-
-          # Keep the outer egress gateway on 8443, but bind it to this pod's
-          # address. Numeric CONNECT re-entry must select the wildcard
-          # internal bind instead of selecting this front door again.
-          gateways:
-            egress:
-              port: 8443
-              bindAddress: $POD_IP
-              protocol: HTTPS
-              tls:
-                cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
-                key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
-                root: /run/actor-id-ca-certs/ca.crt
-
-          binds:
-          - mode: internal
-            protocol: AUTO
-            listeners:
-            - protocol: HTTPS
-              tls:
-                mode: dynamicCa
-                cert: /run/egress-mitm/tls.crt
-                key: /run/egress-mitm/tls.key
-              routes:
-              - name: reject-websocket-upgrade
-                matches:
-                - headers:
-                  - name: Connection
-                    value:
-                      regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
-                  - name: Upgrade
-                    value:
-                      regex: '(?i)(^|,)\s*websocket\s*(,|$)'
-                policies:
-                  directResponse:
-                    status: 403
-                    body: WebSocket egress is not supported
-              - backends:
-                - dynamic: {}
-                  policies:
-                    backendTLS:
-                      root: /etc/ssl/certs/ca-certificates.crt
-                policies:
-                  substrateEgress: &egressPolicy
-                    #ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS
-                    host: api.ate-system.svc:443
-                    policies:
-                      backendTLS:
-                        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        root: /run/servicedns-ca/trust-bundle.pem
-            - protocol: HTTP
-              routes:
-              - name: reject-websocket-upgrade
-                matches:
-                - headers:
-                  - name: Connection
-                    value:
-                      regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
-                  - name: Upgrade
-                    value:
-                      regex: '(?i)(^|,)\s*websocket\s*(,|$)'
-                policies:
-                  directResponse:
-                    status: 403
-                    body: WebSocket egress is not supported
-              - backends:
-                - dynamic:
-                    target: 'destination.address + ":" + string(destination.port)'
-                policies:
-                  substrateEgress: *egressPolicy
-            - protocol: TLS
-              tcpRoutes:
-              - backends:
-                - dynamic: {}
   - target:
       group: apps
       version: v1
