@@ -60,7 +60,7 @@ const (
 	maxSTSResponse = 64 << 10
 	// maxBoundary is the largest serialized boundary GCS accepts, in bytes.
 	// GCS refuses a token with a larger one with a 401 that does not say why.
-	// The limit is measured, not documented.
+	// We measured the limit. It is not documented.
 	maxBoundary = 4096
 	// minRetryDelay is how long exchanges pause after one failure. Each further
 	// failure doubles the pause, up to stsTimeout.
@@ -80,11 +80,11 @@ type intermediary struct {
 //
 // When the source token has none yet, the latest intermediary is used while
 // it has at least minServeLifetime left, and the exchange runs in the
-// background, as Google's Java library refreshes ahead of expiry. So a source
-// token refresh, a slow STS or a failing one does not hold up mints. Only
-// without such an intermediary does a mint wait for the exchange, and if that
-// fails it still uses the latest intermediary while it has more than
-// stsTimeout left, as the source token's own fallback does.
+// background, as Google's Java library refreshes ahead of expiry. So a slow
+// or failing STS does not hold up mints. Only without such an intermediary
+// does a mint wait for the exchange, and if that fails it still uses the
+// latest intermediary while it has more than stsTimeout left, as the source
+// token's own fallback does.
 func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error) {
 	src, err := i.source.Token()
 	if err != nil {

@@ -297,8 +297,9 @@ func conditionPrefix(t *testing.T, raw []byte) string {
 }
 
 func TestIssue_ConditionKeepsAQuoteInThePath(t *testing.T) {
-	// Substrate accepts a quote in a storage location. gcsboundary escapes it
-	// in the CEL literal, and the parsed constant must hold the raw path.
+	// A location stored before the segment rules may contain a quote.
+	// gcsboundary escapes it in the CEL literal, and the parsed constant must
+	// hold the raw path.
 	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
 	sts := &fakeSTS{t: t}
 	i := newTestIssuer(t, sts, staticSource(now.Add(time.Hour)), func() time.Time { return now })
