@@ -147,10 +147,28 @@ type rpcRule struct {
 	// authorizedInHandler, when set, says how the RPC's handler authorizes
 	// the caller; the interceptor passes such RPCs through unchecked.
 	authorizedInHandler string
+	// actor, set by actorRule, returns the Actor the request names.
+	actor actorExtractor
+	// ateletByNode, set by ateletOnNode, lets atelet call the RPC for the
+	// Actor hosted on atelet's own node, in place of extract's checks.
+	ateletByNode bool
 }
 
 func rule(extract checkExtractor) rpcRule {
 	return rpcRule{extract: extract}
+}
+
+// actorRule checks relation on the Actor that actorFor names in the request at
+// fldPath. extract and actor come from the same actorFor and fldPath.
+func actorRule[T any](relation string, fldPath *field.Path, actorFor func(T) resourceRef) rpcRule {
+	return rpcRule{
+		extract: checksOf(func(r T) ([]check, field.ErrorList) {
+			return onActor(relation, actorFor(r), fldPath)
+		}),
+		actor: actorOf(func(r T) (resourceRef, *field.Path) {
+			return actorFor(r), fldPath
+		}),
+	}
 }
 
 // inHandler registers an RPC whose handler authorizes the caller, as how
@@ -252,9 +270,12 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Actor egress policies.
-	ateapi.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapi.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanGetEgressPolicy, r.GetActor(), field.NewPath("actor"))
-	})),
+	//
+	// atelet reads the egress policy of an Actor on its node, for the worker
+	// that enforces it.
+	ateapi.Control_GetActorEgressPolicy_FullMethodName: actorRule(RelationCanGetEgressPolicy, field.NewPath("actor"), func(r *ateapi.GetActorEgressPolicyRequest) resourceRef {
+		return r.GetActor()
+	}).ateletOnNode(),
 	ateapi.Control_CreateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapi.CreateActorEgressPolicyRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanCreateEgressPolicy, r.GetActor(), field.NewPath("actor"))
 	})),

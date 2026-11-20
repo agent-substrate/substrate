@@ -58,7 +58,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 		Kind: principal.KindJWT,
 	})
 
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, nil)
 
 	tests := []struct {
 		name        string
@@ -153,7 +153,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 
 func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenFailsClosed(t *testing.T) {
 	authorizer := setupTestAuthorizer(t)
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, nil)
 
 	// 1. Unauthenticated caller with empty atespace name -> Unauthenticated
 	_, err := interceptor(context.Background(), &ateapi.GetAtespaceRequest{}, &grpc.UnaryServerInfo{
@@ -221,7 +221,7 @@ func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			interceptor := UnaryServerInterceptor(nil)
+			interceptor := UnaryServerInterceptor(nil, nil)
 			handlerCalled := false
 			_, err := interceptor(tc.ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: tc.fullMethod}, func(context.Context, any) (any, error) {
 				handlerCalled = true
@@ -397,7 +397,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		{"global viewer cannot delete template", "global-viewer", deleteTemplate, codes.PermissionDenied},
 	}
 
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, nil)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: tc.user, Kind: principal.KindJWT})
@@ -588,7 +588,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"bootstrap owner cannot mint actor JWT", "bootstrap-owner", mintJWT, codes.PermissionDenied},
 	}
 
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, nil)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: tc.user, Kind: principal.KindJWT})
@@ -627,7 +627,6 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		ControllerSPIFFEID:       controllerID,
 		EgressGatewaySPIFFEIDs:   []string{egressID},
 		IngressRouterSPIFFEID:    routerID,
-		AteletSPIFFEID:           ateletID,
 		APIServerSidecarSPIFFEID: pluginID,
 	})
 	if err != nil {
@@ -710,9 +709,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"ingress router cannot mint actor JWT", mtls(routerID), mintJWT, codes.PermissionDenied},
 		{"controller cannot mint actor JWT", mtls(controllerID), mintJWT, codes.PermissionDenied},
 
-		// atelet reads egress policies for the worker that enforces them, and
-		// nothing else.
-		{"atelet gets egress policy", mtls(ateletID), getEgress, codes.OK},
+		{"atelet cannot get egress policy through OpenFGA", mtls(ateletID), getEgress, codes.PermissionDenied},
 		{"atelet cannot update egress policy", mtls(ateletID), updateEgress, codes.PermissionDenied},
 		{"atelet cannot get actor", mtls(ateletID), getActor, codes.PermissionDenied},
 		{"atelet cannot list actors", mtls(ateletID), listAllActors, codes.PermissionDenied},
@@ -742,7 +739,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"other mTLS identity cannot create worker", mtls(otherID), createWorker, codes.PermissionDenied},
 	}
 
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, nil)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, tc.principal)

@@ -28,7 +28,6 @@ func testSystemPrincipals() SystemPrincipals {
 		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
 		EgressGatewaySPIFFEIDs:   []string{installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace)},
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
-		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
 	}
 }
@@ -98,7 +97,6 @@ func TestParseSystemPrincipals(t *testing.T) {
 		ControllerSPIFFEID:       "spiffe://cluster.local/ns/ate-system/sa/ate-controller",
 		EgressGatewaySPIFFEIDs:   []string{router, "spiffe://cluster.local/ns/plugins/sa/token-exchange"},
 		IngressRouterSPIFFEID:    router,
-		AteletSPIFFEID:           "spiffe://cluster.local/ns/ate-system/sa/atelet",
 		APIServerSidecarSPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server",
 	})
 	if err != nil {
@@ -108,7 +106,6 @@ func TestParseSystemPrincipals(t *testing.T) {
 		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-controller": {RoleController},
 		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atenet-router":  {RoleIngressRouter, RoleEgressGateway},
 		"user:spiffe%3A//cluster.local/ns/plugins/sa/token-exchange":    {RoleEgressGateway},
-		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atelet":         {RoleAtelet},
 		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-api-server": {RoleAPIServerSidecar},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -129,7 +126,6 @@ func TestNewRejectsInvalidSystemPrincipals(t *testing.T) {
 			p.EgressGatewaySPIFFEIDs = []string{defaults.EgressGatewaySPIFFEIDs[0], ""}
 		}, "invalid egress_gateway SPIFFE ID"},
 		{"empty ingress router SPIFFE ID", func(p *SystemPrincipals) { p.IngressRouterSPIFFEID = "" }, "invalid ingress_router SPIFFE ID"},
-		{"empty atelet SPIFFE ID", func(p *SystemPrincipals) { p.AteletSPIFFEID = "" }, "invalid atelet SPIFFE ID"},
 		{"empty api server sidecar SPIFFE ID", func(p *SystemPrincipals) { p.APIServerSidecarSPIFFEID = "" }, "invalid api_server_sidecar SPIFFE ID"},
 		{"bare ServiceAccount name", func(p *SystemPrincipals) { p.ControllerSPIFFEID = "ate-controller" }, "invalid controller SPIFFE ID"},
 		{"non-spiffe URI", func(p *SystemPrincipals) {

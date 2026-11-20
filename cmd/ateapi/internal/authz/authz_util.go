@@ -47,7 +47,6 @@ const (
 	RoleController       = "controller"
 	RoleEgressGateway    = "egress_gateway"
 	RoleIngressRouter    = "ingress_router"
-	RoleAtelet           = "atelet"
 	RoleAPIServerSidecar = "api_server_sidecar"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
@@ -234,7 +233,6 @@ type SystemPrincipals struct {
 	ControllerSPIFFEID       string
 	EgressGatewaySPIFFEIDs   []string
 	IngressRouterSPIFFEID    string
-	AteletSPIFFEID           string
 	APIServerSidecarSPIFFEID string
 }
 
@@ -298,7 +296,6 @@ func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error)
 	bindings := []binding{
 		{role: RoleController, spiffeID: system.ControllerSPIFFEID},
 		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
-		{role: RoleAtelet, spiffeID: system.AteletSPIFFEID},
 		{role: RoleAPIServerSidecar, spiffeID: system.APIServerSidecarSPIFFEID},
 	}
 	for _, id := range system.EgressGatewaySPIFFEIDs {
