@@ -88,6 +88,22 @@ func (e *Epoch) Require() (int64, error) {
 	return 0, apierror.Unavailable("worker has not registered yet: not accepting workloads")
 }
 
+// SandboxRuntimes tracks whether this worker process has reported its sandbox
+// runtimes to the control plane.
+type SandboxRuntimes struct {
+	reported atomic.Bool
+}
+
+// Reported is a readiness check that fails until the control plane accepts
+// this worker process's sandbox runtimes. The pod stays not Ready before then,
+// so the Deployment does not count a worker with no usable runtime as Ready.
+func (r *SandboxRuntimes) Reported(context.Context) error {
+	if !r.reported.Load() {
+		return errors.New("worker has not reported its sandbox runtimes yet")
+	}
+	return nil
+}
+
 // FromFiles combines the downward API compute limits with the worker's own
 // actor limit.
 //
@@ -247,7 +263,8 @@ type supportClient interface {
 // Report registers this worker process with the node-local atelet, stores the
 // epoch it registered with in epoch, then keeps its sandbox runtimes reported
 // until ctx ends: it reads its sandbox runtimes file at startup and again
-// whenever atelet rewrites it.
+// whenever atelet rewrites it, marking runtimes reported once the first report
+// is accepted.
 //
 // It returns early on a configuration error, which no retry would fix, and
 // when the control plane refuses this process's epoch, which means another
@@ -257,7 +274,7 @@ type supportClient interface {
 // control plane has recorded it, and the Worker record may not exist yet when
 // a worker first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
-func Report(ctx context.Context, cfg ReportConfig, epoch *Epoch) error {
+func Report(ctx context.Context, cfg ReportConfig, epoch *Epoch, runtimes *SandboxRuntimes) error {
 	if cfg.SandboxClass == "" {
 		// The control plane refuses a runtime without a class.
 		return errors.New("register worker: SandboxClass is required")
@@ -278,11 +295,11 @@ func Report(ctx context.Context, cfg ReportConfig, epoch *Epoch) error {
 	}
 	client := &dialingClient{socketPath: cfg.SocketPath, tlsConfig: tlsConfig}
 	changes := WatchFilePath(ctx, cfg.RuntimesFile)
-	return run(ctx, cfg, capacity, client, epoch, changes)
+	return run(ctx, cfg, capacity, client, epoch, runtimes, changes)
 }
 
 // run registers, then reports runtimes until ctx ends or the epoch is refused.
-func run(ctx context.Context, cfg ReportConfig, capacity *ateletpb.WorkerResources, client supportClient, epoch *Epoch, changes <-chan struct{}) error {
+func run(ctx context.Context, cfg ReportConfig, capacity *ateletpb.WorkerResources, client supportClient, epoch *Epoch, runtimes *SandboxRuntimes, changes <-chan struct{}) error {
 	registered, err := registerOnce(ctx, client, &ateletpb.RegisterWorkerRequest{
 		Ips:      cfg.PodIPs,
 		Capacity: capacity,
@@ -291,11 +308,18 @@ func run(ctx context.Context, cfg ReportConfig, capacity *ateletpb.WorkerResourc
 		return err
 	}
 	epoch.Store(registered)
+	report := func(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+		if err := client.SetWorkerSandboxRuntimes(ctx, req); err != nil {
+			return err
+		}
+		runtimes.reported.Store(true)
+		return nil
+	}
 	r := newReconciler(
 		cfg,
 		registered,
 		func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(cfg.RuntimesFile) },
-		client.SetWorkerSandboxRuntimes,
+		report,
 	)
 	return r.run(ctx, changes)
 }
