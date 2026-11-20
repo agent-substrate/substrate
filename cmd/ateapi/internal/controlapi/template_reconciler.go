@@ -130,7 +130,12 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 				continue
 			}
 			ref := resources.ActorTemplateRefFromActorTemplate(tmpl)
-			if goldenSnapshotDone(tmpl.GetStatus().GetGoldenSnapshotStatus()) {
+			need, err := r.needReconcile(ctx, tmpl)
+			if err != nil {
+				slog.ErrorContext(ctx, "Failed to determine if actor template needs reconciliation", slog.String("ActorTemplate", ref.String()), slog.Any("err", err))
+				continue
+			}
+			if !need {
 				slog.DebugContext(ctx, "Skipping actor template with terminal golden snapshot status", slog.String("ActorTemplate", ref.String()))
 			} else {
 				r.queue.Add(ref)
@@ -142,6 +147,24 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 		}
 		pageToken = page.NextPageToken
 	}
+}
+
+func (r *ActorTemplateReconciler) needReconcile(ctx context.Context, tmpl *ateapi.ActorTemplate) (bool, error) {
+	snapshotStatus := tmpl.GetStatus().GetGoldenSnapshotStatus()
+	if snapshotStatus.GetErrorMessage() != "" {
+		return false, nil
+	}
+	if snapshotStatus.GetGoldenTag() == nil {
+		return true, nil
+	}
+	_, err := r.control.GetTag(ctx, &ateapi.GetTagRequest{Tag: snapshotStatus.GetGoldenTag()})
+	if err == nil {
+		return false, nil
+	}
+	if apierror.Code(err) == codes.NotFound {
+		return true, nil
+	}
+	return false, fmt.Errorf("while getting recorded golden tag: %w", err)
 }
 
 func (r *ActorTemplateReconciler) runWorker(ctx context.Context) {
@@ -225,9 +248,27 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			// The snapshot has already failed.
 			return 0, nil
 		}
-		if goldenSnapshotStatus.GetGoldenTag() != nil {
-			// The golden snapshot exists already.
-			return 0, nil
+		if goldenTag := goldenSnapshotStatus.GetGoldenTag(); goldenTag != nil {
+			_, err := r.control.GetTag(ctx, &ateapi.GetTagRequest{Tag: goldenTag})
+			if err == nil {
+				// The golden snapshot exists already.
+				return 0, nil
+			}
+			if apierror.Code(err) != codes.NotFound {
+				return 0, fmt.Errorf("while getting recorded golden tag: %w", err)
+			}
+
+			// The golden tag was deleted after the snapshot was recorded.
+			// Forget the tag and restart the golden snapshot flow.
+			// checkpoint refuses this write, since the status is terminal.
+			tmpl, err = r.persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(tmpl), func(dbTemplate *ateapi.ActorTemplate) error {
+				dbTemplate.Status.GoldenSnapshotStatus = nil
+				return nil
+			})
+			if err != nil {
+				return 0, fmt.Errorf("while forgetting deleted golden tag: %w", err)
+			}
+			continue
 		}
 
 		// A completed tag survives a crash during actor deletion or checkpointing.
