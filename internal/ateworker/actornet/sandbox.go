@@ -286,9 +286,9 @@ func linkUp(name string) error {
 	return netlink.LinkSetUp(link)
 }
 
-// installEgressRules rejects link-local traffic before it reaches the egress PEP,
-// then redirects other TCP egress to atunnel. The actor's own subnet is excluded
-// from both rules so ingress replies and DNS reach their local sockets.
+// installEgressRules filters both IP families, then redirects enabled families'
+// TCP egress to atunnel. The actor's own subnet is excluded so ingress replies
+// and DNS reach their local sockets.
 func installEgressRules(ns netns.Handle, egressPort uint16, families IPFamilies) error {
 	const (
 		icmpDestinationUnreachable                  = 0
@@ -320,9 +320,6 @@ func installEgressRules(ns netns.Handle, egressPort uint16, families IPFamilies)
 		{IPv4, nftables.TableFamilyIPv4, "worker-actor", 4, 16, icmpDestinationAdministrativelyProhibited, netip.MustParsePrefix(ActorVethSubnet), netip.MustParsePrefix("169.254.0.0/16")},
 		{IPv6, nftables.TableFamilyIPv6, "worker-actor-v6", 16, 24, icmpv6DestinationAdministrativelyProhibited, netip.MustParsePrefix(ActorVethIPv6Subnet), netip.MustParsePrefix("fe80::/10")},
 	} {
-		if !families.Has(family.flag) {
-			continue
-		}
 		table := c.AddTable(&nftables.Table{Family: family.tableFamily, Name: family.name})
 		// Backs up the forwarding sysctls: nothing in this namespace is routed.
 		dropPolicy := nftables.ChainPolicyDrop
@@ -366,6 +363,9 @@ func installEgressRules(ns netns.Handle, egressPort uint16, families IPFamilies)
 			&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: icmpDestinationUnreachable},
 		)})
 
+		if !families.Has(family.flag) {
+			continue
+		}
 		prerouting := c.AddChain(&nftables.Chain{
 			Name: "prerouting", Table: table, Type: nftables.ChainTypeNAT,
 			Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest,
