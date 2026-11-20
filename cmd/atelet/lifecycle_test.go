@@ -2321,11 +2321,11 @@ func TestFailedRestoreUnschedulesDetach(t *testing.T) {
 	}
 }
 
-// TestResetActorDirsFailureIsCanceled checks that Run and Restore report a
-// failed actordirs.ResetActorDirsKeepingVolumes as Canceled, which
+// TestResetActorDirsFailureIsUnavailable checks that Run and Restore report a
+// failed actordirs.ResetActorDirsKeepingVolumes as Unavailable, which
 // ate-api-server retries instead of crashing the actor, and that the retry
 // succeeds once the reset can.
-func TestResetActorDirsFailureIsCanceled(t *testing.T) {
+func TestResetActorDirsFailureIsUnavailable(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// prepare sets up the actor and returns the call to retry.
@@ -2371,8 +2371,9 @@ func TestResetActorDirsFailureIsCanceled(t *testing.T) {
 			if err := os.WriteFile(volumesDir, nil, 0o600); err != nil {
 				t.Fatalf("writing file at volumes dir: %v", err)
 			}
-			if err := call(); status.Code(err) != codes.Canceled {
-				t.Fatalf("%s = %v (code %s), want %s", tc.name, err, status.Code(err), codes.Canceled)
+			// apierror.Code is the code atelet's server interceptor sends.
+			if err := call(); apierror.Code(err) != codes.Unavailable {
+				t.Fatalf("%s = %v (code %s), want %s", tc.name, err, apierror.Code(err), codes.Unavailable)
 			}
 
 			// Without the file, the reset recreates the volumes dir.
