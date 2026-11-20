@@ -23,6 +23,7 @@ package exchangeclient
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -85,11 +86,38 @@ func New(cfg Config) (*Source, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("exchangeclient: Address is required")
 	}
-	pool, err := credbundle.ParsePool(cfg.CAFile)
-	if err != nil {
+	loadRootCAs := credbundle.PoolLoader(cfg.CAFile)
+	if _, err := loadRootCAs(); err != nil {
 		return nil, fmt.Errorf("exchangeclient: while loading the exchange CA bundle: %w", err)
 	}
-	creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: cfg.ServerName})
+	creds := credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ServerName: cfg.ServerName,
+		// RootCAs is frozen once the config is in use, so the exchange's
+		// certificate is verified in VerifyConnection against the reloadable
+		// pool: a CA rotation applies on the next handshake, without
+		// restarting the plugin.
+		InsecureSkipVerify: true, //nolint:gosec
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			pool, err := loadRootCAs()
+			if err != nil {
+				return err
+			}
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("exchangeclient: the exchange presented no certificate")
+			}
+			inter := x509.NewCertPool()
+			for _, c := range cs.PeerCertificates[1:] {
+				inter.AddCert(c)
+			}
+			_, err = cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+				Roots:         pool,
+				Intermediates: inter,
+				DNSName:       cfg.ServerName,
+			})
+			return err
+		},
+	})
 	conn, err := grpc.NewClient(cfg.Address, grpc.WithTransportCredentials(creds), grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	if err != nil {
 		return nil, fmt.Errorf("exchangeclient: while creating the exchange client: %w", err)
