@@ -111,10 +111,10 @@ func TestTerminateContainers(t *testing.T) {
 	containers := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
 	tests := []struct {
 		name          string
-		sandboxReaped bool
+		sandboxExited bool
 		wantStopCalls []string
 	}{
-		{name: "sandbox reaped", sandboxReaped: true},
+		{name: "sandbox exited", sandboxExited: true},
 		{
 			name:          "sandbox exit unconfirmed",
 			wantStopCalls: []string{"kill app SIGKILL", "wait app", "kill sidecar SIGKILL", "wait sidecar"},
@@ -123,7 +123,7 @@ func TestTerminateContainers(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeRunsc("app", "sidecar", "_sandbox")
-			if err := terminateContainers(context.Background(), f, containers, tc.sandboxReaped); err != nil {
+			if err := terminateContainers(context.Background(), f, containers, tc.sandboxExited); err != nil {
 				t.Fatalf("terminateContainers: %v", err)
 			}
 			want := append(tc.wantStopCalls, "delete app sidecar _sandbox")

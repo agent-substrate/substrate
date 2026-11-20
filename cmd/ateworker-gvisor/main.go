@@ -873,7 +873,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
-	var sandboxReaped bool
+	var sandboxExited bool
 
 	// Cleanup the containers after checkpointing. This also unhosts the actor,
 	// before the snapshot listing below can fail.
@@ -881,7 +881,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	terminate := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers, sandboxReaped)
+		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers, sandboxExited)
 		if err != nil {
 			slog.WarnContext(cleanupCtx, "failed to terminate workload after checkpoint",
 				slog.String("actor", attribution.Ref.String()),
@@ -900,7 +900,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 	if sandbox == nil {
 		// never pinned: fall back to the pidfile, still better than
-		// cleaning up before the sandbox is reaped
+		// cleaning up before the sandbox exits
 		var err error
 		if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
 			slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
@@ -920,7 +920,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
-			sandboxReaped = waitSandboxGone(ctx, sandbox)
+			sandboxExited = waitSandboxExited(ctx, sandbox)
 			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
@@ -931,7 +931,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing container filesystems: %w", err)
 			}
-			sandboxReaped = waitSandboxGone(ctx, sandbox)
+			sandboxExited = waitSandboxExited(ctx, sandbox)
 			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
@@ -953,7 +953,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
-			sandboxReaped = waitSandboxGone(ctx, sandbox)
+			sandboxExited = waitSandboxExited(ctx, sandbox)
 			timing.checkpoint = lap(&tLast)
 			return nil
 		}
@@ -1013,13 +1013,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	return resp, nil
 }
 
-// waitSandboxGone reports whether the checkpointed sandbox has been reaped.
-func waitSandboxGone(ctx context.Context, sandbox *sandboxProcess) bool {
+// waitSandboxExited reports whether the checkpointed sandbox has exited.
+func waitSandboxExited(ctx context.Context, sandbox *sandboxProcess) bool {
 	if sandbox == nil {
 		return false
 	}
-	if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
-		slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+	if err := sandbox.waitExited(sandboxExitTimeout); err != nil {
+		slog.WarnContext(ctx, "Sandbox did not exit after checkpoint", slog.Any("err", err))
 		return false
 	}
 	return true
@@ -1338,7 +1338,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxReaped bool) error {
+func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxExited bool) error {
 	if hosted := s.lookupActor(actorUID); hosted != nil {
 		hosted.stopping.Store(true)
 	}
@@ -1361,7 +1361,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	defer cancel()
 	// Keep this as best-effort cleanup: atelet resets the bundle and checkpoint
 	// directories after uploading the snapshot.
-	if err := terminateContainers(cleanupCtx, rcmd, containers, sandboxReaped); err != nil {
+	if err := terminateContainers(cleanupCtx, rcmd, containers, sandboxExited); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 
@@ -1386,9 +1386,9 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	return errors.Join(errs...)
 }
 
-func terminateContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container, sandboxReaped bool) error {
+func terminateContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container, sandboxExited bool) error {
 	// Stop any live containers before their bundles can be removed.
-	if !sandboxReaped {
+	if !sandboxExited {
 		stopContainers(ctx, rcmd, containers)
 	}
 	return cleanupContainers(ctx, rcmd, containers)
