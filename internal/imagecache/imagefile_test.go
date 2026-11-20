@@ -15,6 +15,8 @@
 package imagecache
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -24,14 +26,16 @@ import (
 	"testing"
 )
 
-// writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's
-// unpack would.
+// writeLayer builds a layer dir (both fs/ + whiteouts.json and layer.erofs) as
+// the store's unpack would.
 func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutSet) {
 	t.Helper()
 	fs := filepath.Join(dir, layerFSDirName)
 	if err := os.MkdirAll(fs, 0o755); err != nil {
 		t.Fatalf("mkdir fs: %v", err)
 	}
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
 	for name, body := range files {
 		p := filepath.Join(fs, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -39,6 +43,12 @@ func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutS
 		}
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatalf("tar header %s: %v", name, err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatalf("tar write %s: %v", name, err)
 		}
 	}
 	if wh != nil {
@@ -50,6 +60,29 @@ func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutS
 		if err := os.WriteFile(filepath.Join(dir, layerWhiteoutsFileName), b, 0o600); err != nil {
 			t.Fatalf("write whiteouts.json: %v", err)
 		}
+		for _, w := range wh.Whiteouts {
+			whName := filepath.ToSlash(filepath.Join(filepath.Dir(w), whiteoutPrefix+filepath.Base(w)))
+			if err := tw.WriteHeader(&tar.Header{Name: whName, Typeflag: tar.TypeReg, Mode: 0o644}); err != nil {
+				t.Fatalf("tar whiteout %s: %v", w, err)
+			}
+		}
+		for _, op := range wh.Opaques {
+			opName := filepath.ToSlash(filepath.Join(op, opaqueMarkerName))
+			if err := tw.WriteHeader(&tar.Header{Name: opName, Typeflag: tar.TypeReg, Mode: 0o644}); err != nil {
+				t.Fatalf("tar opaque %s: %v", op, err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	erofsOut, err := os.Create(filepath.Join(dir, layerEROFSFileName))
+	if err != nil {
+		t.Fatalf("create layer.erofs: %v", err)
+	}
+	defer erofsOut.Close()
+	if _, _, _, err := buildLayerEROFS(bytes.NewReader(tarBuf.Bytes()), erofsOut, dir); err != nil {
+		t.Fatalf("buildLayerEROFS: %v", err)
 	}
 }
 
@@ -86,42 +119,54 @@ func TestImageReadFile(t *testing.T) {
 		{name: "absent", layers: []string{tempLayer(t, bin, nil)}, file: "etc/passwd", notExist: true},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			img := &Image{LayerDirs: tc.layers}
-			got, err := img.ReadFile(tc.file)
-			if tc.notExist {
-				if !errors.Is(err, fs.ErrNotExist) {
-					t.Fatalf("ReadFile(%q) = %q, %v; want fs.ErrNotExist", tc.file, got, err)
+		for _, erofs := range []bool{false, true} {
+			name := tc.name
+			if erofs {
+				name += "/erofs"
+			}
+			t.Run(name, func(t *testing.T) {
+				img := &Image{LayerDirs: tc.layers, EROFS: erofs}
+				got, err := img.ReadFile(tc.file)
+				if tc.notExist {
+					if !errors.Is(err, fs.ErrNotExist) {
+						t.Fatalf("ReadFile(%q) = %q, %v; want fs.ErrNotExist", tc.file, got, err)
+					}
+					return
 				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ReadFile(%q): %v", tc.file, err)
-			}
-			if string(got) != tc.want {
-				t.Errorf("ReadFile(%q) = %q, want %q", tc.file, got, tc.want)
-			}
-		})
+				if err != nil {
+					t.Fatalf("ReadFile(%q): %v", tc.file, err)
+				}
+				if string(got) != tc.want {
+					t.Errorf("ReadFile(%q) = %q, want %q", tc.file, got, tc.want)
+				}
+			})
+		}
 	}
 }
 
 // An empty, root, or escaping name is an error distinct from a missing file.
 func TestImageReadFile_RejectsInvalidName(t *testing.T) {
-	img := &Image{LayerDirs: []string{tempLayer(t, map[string]string{"x": "y"}, nil)}}
-	for _, name := range []string{"", "/", "../x"} {
-		if _, err := img.ReadFile(name); err == nil || errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("ReadFile(%q) err = %v, want an error other than not-exist", name, err)
+	dir := tempLayer(t, map[string]string{"x": "y"}, nil)
+	for _, erofs := range []bool{false, true} {
+		img := &Image{LayerDirs: []string{dir}, EROFS: erofs}
+		for _, name := range []string{"", "/", "../x"} {
+			if _, err := img.ReadFile(name); err == nil || errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("EROFS=%v ReadFile(%q) err = %v, want an error other than not-exist", erofs, name, err)
+			}
 		}
 	}
 }
 
 func TestImageReadFile_BoundsSize(t *testing.T) {
 	atLimit := strings.Repeat("x", maxImageFileSize)
-	img := &Image{LayerDirs: []string{tempLayer(t, map[string]string{"ok": atLimit, "big": atLimit + "x"}, nil)}}
-	if got, err := img.ReadFile("ok"); err != nil || len(got) != maxImageFileSize {
-		t.Errorf("ReadFile(ok) = %d bytes, %v; want %d bytes", len(got), err, maxImageFileSize)
-	}
-	if _, err := img.ReadFile("big"); err == nil || errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("ReadFile(big) err = %v, want a size error", err)
+	dir := tempLayer(t, map[string]string{"ok": atLimit, "big": atLimit + "x"}, nil)
+	for _, erofs := range []bool{false, true} {
+		img := &Image{LayerDirs: []string{dir}, EROFS: erofs}
+		if got, err := img.ReadFile("ok"); err != nil || len(got) != maxImageFileSize {
+			t.Errorf("EROFS=%v ReadFile(ok) = %d bytes, %v; want %d bytes", erofs, len(got), err, maxImageFileSize)
+		}
+		if _, err := img.ReadFile("big"); err == nil || errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("EROFS=%v ReadFile(big) err = %v, want a size error", erofs, err)
+		}
 	}
 }
