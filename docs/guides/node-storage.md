@@ -2,10 +2,10 @@
 title: "Node Storage"
 linkTitle: "Node Storage"
 weight: 11
-docsite: false
+docsite: true
 description: >
-  Where atelet keeps node-local state, how to size the disk for snapshots, and
-  how to give snapshot I/O its own disk.
+  Where atelet keeps node-local state, how to size the disk for snapshots, how
+  to give snapshot I/O its own disk, and what happens when the disk fills.
 ---
 
 # Node Storage
@@ -43,21 +43,36 @@ actors with a local snapshot on the node × snapshot size
 
 For example, if 60 different actors suspend on a node within 30 minutes and
 their snapshots are 1 GiB each, they keep about 60 GiB. A memory snapshot is
-about the size of the memory the actor uses, plus its filesystem changes.
+about the size of the memory the actor uses, plus its filesystem changes. Local
+snapshots are uncompressed, so they take more space than the zstd-compressed
+copies in object storage. The `atelet.snapshot.size` metric reports the size of
+each snapshot image on disk.
 
 An actor briefly holds up to 3 local snapshots. These are the latest one, one a
 suspend is writing, and an older one atelet is still uploading. A detach uploads
 the latest snapshot first if it isn't durable yet, and keeps it until the upload
 succeeds, so a failing object store fills the disk faster.
 
-Size the disk that holds `/var/lib/ate/snapshots` for this. On the boot disk, it
-has to fit above the kubelet's `evictionHard` thresholds. Their
-[defaults](https://github.com/kubernetes/kubernetes/blob/a972b672c7612c4892557f3d6d2a952c741c5d1f/pkg/kubelet/eviction/defaults_linux.go#L22-L28)
-are 10% free for `nodefs.available`, and 15% free for `imagefs.available` on
-the disk that holds container images, which is often the boot disk. A
-dedicated snapshot disk keeps this data off the boot disk, but it needs the
-same size. The kubelet doesn't watch that disk, so when it fills, the node
-gets no condition and atelet can't write new snapshots there.
+Size the disk that holds `/var/lib/ate/snapshots` for this. A dedicated
+snapshot disk needs room for the snapshots only. On the boot disk, they share
+space with the OS, container images, actor files, and atelet's caches. All of
+it has to stay above the kubelet's `evictionHard` thresholds, which
+[default](https://github.com/kubernetes/kubernetes/blob/a972b672c7612c4892557f3d6d2a952c741c5d1f/pkg/kubelet/eviction/defaults_linux.go#L22-L28)
+to 10% free for `nodefs.available` and 15% free for `imagefs.available`. On
+most nodes both are the boot disk.
+
+By default, atelet's snapshot cache and sandbox asset cache are on the boot
+disk. They grow without limit unless you set `--snapshot-cache-max-bytes` and
+`--sandbox-asset-cache-max-bytes`.
+
+## When the Snapshot Disk Runs Out of Space
+
+The kubelet doesn't watch a dedicated snapshot disk, so when it fills, the node
+gets no condition. Its workers stay Ready and keep taking actors. Checkpoints
+and restores from object storage both write under `/var/lib/ate/snapshots`, so
+they fail, and the actors they were suspending or resuming move to
+`ACTOR_STATE_CRASHED`. This goes on until atelet detaches enough snapshots to
+free space.
 
 ## When the Boot Disk Runs Out of Space
 
@@ -67,29 +82,40 @@ workers, and admits only critical pods until the condition clears. No worker
 runs on the node in the meantime. atelet runs at `system-cluster-critical`, so
 the kubelet neither evicts nor rejects it, and its uploads and detaches go on.
 
+This is a hard eviction, which differs from the graceful shutdown that
+[Eviction](../reference/api-guide.md#eviction) describes. The kubelet still
+sends `SIGTERM`, but kills the worker 2 seconds later, so its actors don't get
+30 minutes to suspend. They move to `ACTOR_STATE_CRASHED` and lose everything
+since their last snapshot.
+
 Snapshot files belong to no pod, so evicting pods frees almost none of the
 space. The node recovers when atelet detaches the snapshots,
 `--snapshot-detach-delay` after each actor's latest suspend. Until then the
 condition can clear and return, and the kubelet evicts the replacement workers
 each time.
 
-On GKE, [node auto-repair](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/node-auto-repair)
-recreates a node whose boot disk stays out of space for about 30 minutes. The
-default `--snapshot-detach-delay` is also 30 minutes, so snapshots alone can
-hold the disk that long. The new boot disk starts empty, so any snapshot not
-yet uploaded is lost.
+A platform that repairs unhealthy nodes can recreate the node first. For
+example, [GKE node auto-repair](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/node-auto-repair)
+recreates a node whose boot disk stays out of space for about 30 minutes, the
+same as the default `--snapshot-detach-delay`. The new boot disk starts empty,
+so any snapshot not yet uploaded is lost.
 
-To recover sooner, lower `--snapshot-detach-delay`. It can't be shorter than
-`--snapshot-upload-delay`, which defaults to 5 minutes. An actor that resumes
-after its detach reads the snapshot from object storage.
+To recover sooner, lower atelet's `--snapshot-detach-delay`. atelet doesn't
+start if it's shorter than `--snapshot-upload-delay`, which defaults to 5
+minutes, so lower both to go below that. An actor that resumes after its detach
+reads the snapshot from object storage.
 
 To check a node, look at its conditions and eviction events, and at the pods
-running on it:
+running on it.
 
 ```
 kubectl describe node NODE
 kubectl get pods -A -o wide --field-selector spec.nodeName=NODE
 ```
+
+The `atelet.snapshot.undurable.age.max` metric is the age of the oldest local
+snapshot on the node that object storage doesn't hold yet. It's 0 when every
+local snapshot is uploaded.
 
 Don't delete files under `/var/lib/ate` to free space. Until its upload
 finishes, a suspended actor's latest snapshot exists only on that node. atelet
