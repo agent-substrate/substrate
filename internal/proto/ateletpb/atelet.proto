@@ -215,12 +215,10 @@ message VersionedSandboxCompat {
   // Key-value compatibility attributes defined by this schema version, covering
   // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
   // hardware features after masking (e.g. "architecture", "cpu_features").
-  // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value (except
-  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
-  // subset of the worker's); keys only the worker has are ignored. Bump
-  // schema_version when a key's meaning changes or older snapshots must no
-  // longer match.
+  // Matched against a snapshot under the same schema_version: the worker and
+  // snapshot must have the same set of attribute keys, with equal values
+  // (except "cpu_features", where the snapshot's hexadecimal bitmask must be a
+  // bitwise subset of the worker's).
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //

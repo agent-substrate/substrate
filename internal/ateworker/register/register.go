@@ -159,7 +159,7 @@ func buildCompat(attrs sandboxruntimes.Attributes) *ateletpb.VersionedSandboxCom
 		})
 	}
 	return &ateletpb.VersionedSandboxCompat{
-		SchemaVersion: hardware.SchemaVersionV1,
+		SchemaVersion: hardware.SchemaVersionV2,
 		Attributes:    entries,
 	}
 }

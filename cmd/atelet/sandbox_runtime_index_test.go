@@ -144,7 +144,7 @@ func TestResolveRuntime(t *testing.T) {
 	s := &Atelet{runtimes: newRuntimeIndex()}
 	advertised := hashedTestVersion(t, "v1", true, sha)
 	runtimeWith := func(class string, attrs ...*ateletpb.AttributeEntry) *ateletpb.ActorSandboxRuntime {
-		return &ateletpb.ActorSandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs}}
+		return &ateletpb.ActorSandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV2, Attributes: attrs}}
 	}
 	placed := runtimeWith("gvisor",
 		&ateletpb.AttributeEntry{Key: hardware.AttrArchitecture, Value: "amd64"},
