@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/protoredact"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -133,6 +134,56 @@ func TestLoggingUnaryInterceptor(t *testing.T) {
 		got := errOut.String()
 		if !strings.Contains(got, "gRPC /substrate.ateapi.v1.Control/GetActor request:") || !strings.Contains(got, `"act-1"`) || !strings.Contains(got, "gRPC /substrate.ateapi.v1.Control/GetActor response") {
 			t.Errorf("vTrace stderr = %q, want request and response payloads", got)
+		}
+	})
+
+	t.Run("vTrace redacts debug_redact fields", func(t *testing.T) {
+		setVerbosity(t, vTrace)
+		var errOut bytes.Buffer
+		ic := newLoggingUnaryInterceptor(&errOut)
+
+		const envValue = "env-value-to-mask"
+		tmplReq := &ateapi.CreateActorTemplateRequest{
+			ActorTemplate: &ateapi.ActorTemplate{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "demo", Name: "tmpl"},
+				Containers: []*ateapi.Container{{
+					Name: "main",
+					Env:  []*ateapi.EnvVar{{Name: "API_KEY", Value: envValue}},
+				}},
+			},
+		}
+		if err := ic(context.Background(), ateapi.Control_CreateActorTemplate_FullMethodName, tmplReq, &ateapi.Actor{}, nil, okInvoker); err != nil {
+			t.Fatalf("interceptor unexpected error: %v", err)
+		}
+
+		const actorJWT = "header.payload.signature"
+		mintInvoker := func(_ context.Context, _ string, _, reply any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+			reply.(*ateapi.MintActorJwtResponse).ActorJwt = actorJWT
+			return nil
+		}
+		if err := ic(context.Background(), ateapi.Control_MintActorJwt_FullMethodName, &ateapi.MintActorJwtRequest{}, &ateapi.MintActorJwtResponse{}, nil, mintInvoker); err != nil {
+			t.Fatalf("interceptor unexpected error: %v", err)
+		}
+
+		got := errOut.String()
+		for _, secret := range []string{envValue, actorJWT} {
+			if strings.Contains(got, secret) {
+				t.Errorf("vTrace stderr leaks %q: %s", secret, got)
+			}
+		}
+		// Each labeled field keeps its name and shows the placeholder. An absence
+		// check alone would also pass if the field were dropped from the log line.
+		for _, want := range []string{
+			`"name":"API_KEY"`,
+			`"value":"` + protoredact.Placeholder + `"`,
+			`"actorJwt":"` + protoredact.Placeholder + `"`,
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("vTrace stderr = %q, want substring %q", got, want)
+			}
+		}
+		if v := tmplReq.GetActorTemplate().GetContainers()[0].GetEnv()[0].GetValue(); v != envValue {
+			t.Errorf("request env value = %q, want it left unmodified", v)
 		}
 	})
 }
