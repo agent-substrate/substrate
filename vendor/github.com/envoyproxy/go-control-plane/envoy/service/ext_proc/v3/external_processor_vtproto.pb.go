@@ -75,6 +75,102 @@ func (m *ProtocolConfiguration) MarshalToSizedBufferVTStrict(dAtA []byte) (int, 
 	return len(dAtA) - i, nil
 }
 
+func (m *ProcessingRequest_FlowControlInit) MarshalVTStrict() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVTStrict(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ProcessingRequest_FlowControlInit) MarshalToVTStrict(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVTStrict(dAtA[:size])
+}
+
+func (m *ProcessingRequest_FlowControlInit) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i -= len(m.unknownFields)
+		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.InitialWindowSidestreamToDownstream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.InitialWindowSidestreamToDownstream))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.InitialWindowUpstreamToSidestream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.InitialWindowUpstreamToSidestream))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.InitialWindowSidestreamToUpstream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.InitialWindowSidestreamToUpstream))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.InitialWindowDownstreamToSidestream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.InitialWindowDownstreamToSidestream))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *ProcessingRequest_ClientWindowUpdate) MarshalVTStrict() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVTStrict(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ProcessingRequest_ClientWindowUpdate) MarshalToVTStrict(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVTStrict(dAtA[:size])
+}
+
+func (m *ProcessingRequest_ClientWindowUpdate) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i -= len(m.unknownFields)
+		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.WindowIncrementSidestreamToDownstream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.WindowIncrementSidestreamToDownstream))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.WindowIncrementSidestreamToUpstream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.WindowIncrementSidestreamToUpstream))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *ProcessingRequest) MarshalVTStrict() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -104,6 +200,26 @@ func (m *ProcessingRequest) MarshalToSizedBufferVTStrict(dAtA []byte) (int, erro
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.ClientWindowUpdate != nil {
+		size, err := m.ClientWindowUpdate.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x6a
+	}
+	if m.FlowControlInit != nil {
+		size, err := m.FlowControlInit.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x62
 	}
 	if m.ProtocolConfig != nil {
 		size, err := m.ProtocolConfig.MarshalToSizedBufferVTStrict(dAtA[:i])
@@ -352,6 +468,49 @@ func (m *ProcessingRequest_ResponseTrailers) MarshalToSizedBufferVTStrict(dAtA [
 	}
 	return len(dAtA) - i, nil
 }
+func (m *ProcessingResponse_ServerWindowUpdate) MarshalVTStrict() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVTStrict(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ProcessingResponse_ServerWindowUpdate) MarshalToVTStrict(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVTStrict(dAtA[:size])
+}
+
+func (m *ProcessingResponse_ServerWindowUpdate) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i -= len(m.unknownFields)
+		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.WindowIncrementUpstreamToSidestream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.WindowIncrementUpstreamToSidestream))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.WindowIncrementDownstreamToSidestream != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.WindowIncrementDownstreamToSidestream))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *ProcessingResponse) MarshalVTStrict() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
@@ -381,6 +540,16 @@ func (m *ProcessingResponse) MarshalToSizedBufferVTStrict(dAtA []byte) (int, err
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.ServerWindowUpdate != nil {
+		size, err := m.ServerWindowUpdate.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0x72
 	}
 	if len(m.TypedDynamicMetadata) > 0 {
 		for k := range m.TypedDynamicMetadata {
@@ -1655,6 +1824,44 @@ func (m *ProtocolConfiguration) SizeVT() (n int) {
 	return n
 }
 
+func (m *ProcessingRequest_FlowControlInit) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.InitialWindowDownstreamToSidestream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.InitialWindowDownstreamToSidestream))
+	}
+	if m.InitialWindowSidestreamToUpstream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.InitialWindowSidestreamToUpstream))
+	}
+	if m.InitialWindowUpstreamToSidestream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.InitialWindowUpstreamToSidestream))
+	}
+	if m.InitialWindowSidestreamToDownstream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.InitialWindowSidestreamToDownstream))
+	}
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *ProcessingRequest_ClientWindowUpdate) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.WindowIncrementSidestreamToUpstream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.WindowIncrementSidestreamToUpstream))
+	}
+	if m.WindowIncrementSidestreamToDownstream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.WindowIncrementSidestreamToDownstream))
+	}
+	n += len(m.unknownFields)
+	return n
+}
+
 func (m *ProcessingRequest) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -1692,6 +1899,14 @@ func (m *ProcessingRequest) SizeVT() (n int) {
 	}
 	if m.ProtocolConfig != nil {
 		l = m.ProtocolConfig.SizeVT()
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	if m.FlowControlInit != nil {
+		l = m.FlowControlInit.SizeVT()
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	if m.ClientWindowUpdate != nil {
+		l = m.ClientWindowUpdate.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
@@ -1782,6 +1997,22 @@ func (m *ProcessingRequest_ResponseTrailers) SizeVT() (n int) {
 	}
 	return n
 }
+func (m *ProcessingResponse_ServerWindowUpdate) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.WindowIncrementDownstreamToSidestream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.WindowIncrementDownstreamToSidestream))
+	}
+	if m.WindowIncrementUpstreamToSidestream != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.WindowIncrementUpstreamToSidestream))
+	}
+	n += len(m.unknownFields)
+	return n
+}
+
 func (m *ProcessingResponse) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -1824,6 +2055,10 @@ func (m *ProcessingResponse) SizeVT() (n int) {
 			mapEntrySize := 1 + len(k) + protohelpers.SizeOfVarint(uint64(len(k))) + l
 			n += mapEntrySize + 1 + protohelpers.SizeOfVarint(uint64(mapEntrySize))
 		}
+	}
+	if m.ServerWindowUpdate != nil {
+		l = m.ServerWindowUpdate.SizeVT()
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
 	return n

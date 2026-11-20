@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/testing"
+	"k8s.io/klog/v2"
 )
 
 func NewSimpleDynamicClient(scheme *runtime.Scheme, objects ...runtime.Object) *FakeDynamicClient {
@@ -104,7 +105,7 @@ func NewSimpleDynamicClientWithCustomListKinds(scheme *runtime.Scheme, gvrToList
 	}
 
 	codecs := serializer.NewCodecFactory(scheme)
-	o := testing.NewObjectTracker(scheme, codecs.UniversalDecoder())
+	o := testing.NewObjectTrackerWithLogger(klog.TODO() /* We need some way for the caller to pass a logger - see also NewSimpleMetadataClient. */, scheme, codecs.UniversalDecoder())
 	for _, obj := range objects {
 		if err := o.Add(obj); err != nil {
 			panic(err)
@@ -303,6 +304,47 @@ func (c *dynamicResourceClient) Delete(ctx context.Context, name string, opts me
 	}
 
 	return err
+}
+
+func (c *dynamicResourceClient) DeleteWithResult(ctx context.Context, name string, opts metav1.DeleteOptions, subresources ...string) (metav1.APIResult, error) {
+	var uncastRet runtime.Object
+	var err error
+	switch {
+	case len(c.namespace) == 0 && len(subresources) == 0:
+		uncastRet, err = c.client.Fake.
+			Invokes(testing.NewRootDeleteActionWithOptions(c.resource, name, opts), &metav1.Status{Status: "dynamic delete fail"})
+
+	case len(c.namespace) == 0 && len(subresources) > 0:
+		uncastRet, err = c.client.Fake.
+			Invokes(testing.NewRootDeleteSubresourceActionWithOptions(c.resource, strings.Join(subresources, "/"), name, opts), &metav1.Status{Status: "dynamic delete fail"})
+
+	case len(c.namespace) > 0 && len(subresources) == 0:
+		uncastRet, err = c.client.Fake.
+			Invokes(testing.NewDeleteActionWithOptions(c.resource, c.namespace, name, opts), &metav1.Status{Status: "dynamic delete fail"})
+
+	case len(c.namespace) > 0 && len(subresources) > 0:
+		uncastRet, err = c.client.Fake.
+			Invokes(testing.NewDeleteSubresourceActionWithOptions(c.resource, strings.Join(subresources, "/"), c.namespace, name, opts), &metav1.Status{Status: "dynamic delete fail"})
+	}
+
+	if err != nil {
+		fakeResult := testing.FakeAPIResult{Err: err}
+		if statusErr, ok := err.(interface{ Status() metav1.Status }); ok {
+			fakeResult.Code = int(statusErr.Status().Code)
+		}
+		return fakeResult, err
+	}
+	if uncastRet == nil {
+		return testing.FakeAPIResult{}, nil
+	}
+	if status, ok := uncastRet.(*metav1.Status); ok {
+		return testing.FakeAPIResult{Obj: status, Code: int(status.Code)}, nil
+	}
+	ret := &unstructured.Unstructured{}
+	if err := c.client.scheme.Convert(uncastRet, ret, nil); err != nil {
+		return nil, err
+	}
+	return testing.FakeAPIResult{Obj: ret, Code: 200}, nil
 }
 
 func (c *dynamicResourceClient) DeleteCollection(ctx context.Context, opts metav1.DeleteOptions, listOptions metav1.ListOptions) error {
