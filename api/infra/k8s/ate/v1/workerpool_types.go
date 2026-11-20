@@ -115,6 +115,7 @@ type WorkerPoolSpec struct {
 }
 
 // WorkerPoolSandboxClass is one sandbox runtime family a WorkerPool runs.
+// +kubebuilder:validation:XValidation:rule="!has(self.allowPrivilegedActors) || !self.allowPrivilegedActors || self.name == 'microvm'",message="allowPrivilegedActors requires the microvm sandbox class"
 type WorkerPoolSandboxClass struct {
 	// name selects the sandbox runtime family, which drives the worker pod
 	// shape (KVM/vhost device mounts and node placement). The concrete binary
@@ -133,6 +134,18 @@ type WorkerPoolSandboxClass struct {
 	//
 	// +optional
 	ConfigRef *SandboxConfigReference `json:"configRef,omitempty"`
+
+	// allowPrivilegedActors lets this pool's workers run containers whose
+	// ActorTemplate sets securityContext.privileged, for example to run a
+	// container engine inside the actor. Each such actor owns a whole guest
+	// kernel, so the VM stays the isolation boundary, but the workload gets
+	// full privilege inside it and can drive every guest-to-host interface
+	// (virtio devices, the guest agent channel) directly. Enable it only on
+	// pools meant for that, ideally on dedicated nodes. Only the microvm
+	// class supports it. Workers of pools without it fail privileged actors.
+	//
+	// +optional
+	AllowPrivilegedActors *bool `json:"allowPrivilegedActors,omitempty"`
 }
 
 // SandboxConfigReference names a cluster-scoped SandboxConfig.

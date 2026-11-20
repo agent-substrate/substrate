@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1173,6 +1174,28 @@ func TestBuildDeploymentPreview(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("--preview args mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestBuildDeploymentAllowPrivilegedActors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		class atev1.WorkerPoolSandboxClass
+		want  bool
+	}{
+		{"microvm opted in", atev1.WorkerPoolSandboxClass{Name: atev1.SandboxClassMicroVM, AllowPrivilegedActors: ptr.To(true)}, true},
+		{"microvm default", atev1.WorkerPoolSandboxClass{Name: atev1.SandboxClassMicroVM}, false},
+		{"gvisor never", atev1.WorkerPoolSandboxClass{Name: atev1.SandboxClassGvisor, AllowPrivilegedActors: ptr.To(true)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wp := testWorkerPoolApplyConfig(nil)
+			wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{tc.class}
+			c := buildDeploymentApplyConfig(wp, workerOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).
+				Spec.Template.Spec.Containers[0]
+			if got := slices.Contains(c.Args, "--allow-privileged-actors"); got != tc.want {
+				t.Errorf("--allow-privileged-actors in args = %v, want %v (args %v)", got, tc.want, c.Args)
 			}
 		})
 	}

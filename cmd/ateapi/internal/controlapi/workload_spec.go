@@ -224,13 +224,16 @@ func toAteletWakeupProbe(in *ateapi.WakeupProbe) *ateletpb.WakeupProbe {
 // so containers that set no security settings stay unchanged on the wire.
 func toAteletSecurityContext(in *ateapi.SecurityContext) *ateletpb.SecurityContext {
 	caps := in.GetCapabilities()
-	if caps == nil || (len(caps.GetAdd()) == 0 && len(caps.GetDrop()) == 0) {
+	hasCaps := caps != nil && (len(caps.GetAdd()) > 0 || len(caps.GetDrop()) > 0)
+	if !hasCaps && !in.GetPrivileged() {
 		return nil
 	}
-	return &ateletpb.SecurityContext{
-		Capabilities: &ateletpb.Capabilities{
+	out := &ateletpb.SecurityContext{Privileged: in.GetPrivileged()}
+	if hasCaps {
+		out.Capabilities = &ateletpb.Capabilities{
 			Add:  caps.GetAdd(),
 			Drop: caps.GetDrop(),
-		},
+		}
 	}
+	return out
 }

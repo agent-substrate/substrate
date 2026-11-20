@@ -3337,6 +3337,7 @@ type Container struct {
 	// the default capability set.
 	//
 	// +k8s:optional
+	// +k8s:customValidation # capabilities must be unset when privileged
 	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources carries this container's compute limits, enforced inside the
 	// actor's sandbox. A limit of 0 leaves that resource unlimited.
@@ -3445,9 +3446,21 @@ func (x *Container) GetResources() *ResourceRequirements {
 type SecurityContext struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// capabilities adjusts the Linux capabilities of the container's process.
+	// Must be unset when privileged is true.
 	//
 	// +k8s:optional
-	Capabilities  *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Capabilities *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// privileged runs the container with every Linux capability, unmasked and
+	// writable /proc and /sys, a writable cgroup2 hierarchy, and access to all
+	// devices of the sandbox, so that it can run a container engine such as
+	// dockerd. Only the microvm sandbox class honors it: the actor then owns a
+	// whole guest kernel, and the VM, not the in-guest container, is the
+	// isolation boundary. A worker runs privileged containers only when its
+	// WorkerPool sets sandboxClasses[].allowPrivilegedActors; every other worker
+	// fails the actor rather than run it unprivileged.
+	//
+	// +k8s:optional
+	Privileged    bool `protobuf:"varint,2,opt,name=privileged,proto3" json:"privileged,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3487,6 +3500,13 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *SecurityContext) GetPrivileged() bool {
+	if x != nil {
+		return x.Privileged
+	}
+	return false
 }
 
 // Capabilities adjusts a container's Linux capabilities relative to the
@@ -10174,9 +10194,12 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fwakeup_probe\x18\x06 \x01(\v2 .substrate.ateapi.v1.WakeupProbeR\vwakeupProbe\x12E\n" +
 	"\rvolume_mounts\x18\a \x03(\v2 .substrate.ateapi.v1.VolumeMountR\fvolumeMounts\x12O\n" +
 	"\x10security_context\x18\b \x01(\v2$.substrate.ateapi.v1.SecurityContextR\x0fsecurityContext\x12G\n" +
-	"\tresources\x18\t \x01(\v2).substrate.ateapi.v1.ResourceRequirementsR\tresources\"X\n" +
+	"\tresources\x18\t \x01(\v2).substrate.ateapi.v1.ResourceRequirementsR\tresources\"x\n" +
 	"\x0fSecurityContext\x12E\n" +
-	"\fcapabilities\x18\x01 \x01(\v2!.substrate.ateapi.v1.CapabilitiesR\fcapabilities\"4\n" +
+	"\fcapabilities\x18\x01 \x01(\v2!.substrate.ateapi.v1.CapabilitiesR\fcapabilities\x12\x1e\n" +
+	"\n" +
+	"privileged\x18\x02 \x01(\bR\n" +
+	"privileged\"4\n" +
 	"\fCapabilities\x12\x10\n" +
 	"\x03add\x18\x01 \x03(\tR\x03add\x12\x12\n" +
 	"\x04drop\x18\x02 \x03(\tR\x04drop\"7\n" +

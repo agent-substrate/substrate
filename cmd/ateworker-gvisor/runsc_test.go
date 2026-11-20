@@ -28,6 +28,7 @@ import (
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
@@ -428,5 +429,23 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 				t.Fatalf("RestoreWorkload() = %v, want InvalidArgument naming %s", err, tc.want)
 			}
 		})
+	}
+}
+
+// gVisor never runs a privileged container: the privileged shape relies on a
+// VM boundary.
+func TestWriteSpecRejectsPrivileged(t *testing.T) {
+	root := t.TempDir()
+	actorDirs := &ateworkerpb.ActorDirs{RootDir: root, OciBundleDir: filepath.Join(root, "bundles")}
+	if err := os.MkdirAll(ociBundlePath(actorDirs, "app"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r := &runsc{
+		actorUID:   "uid-a",
+		actorDirs:  actorDirs,
+		containers: []*ateworkerpb.Container{{Name: "app", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, Privileged: true}}},
+	}
+	if err := r.writeSpec("app"); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("writeSpec(app) = %v, want FailedPrecondition", err)
 	}
 }

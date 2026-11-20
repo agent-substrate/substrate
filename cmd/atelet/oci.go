@@ -32,6 +32,7 @@ import (
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -77,6 +78,22 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 		out = append(out, "CAP_"+c)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// resolveContainerCapabilities is resolveCapabilities, except that a
+// privileged container gets every capability. Whether the worker may run it
+// privileged at all is the worker's decision (see ateworker-microvm's
+// --allow-privileged-actors).
+func resolveContainerCapabilities(sc *ateletpb.SecurityContext) []string {
+	if !sc.GetPrivileged() {
+		return resolveCapabilities(sc.GetCapabilities())
+	}
+	all := resources.AllLinuxCapabilities()
+	out := make([]string, len(all))
+	for i, c := range all {
+		out[i] = "CAP_" + c
+	}
 	return out
 }
 

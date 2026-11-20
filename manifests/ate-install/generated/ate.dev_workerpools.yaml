@@ -87,6 +87,17 @@ spec:
                   description: WorkerPoolSandboxClass is one sandbox runtime family
                     a WorkerPool runs.
                   properties:
+                    allowPrivilegedActors:
+                      description: |-
+                        allowPrivilegedActors lets this pool's workers run containers whose
+                        ActorTemplate sets securityContext.privileged, for example to run a
+                        container engine inside the actor. Each such actor owns a whole guest
+                        kernel, so the VM stays the isolation boundary, but the workload gets
+                        full privilege inside it and can drive every guest-to-host interface
+                        (virtio devices, the guest agent channel) directly. Enable it only on
+                        pools meant for that, ideally on dedicated nodes. Only the microvm
+                        class supports it. Workers of pools without it fail privileged actors.
+                      type: boolean
                     configRef:
                       description: |-
                         configRef names a cluster-scoped SandboxConfig for this sandbox class.
@@ -116,6 +127,10 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: allowPrivilegedActors requires the microvm sandbox class
+                    rule: '!has(self.allowPrivilegedActors) || !self.allowPrivilegedActors
+                      || self.name == ''microvm'''
                 maxItems: 1
                 minItems: 1
                 type: array
