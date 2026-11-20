@@ -34,9 +34,9 @@ import (
 // sandboxExitTimeout bounds the wait for a checkpointed sandbox to go away.
 const sandboxExitTimeout = 10 * time.Second
 
-// sandboxProcess is the runsc sandbox across a MEMORY checkpoint, which stops
-// it. runsc treats a sandbox as live while its pid exists, zombie included, so
-// a delete issued before the sandbox is reaped fails.
+// sandboxProcess is the runsc sandbox across a checkpoint, which stops it.
+// runsc treats a sandbox as live while its pid exists, zombie included, so a
+// delete issued before the sandbox is reaped fails.
 type sandboxProcess struct {
 	pid   int
 	pidfd int
