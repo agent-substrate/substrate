@@ -1149,6 +1149,14 @@ data:
             max_connections: 65536
             max_pending_requests: 65536
             max_requests: 65536
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - description: TCP_NOTSENT_LOWAT
+            level: 6   # IPPROTO_TCP
+            name: 25   # TCP_NOTSENT_LOWAT
+            int_value: 16384
+            state: STATE_PREBIND
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
