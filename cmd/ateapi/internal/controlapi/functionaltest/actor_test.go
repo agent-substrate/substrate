@@ -207,6 +207,37 @@ func TestCreateActor_ExternalVolumesWithoutOptIn(t *testing.T) {
 	}
 }
 
+// TestCreateActor_ExternalVolumesWithoutOptIn_ClassMissing checks that a
+// client which did not opt in to preview features gets the preview gate error
+// even when the template's ExternalVolumeClass does not exist.
+func TestCreateActor_ExternalVolumesWithoutOptIn_ClassMissing(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-create-ext-vols-no-opt-in-no-class")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapi.Volume{{
+			Name:     "ext-vol-1",
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"}, CapacityBytes: 10 << 30}},
+		}},
+		[]*ateapi.VolumeMount{{Name: "ext-vol-1", MountPath: "/data"}})
+
+	_, err := tc.noOptInClient.CreateActor(context.Background(), &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "vol-actor-1"},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateActor error = %v, want InvalidArgument", err)
+	}
+	if !strings.Contains(err.Error(), preview.Header) {
+		t.Errorf("CreateActor error = %v, want it to mention %s", err, preview.Header)
+	}
+}
+
 // TestActorLifecycle_ExternalVolumesWithoutOptIn checks that a client which
 // did not opt in to preview features can still resume, suspend and delete an
 // Actor with external volumes: those requests carry no preview fields, and the

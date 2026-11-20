@@ -244,9 +244,24 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
 - **API clients:** if the release changes the bundled PostgreSQL, it restarts once, and API calls fail until it is back.
 
-Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release. (If you used the preview `ExternalVolumeTemplate.storage_class_name` field in 1.0, recreate those templates with `external_volume_class` pointing to an `ExternalVolumeClass`.)
+Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
 
 The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
+
+#### Templates that use the preview `storage_class_name` field
+
+This release removes the 1.0 preview field `ExternalVolumeTemplate.storage_class_name`. External volumes now name an `ExternalVolumeClass` with `external_volume_class`, and ate-api-server no longer reads Kubernetes StorageClasses. After the upgrade, for templates that still use `storage_class_name`:
+
+- `CreateActor` fails with `FailedPrecondition`.
+- `ResumeActor` fails with `FailedPrecondition` for actors whose external volumes were never provisioned. Actors whose volumes are already provisioned keep working.
+- Repointing an actor to a new template is rejected while its old template still exists, because the volumes differ.
+
+To recover:
+
+1. Create an `ExternalVolumeClass` for each StorageClass the templates used. Set `driverName` to the StorageClass `provisioner` and copy its `parameters` and mount options. See [External Volume Classes](../reference/kubectl-ate.md#external-volume-classes).
+2. Delete each affected template and create it again under the same name, with `external_volume_class` naming the new class in place of `storage_class_name`. Keeping the name keeps existing actors on the template, and keeping the same driver means the `volume_type` stored on their provisioned volumes still matches.
+
+Rolling back to the previous release breaks the recreated templates, because that release only reads `storage_class_name`. Recreate them with `storage_class_name` after a rollback.
 
 ## Something's wrong, or I need to roll back
 
