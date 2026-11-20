@@ -18,6 +18,7 @@ package memborrow
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,6 +82,63 @@ func TestTakeWithoutPodLimit(t *testing.T) {
 	}
 	if err := l.Wait(context.Background()); err != nil {
 		t.Errorf("Wait() without a pod limit = %v", err)
+	}
+	if tight, _ := l.Tight(); tight {
+		t.Error("Tight() without a pod limit = true, want false")
+	}
+}
+
+func TestTight(t *testing.T) {
+	const limit = 4 << 30
+	for _, tc := range []struct {
+		name string
+		// current and borrowed already include this snapshot's dirty pages and loan.
+		current, unbooked, borrowed int64
+		want                        bool
+	}{
+		{name: "room to spare", current: 2 << 30, unbooked: 3 << 30, borrowed: 1 << 30, want: false},
+		{name: "more than a third unbooked", current: 2 << 30, unbooked: 2 << 30, borrowed: 512 << 20, want: false},
+		{name: "at most a third unbooked", current: 2 << 30, unbooked: 2 << 30, borrowed: 1 << 30, want: true},
+		{name: "a placement booked into the loan", current: 2 << 30, unbooked: 512 << 20, borrowed: 1 << 30, want: true},
+		{name: "short of free memory", current: limit - margin + 1, unbooked: 3 << 30, borrowed: 1 << 30, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := ledger(limit, tc.current, unbookedOf(tc.unbooked))
+			l.bytes = tc.borrowed
+			if got, _ := l.Tight(); got != tc.want {
+				t.Errorf("Tight() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	failing := &Ledger{
+		Unbooked:  func(int64) int64 { return 2 << 30 },
+		PodMemory: func() (int64, int64, error) { return 0, 0, errors.New("no cgroup") },
+	}
+	if tight, _ := failing.Tight(); !tight {
+		t.Error("Tight() when pod memory can't be read = false, want true")
+	}
+}
+
+func TestTightAskedAgainWhenWaitBlocks(t *testing.T) {
+	unbooked := unbookedOf(3 << 30)
+	l := ledger(4<<30, 1<<30, unbooked)
+	l.Take(1 << 30)
+	tight, recheck := l.Tight()
+	if tight {
+		t.Fatal("Tight() with room to spare = true, want false")
+	}
+	// A new actor books most of the remaining memory and blocks in Wait.
+	unbooked.Store(512 << 20)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = l.Wait(ctx) }()
+	select {
+	case <-recheck:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Wait held back a placement without closing Tight's channel")
+	}
+	if tight, _ := l.Tight(); !tight {
+		t.Error("Tight() with a placement waiting = false, want true")
 	}
 }
 
