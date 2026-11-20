@@ -19,17 +19,21 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // check is one OpenFGA permission check. When subject is empty, the caller
 // principal from context must have relation on object; when subject is set
-// (e.g. "atespace:team-a"), subject itself must have relation on object.
+// (e.g. "atespace:team-a"), subject itself must have relation on object. When
+// gate is set, the interceptor skips the check for a request without that
+// preview gate; the handler's validation then rejects the gated field.
 type check struct {
 	subject  string
 	relation string
 	object   string
+	gate     preview.Gate
 }
 
 // checkExtractor returns the checks a request must pass; the interceptor allows
@@ -169,6 +173,7 @@ func onExternalVolumeClassRefs(atespace string, volumes []*ateapi.Volume, fldPat
 			subject:  subject,
 			relation: RelationCanReference,
 			object:   ExternalVolumeClassObject(name),
+			gate:     preview.GateExternalVolumes,
 		})
 	}
 	return checks, errs

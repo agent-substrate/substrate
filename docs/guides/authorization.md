@@ -183,8 +183,8 @@ viewer, and a global role holds the same role in every atespace. So
 | `GetActorTemplate` | `can_get`, the template | Viewer of its atespace |
 | `DeleteActorTemplate` | `can_delete`, the template | Editor of its atespace |
 | `ListActorTemplates` | `can_list_actor_templates`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
-| `CreateActor` | 1. `can_create_actor`, the actor's atespace<br>2. `can_use_template`, the actor template<br>3. `can_use_tag`, the `sourceTag`, if one is given | 1. Atespace editor<br>2. Viewer of the template's atespace, which may be another one<br>3. Editor of the tag's atespace. When `sourceTag` is omitted, the handler resolves the template's golden tag without checking `can_use_tag`. |
-| `UpdateActor` | 1. `can_update`, the actor<br>2. `can_use_template`, the template in the request | 1. Editor of its atespace<br>2. Viewer of the template's atespace, so an actor can't be switched to a template its editor can't use |
+| `CreateActor` | 1. `can_create_actor`, the actor's atespace<br>2. `can_use_template`, the actor template<br>3. `can_use_tag`, the `sourceTag`, if one is given<br>4. `can_reference`, each `ExternalVolumeClass` the template uses (subject: `atespace:<actor's atespace>`) | 1. Atespace editor<br>2. Viewer of the template's atespace, which may be another one<br>3. Editor of the tag's atespace. When `sourceTag` is omitted, the handler resolves the template's golden tag without checking `can_use_tag`.<br>4. The actor's atespace must be listed under `allowed_atespace` in each class's access policy, so a template from another atespace can't bypass the class grants |
+| `UpdateActor` | 1. `can_update`, the actor<br>2. `can_use_template`, the template in the request<br>3. `can_reference`, each `ExternalVolumeClass` the new template uses (subject: `atespace:<actor's atespace>`) | 1. Editor of its atespace<br>2. Viewer of the template's atespace, so an actor can't be switched to a template its editor can't use<br>3. The actor's atespace must be listed under `allowed_atespace` in each class's access policy |
 | `GetActor` | `can_get`, the actor | Viewer of its atespace; `atenet-egress`; the objectstore control plugin |
 | `DeleteActor` | `can_delete`, the actor | Editor of its atespace |
 | `ListActors` | `can_list_actors`, the atespace, or global if none is given | Atespace viewer; for all atespaces, global viewer, `atenet-router` or `atenet-egress` |
@@ -350,11 +350,17 @@ For a shared cluster, beyond replacing the default bootstrap owner:
   `ListExternalVolumeClasses` requires global `viewer`; an editor of an
   atespace granted `allowed_atespace` on a class can inspect that class by
   name with `GetExternalVolumeClass`.
+- **Deleting an external volume class resets its grants.** Deleting a class
+  also deletes its access policy and every `allowed_atespace` grant. A class
+  recreated under the same name starts with no grants, so new actors and
+  not-yet-provisioned volumes that use it are refused until each atespace is
+  granted again.
 - **External volume class revocation is not retroactive.** `can_reference` is
-  checked only on `CreateActorTemplate`. Revoking an `allowed_atespace` grant
-  does not stop actors created from existing templates, and cloning a tag
-  across atespaces (`CreateActor` with `sourceTag`) does not re-check the
-  original template's class grant.
+  checked on `CreateActorTemplate`, `CreateActor`, `UpdateActor` and when a
+  volume is first provisioned. Revoking an `allowed_atespace` grant does not
+  stop actor volumes that are already provisioned, and cloning a tag across
+  atespaces (`CreateActor` with `sourceTag`) does not re-check the original
+  template's class grant.
 - **Tags can copy an actor's data.** A tag is a durable copy of an actor's
   memory and disk, including secrets, and outlives the actor. Any atespace
   editor can tag, publish and clone any actor in the atespace.

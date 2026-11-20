@@ -21,6 +21,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/codes"
 )
 
@@ -87,7 +88,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			}},
 			want: []check{
 				{relation: RelationCanCreateActorTemplate, object: "atespace:team-a"},
-				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-nfs"},
+				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-nfs", gate: preview.GateExternalVolumes},
 			},
 		},
 		{
@@ -119,8 +120,8 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			}},
 			want: []check{
 				{relation: RelationCanCreateActorTemplate, object: "atespace:team-a"},
-				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-nfs"},
-				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-ssd"},
+				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-nfs", gate: preview.GateExternalVolumes},
+				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-ssd", gate: preview.GateExternalVolumes},
 			},
 		},
 		{

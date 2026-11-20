@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection/grpc_reflection_v1"
@@ -50,6 +51,11 @@ func UnaryServerInterceptor(authorizer *Authorizer) grpc.UnaryServerInterceptor 
 			return nil, err
 		}
 		for _, c := range checks {
+			// preview.UnaryServerInterceptor must run before this one, so ctx
+			// already carries the request's preview opt-out.
+			if c.gate != "" && !preview.IsEnabledFor(ctx, c.gate) {
+				continue
+			}
 			var checkErr error
 			if c.subject != "" {
 				checkErr = authorizer.CheckSubject(ctx, c.subject, c.relation, c.object)

@@ -187,6 +187,29 @@ func snapshotSharing(owner ateapi.SnapshotOwner) ateletpb.SnapshotSharing {
 	return ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
 }
 
+// checkUnprovisionedVolumeClassAccess checks, before first provisioning, that
+// the actor's atespace may still reference the ExternalVolumeClass of each
+// volume that has no storage volume ID. A class deleted and recreated under
+// the same name starts with no grants, so templates that name it cannot
+// provision on it until an admin grants access again. Provisioned volumes key
+// on their recorded volume type and are not checked.
+func (w *ActorWorkflow) checkUnprovisionedVolumeClassAccess(ctx context.Context, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) error {
+	unprovisioned := make(map[string]bool)
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		if vol.GetStorageVolumeId() == "" {
+			unprovisioned[vol.GetName()] = true
+		}
+	}
+	atespace := actor.GetMetadata().GetAtespace()
+	class, err := checkVolumeClassAccess(ctx, w.subjectChecker, atespace, actorTemplate, func(vol *ateapi.Volume) bool {
+		return unprovisioned[vol.GetName()]
+	})
+	if apierror.Code(err) == codes.PermissionDenied {
+		return apierror.FailedPrecondition("atespace %q may not use ExternalVolumeClass %q; grant it with kubectl ate update access-policy -c", atespace, class)
+	}
+	return err
+}
+
 // ensureVolumesCreated provisions any actor volumes that have no storage
 // volume ID yet, persisting the resulting volume state (even when creation
 // partially failed, so progress is not lost) and returning the stored copy.
@@ -204,6 +227,9 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	}
 	if st := actor.GetStatus().GetState(); st == ateapi.ActorState_ACTOR_STATE_DELETING {
 		return nil, apierror.FailedPrecondition("cannot create volumes for Actor %s in state %s", actorRef, st)
+	}
+	if err := w.checkUnprovisionedVolumeClassAccess(ctx, actor, actorTemplate); err != nil {
+		return nil, err
 	}
 
 	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.store, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes().GetVolumes())

@@ -59,6 +59,12 @@ type VolumePluginRegistry interface {
 	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
 }
 
+// SubjectChecker checks that subject, such as "atespace:team-a", has relation
+// on object. *authz.Authorizer implements it.
+type SubjectChecker interface {
+	CheckSubject(ctx context.Context, subject, relation, object string) error
+}
+
 // NewRPCService creates an instance of the ControlServer service. This is what
 // implements the outward-facing RPC interface.
 //
@@ -72,6 +78,10 @@ type VolumePluginRegistry interface {
 //
 // snapshotLocation is ate-api-server's cluster-wide --snapshot-location; see
 // resolveSnapshotLocation.
+//
+// subjectChecker checks that an actor's atespace may reference the
+// ExternalVolumeClasses its template uses. nil skips the check; only test
+// servers that run without authz pass nil.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -84,9 +94,11 @@ func NewRPCService(
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	snapshotLocation string,
+	subjectChecker SubjectChecker,
 ) *RPCService {
 	impl := newServiceImpl(persistence)
 	impl.clusterSnapshotLocation = snapshotLocation
+	impl.subjectChecker = subjectChecker
 	s := &RPCService{
 		impl:                  impl,
 		persistence:           persistence,
@@ -101,6 +113,7 @@ func NewRPCService(
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
+	s.actorWorkflow.subjectChecker = subjectChecker
 	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
 	return s
 }
@@ -184,6 +197,10 @@ type ServiceImpl struct {
 	// clusterSnapshotLocation is ate-api-server's --snapshot-location; see
 	// resolveSnapshotLocation.
 	clusterSnapshotLocation string
+
+	// subjectChecker checks ExternalVolumeClass references; nil skips the
+	// check.
+	subjectChecker SubjectChecker
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
