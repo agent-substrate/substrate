@@ -23,6 +23,67 @@ import (
 	"testing"
 )
 
+// TestValidateImageVolumeName pins which names setupImageVolumes will build a
+// mount point from. The table is the decision; the assertion under it is why
+// the decision matters, that an accepted name is always a direct child of the
+// bundle's volumes/ directory.
+func TestValidateImageVolumeName(t *testing.T) {
+	const bundle = "/var/lib/ate/bundles/b1"
+	volumes := filepath.Join(bundle, "volumes")
+
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{name: "agent", valid: true},
+		{name: "my-volume-1", valid: true},
+		// Dots are ordinary characters inside a path element.
+		{name: "..foo", valid: true},
+		{name: "foo..", valid: true},
+
+		{name: "", valid: false},
+		// "." resolves to volumes/ itself, which holds every other volume's
+		// mount point in the bundle.
+		{name: ".", valid: false},
+		{name: "..", valid: false},
+		{name: "../../../etc", valid: false},
+		// A separator nests the mount somewhere below volumes/ instead; an
+		// absolute or dot-prefixed form is cleaned by filepath.Join into a
+		// different volume than the one named. Neither escapes the bundle,
+		// but neither is the directory the caller asked for either.
+		{name: "a/b", valid: false},
+		{name: "./agent", valid: false},
+		{name: "agent/", valid: false},
+		{name: "/etc", valid: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateImageVolumeName(tc.name)
+			if got := err == nil; got != tc.valid {
+				t.Fatalf("validateImageVolumeName(%q) error = %v, want valid: %t", tc.name, err, tc.valid)
+			}
+			if !tc.valid {
+				return
+			}
+			if got := ImageVolumeMountPath(bundle, tc.name); filepath.Dir(got) != volumes {
+				t.Errorf("ImageVolumeMountPath(%q) = %q, want a direct child of %q", tc.name, got, volumes)
+			}
+		})
+	}
+}
+
+// TestImageVolumeMountPathEscapesOnTraversal records the behavior the check
+// above exists to prevent: without it, the mount point leaves the bundle
+// entirely, and setupImageVolumes would MkdirAll, unmount and mount over it.
+func TestImageVolumeMountPathEscapesOnTraversal(t *testing.T) {
+	const bundle = "/var/lib/ate/bundles/b1"
+	if got, want := ImageVolumeMountPath(bundle, "../../../etc"), "/var/lib/ate/etc"; got != want {
+		t.Fatalf("ImageVolumeMountPath(%q, %q) = %q, want %q", bundle, "../../../etc", got, want)
+	}
+	if got, want := ImageVolumeMountPath(bundle, "."), filepath.Join(bundle, "volumes"); got != want {
+		t.Fatalf("ImageVolumeMountPath(%q, %q) = %q, want %q", bundle, ".", got, want)
+	}
+}
+
 func TestOverlaySpecRoundTrip(t *testing.T) {
 	bundle := t.TempDir()
 	in := &OverlaySpec{
