@@ -2,13 +2,15 @@
 
 Benchmarks the Agent Substrate egress dataplane (`atunnel` -> `atenet-egress`) using [Nighthawk](https://github.com/envoyproxy/nighthawk).
 
-## Architecture
+## What it measures
 
 ```mermaid
 flowchart LR
-    client["nighthawk_client<br/>(host)"]
-    proxy["kubectl-ate proxy actor<br/>(:19980)"]
-    router["atenet-router<br/>(:8444)"]
+    subgraph job["Runner Job"]
+        client["Nighthawk client"]
+        invoker["invoker sidecar<br/>(:19980, adds ate-target-actor)"]
+    end
+    router["atenet-router"]
 
     subgraph worker["WorkerPod (ateworker-gvisor)"]
         atunnel-ingress["ingress atunnel"]
@@ -19,14 +21,20 @@ flowchart LR
     egress["atenet-egress<br/>(HTTP / HTTPS MITM / TLS passthrough)"]
     server["nighthawk-server<br/>(:80, :443, :8443)"]
 
-    client -->|"start test"| proxy
-    proxy -->|"CONNECT to nighthawk/tester:80"| router
+    client -->|"start test"| invoker
+    invoker -->|"gRPC + ate-target-actor: nighthawk/tester"| router
     router --> atunnel-ingress
     atunnel-ingress --> actor
     actor ==>|"test traffic"| atunnel-egress
     atunnel-egress ==>|"mTLS"| egress
     egress ==> server
 ```
+
+| `mode` | Egress Mode | Target URL | Port |
+|---|---|---|---|
+| `http` | Plaintext HTTP | `http://nighthawk-server.nighthawk.svc:80` | `80` |
+| `mitm` | HTTPS (TLS MITM) | `https://nighthawk-server.nighthawk.svc:443` | `443` |
+| `passthrough` | TLS Passthrough | `https://nighthawk-server.nighthawk.svc:8443` | `8443` |
 
 ## Tuning
 
@@ -39,7 +47,7 @@ A `type: nighthawk-egress` entry in [`benchmarking/automation/tests.yaml`](../au
 | `envoyCpu` | required | CPU request and limit of `envoy` and `ext-proc` in `deployment/atenet-egress`, and the Envoy `--concurrency`. |
 | `mode` | required | `http`, `mitm`, or `passthrough`. |
 
-## Prerequisites
+### Sizing the rig
 
 The actor, the worker pool, and `nighthawk-server` are sized to outscale `atenet-egress` with one Envoy worker thread, so a run measures the gateway and not the load generator or the origin server. `--cordon-system-infra-components` keeps the gateway off the nodes that run the load. The cluster needs the two tainted node pools of [System Infra Isolation](../../docs/concepts/architecture.md#system-infra-isolation) and a default pool:
 
@@ -47,13 +55,19 @@ The actor, the worker pool, and `nighthawk-server` are sized to outscale `atenet
 |---|---|---|---|
 | `ate-system-infra` | 1 x `c3-standard-22` | `atenet-egress`, the system under test, beside the other system infra components, which carry no test traffic | the node selector and toleration that `--cordon-system-infra-components` adds |
 | `ate-postgres` | 1 x `c3-standard-4` | Postgres | the same flag |
-| default | 2 x `c3-standard-22` (22 vCPUs and 88 GiB each) | the worker pod with the `nighthawk/tester` actor, `nighthawk-server`, and `traffic-driver-invoker` | the `NoSchedule` taints of the other two pools, which these pods do not tolerate |
+| default | 2 x `c3-standard-22` (22 vCPUs and 88 GiB each) | the worker pod with the `nighthawk/tester` actor, `nighthawk-server`, and the runner Job | the `NoSchedule` taints of the other two pools, which these pods do not tolerate |
 
 The sizes:
 
 - `traffic-driver-template.yaml.tmpl` gives the `nighthawk/tester` sandbox 16 vCPUs and 8 GiB, so `nighthawk_service` runs the 16 worker threads that the example `nighthawk_client` command below asks for (`--concurrency 16`) without CPU throttling.
 - `traffic-driver.yaml.tmpl` requests 12 vCPUs and 8 GiB for the worker pod and sets no limits, so only the actor's own limits cap the load generator. The request fits a `c3-standard-22` node beside the system DaemonSets. The worker pod and `nighthawk-server` request 18 vCPUs together, so the scheduler may place them on the same node; this benchmark accepts that.
 - `nighthawk-server.yaml` runs `nighthawk_test_server` with `--concurrency 8` and requests 6 vCPUs, so upstream HTTP and TLS on `:80`, `:443`, and `:8443` do not saturate before the gateway.
+
+## Manual runs
+
+The rig also takes a fixed-rate run from a host, with no runner Job. `nighthawk_client` reaches `nighthawk_service` in the actor through `kubectl-ate proxy actor`.
+
+### Prerequisites
 
 1. **Multi-node benchmark cluster with Agent Substrate deployed**:
    - **Existing cluster** (with `.ate-dev-env.sh` configured):
@@ -72,21 +86,21 @@ The sizes:
 2. **`kubectl-ate`**: `deploy-traffic-driver.sh` builds it from `./cmd/kubectl-ate` into a temporary directory.
 3. **Docker** running locally (used to run `nighthawk_client`).
 
-## Setup
+### Setup
 
-### 1. Deploy `nighthawk-server`
+#### 1. Deploy `nighthawk-server`
 
 ```bash
 ./benchmarking/nighthawk-egress/deploy.sh
 ```
 
-### 2. Deploy the worker pool, actor template, and `nighthawk/tester` actor
+#### 2. Deploy the worker pool, actor template, and `nighthawk/tester` actor
 
 ```bash
 ./benchmarking/nighthawk-egress/deploy-traffic-driver.sh
 ```
 
-### 3. Forward a port to the actor
+#### 3. Forward a port to the actor
 
 In a separate terminal, forward local port `19980` to `nighthawk_service` in the `nighthawk/tester` actor. `kubectl-ate proxy actor` connects as `spiffe://cluster.local/ns/ate-system/sa/atenet-client`, which is the ID in the deploy command above:
 
@@ -94,7 +108,7 @@ In a separate terminal, forward local port `19980` to `nighthawk_service` in the
 go run ./cmd/kubectl-ate proxy actor tester -a nighthawk 19980:80
 ```
 
-## Running the Benchmark
+### Running the benchmark
 
 Run `nighthawk_client` against the forwarded port (`grpc://127.0.0.1:19980`), which reaches `nighthawk_service` inside the `nighthawk/tester` actor:
 
@@ -104,17 +118,9 @@ docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envo
 
 Nighthawk multiplies `--rps` by `--concurrency`, so this command targets 16,000 requests per second in total. One Envoy worker thread holds less than that, so the gateway saturates and the output shows the rate it reached.
 
-See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-nighthawk-client-cli) for all command line options.
+See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-nighthawk-client-cli) for all command line options. The table in [What it measures](#what-it-measures) lists the target URL of each egress mode.
 
-### Target URLs and Default Egress Policy
-
-| Egress Mode | Target URL | Port |
-|---|---|---|
-| Plaintext HTTP | `http://nighthawk-server.nighthawk.svc:80` | `80` |
-| HTTPS (TLS MITM) | `https://nighthawk-server.nighthawk.svc:443` | `443` |
-| TLS Passthrough | `https://nighthawk-server.nighthawk.svc:8443` | `8443` |
-
-## Cleanup
+### Cleanup
 
 Delete the `nighthawk/tester` actor, actor template, atespace, and worker pool:
 
