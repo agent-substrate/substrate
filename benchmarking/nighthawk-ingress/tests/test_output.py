@@ -238,7 +238,4 @@ def test_write_artifacts(tmp_path, monkeypatch, testing_stage):
 
 
 if __name__ == "__main__":
-    for fn_name, fn in sorted(dict(globals()).items()):
-        if fn_name.startswith("test_") and callable(fn):
-            fn()
-            print(f"PASS {fn_name}")
+    sys.exit(pytest.main([__file__]))

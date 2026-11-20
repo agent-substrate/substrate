@@ -14,6 +14,7 @@
 
 import os
 
+from nighthawk_common.spec import spec_dict_to_textproto
 import spec as egress_spec
 
 
@@ -25,7 +26,7 @@ def main():
             mode,
             servicedns_ca_pem=fake_ca if mode == "passthrough" else None,
         )
-        egress_spec.spec_dict_to_textproto(s, desc)
+        spec_dict_to_textproto(s, desc)
     print("The spec of each mode converts with the Nighthawk protos")
 
 
