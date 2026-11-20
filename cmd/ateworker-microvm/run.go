@@ -99,13 +99,14 @@ type runningActor struct {
 	// share it: the stdout/stderr forwarding goroutines (they pump the
 	// container's output via ReadStdout/ReadStderr on this connection for the
 	// actor's lifetime) and GetWorkloadStats (via the hosted actor's guest
-	// stats target, which points at this same client). It is NOT closed when
+	// stats target, which points at this same client). The crash watcher also
+	// waits on it for the workload processes to exit. It is NOT closed when
 	// RunWorkload / RestoreWorkload return — teardownActor closes it, which
 	// makes the in-flight ReadStdout/ReadStderr calls fail and the forwarding
 	// goroutines exit (io.EOF). Both boot and restore fail if they cannot dial
 	// the agent, so a running actor always has one; nil only once teardown has
 	// closed it.
-	guestAgent *kata.AgentClient
+	guestAgent guestClient
 
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).

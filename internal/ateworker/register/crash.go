@@ -35,7 +35,8 @@ import (
 const maxCrashMessageBytes = 4096
 
 // CrashReporter tells the control plane, through the node-local atelet, that
-// the sandbox of an actor this ateworker hosts died on its own.
+// an actor this ateworker hosts died on its own: its sandbox exited, or its
+// workload containers did while the sandbox stayed up.
 type CrashReporter struct {
 	socketPath string
 	tlsConfig  *tls.Config
@@ -51,7 +52,7 @@ func NewCrashReporter(cfg ReportConfig) (*CrashReporter, error) {
 	return &CrashReporter{socketPath: cfg.SocketPath, tlsConfig: tlsConfig}, nil
 }
 
-// ReportCrashed reports that actor's sandbox died, retrying until the control
+// ReportCrashed reports that actor died, retrying until the control
 // plane answers or ctx ends. A crash stays true, so unlike a suspend request it
 // is worth retrying for as long as the caller allows. A refusal, the actor
 // having moved on or an operation in flight owning it, is an answer and is
