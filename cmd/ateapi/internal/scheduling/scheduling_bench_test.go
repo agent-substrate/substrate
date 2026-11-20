@@ -76,18 +76,30 @@ type benchFleetOpts struct {
 	oldFull  bool
 	// oldOnNode gives the workers of that node the "old" runtime.
 	oldOnNode string
+	// restorable lists extra restorable runtime bundle hashes carried by
+	// every worker ahead of "old", modeling a multi-version rollout.
+	restorable []string
 }
 
 func benchFleet(n int, o benchFleetOpts) fleet {
 	newRT := benchWorkerRuntime("new")
 	oldRT := benchWorkerRuntime("old")
+	var extraRTs []*ateapi.WorkerSandboxRuntime
+	for _, h := range o.restorable {
+		extraRTs = append(extraRTs, benchWorkerRuntime(h))
+	}
+	withOld := append(append([]*ateapi.WorkerSandboxRuntime(nil), extraRTs...), oldRT)
 	f := make(fleet, 0, n)
 	for i := range n {
 		node := benchNode(i)
-		class := &ateapi.WorkerSandboxClass{SandboxClass: "gvisor", DefaultRuntime: newRT}
+		class := &ateapi.WorkerSandboxClass{
+			SandboxClass:       "gvisor",
+			DefaultRuntime:     newRT,
+			RestorableRuntimes: extraRTs,
+		}
 		used := int32(1 + i%6)
 		if (o.oldEvery > 0 && i%o.oldEvery == 0) || (o.oldOnNode != "" && node == o.oldOnNode) {
-			class.RestorableRuntimes = []*ateapi.WorkerSandboxRuntime{oldRT}
+			class.RestorableRuntimes = withOld
 			if o.oldFull {
 				used = benchMaxActors
 			}
@@ -153,6 +165,17 @@ var benchScenarios = []benchScenario{
 		wantOld:   ptr.To(true),
 	},
 	{
+		// Multi-version rollout: every worker carries two non-matching
+		// restorable runtimes, and a tenth also carry "old" last in the list.
+		name: "memory-rollout",
+		fleet: func(n int) fleet {
+			return benchFleet(n, benchFleetOpts{oldEvery: 10, restorable: []string{"prev-1", "prev-2"}})
+		},
+		snapshot:  "old",
+		relaxable: true,
+		wantOld:   ptr.To(true),
+	},
+	{
 		// A pinned actor resumes on the node that holds its local snapshot.
 		// Pinned actors detach before relaxing, so the runtime is required.
 		name:      "pinned",
@@ -204,8 +227,12 @@ func benchConstraints(sc benchScenario, n int) Constraints {
 
 func carriesOld(w *ateapi.Worker) bool {
 	for _, c := range w.GetStatus().GetSandboxClasses() {
-		if len(c.GetRestorableRuntimes()) > 0 {
-			return true
+		for _, rt := range c.GetRestorableRuntimes() {
+			for _, a := range rt.GetVersion().GetAttributes() {
+				if a.GetKey() == hardware.AttrSandboxBundleHash && a.GetValue() == "old" {
+					return true
+				}
+			}
 		}
 	}
 	return false
