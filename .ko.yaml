@@ -14,6 +14,13 @@
 
 defaultBaseImage: gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 
+# grpcnotrace strips grpc-go's golang.org/x/net/trace dependency from every
+# Go binary ko builds, letting the compiler dead-code eliminate it for a
+# ~10-15% smaller image. It is a Go build tag, not a ko --tags image tag, so it
+# is passed to go build via defaultFlags.
+defaultFlags:
+  - -tags=grpcnotrace
+
 defaultPlatforms:
   - linux/amd64
   - linux/arm64
