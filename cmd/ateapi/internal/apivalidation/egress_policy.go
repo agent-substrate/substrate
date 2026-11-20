@@ -92,7 +92,8 @@ func ValidateCustom_DeleteActorEgressPolicyRequest_Name(_ context.Context, _ ope
 // ValidateCustom_EgressPolicy_Rules rejects two rules that tie on a pattern
 // and a port, whatever their protocols: the gateway would have no way to pick
 // one. Defaults are applied before validation, so an http rule left on 80
-// and an https rule left on 443 never tie.
+// and an https rule left on 443 never tie. It also rejects a token exchange
+// whose token_url no https rule allows.
 func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation, p *field.Path, rules, _ []*ateapi.EgressRule) field.ErrorList {
 	type key struct {
 		pattern string
@@ -121,6 +122,49 @@ func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation,
 					errs = append(errs, field.Invalid(path, pattern, fmt.Sprintf("ties with %s on %s", prior.path, port)))
 				}
 			}
+		}
+	}
+	return append(errs, validateTokenURLsAllowed(p, rules)...)
+}
+
+// maxTokenExchanges bounds the token_exchange entries in one policy, since
+// each costs a pass over every rule here.
+const maxTokenExchanges = 16
+
+func validateTokenURLsAllowed(p *field.Path, rules []*ateapi.EgressRule) field.ErrorList {
+	type tokenURL struct {
+		path *field.Path
+		raw  string
+	}
+	var urls []tokenURL
+	for i, rule := range rules {
+		member, effects := "http", rule.GetHttp().GetEffects()
+		if rule.GetHttps() != nil {
+			member, effects = "https", rule.GetHttps().GetEffects()
+		}
+		for j, inj := range effects.GetReplaceHeaders() {
+			if src := inj.GetTokenExchange(); src != nil {
+				path := p.Index(i).Child(member, "effects", "replace_headers").Index(j).Child("token_exchange", "token_url")
+				urls = append(urls, tokenURL{path, src.GetTokenUrl()})
+			}
+		}
+	}
+	if len(urls) > maxTokenExchanges {
+		return field.ErrorList{field.Invalid(p, len(urls), fmt.Sprintf("at most %d replace_headers entries may set token_exchange", maxTokenExchanges))}
+	}
+	if len(urls) == 0 {
+		return nil
+	}
+	// Invalid patterns are reported by the hostname checks.
+	policy, _ := egresspolicy.Compile(&ateapi.EgressPolicy{Rules: rules})
+	var errs field.ErrorList
+	for _, u := range urls {
+		dest, ok := egresspolicy.TokenURLDestination(u.raw)
+		if !ok {
+			continue // reported by the token_url format check
+		}
+		if !policy.EvaluateRequest(dest, true).Allowed {
+			errs = append(errs, field.Invalid(u.path, u.raw, "host and port must be allowed by an https rule in this policy"))
 		}
 	}
 	return errs
@@ -252,6 +296,36 @@ func ValidateCustom_CredentialHeader_CredentialUri(_ context.Context, _ operatio
 		}
 	}
 	return nil
+}
+
+func ValidateCustom_TokenExchangeSource_TokenUrl(_ context.Context, _ operation.Operation, p *field.Path, raw, _ *string) field.ErrorList {
+	if _, ok := egresspolicy.TokenURLDestination(*raw); !ok {
+		return field.ErrorList{
+			field.Invalid(p, *raw, "must be an https URL with a DNS hostname and no userinfo, query, or fragment"),
+		}
+	}
+	return nil
+}
+
+func ValidateCustom_TokenExchangeSource_Scopes(_ context.Context, _ operation.Operation, p *field.Path, scopes, _ []string) field.ErrorList {
+	var errs field.ErrorList
+	for i, scope := range scopes {
+		if !validScopeToken(scope) {
+			errs = append(errs, field.Invalid(p.Index(i), scope, `must be printable ASCII without spaces, '"', or '\'`))
+		}
+	}
+	return errs
+}
+
+// validScopeToken reports whether scope holds only RFC 6749 scope-token
+// characters, which exclude the space that joins scopes in a request.
+func validScopeToken(scope string) bool {
+	for _, c := range []byte(scope) {
+		if c < 0x21 || c > 0x7e || c == '"' || c == '\\' {
+			return false
+		}
+	}
+	return true
 }
 
 func validCredentialURI(raw string) bool {
