@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,28 +74,44 @@ func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 	t.Logf("fetch by address was denied as expected: %s", body)
 }
 
-// TestActorEgressRequiresPolicy: an actor with no EgressPolicy is denied.
+// TestActorEgressRequiresPolicy verifies that outbound traffic is denied both
+// when an actor has no EgressPolicy and when its EgressPolicy has an empty
+// rules list. The actor fetches by IP address so the request reaches the
+// egress gateway instead of being rejected earlier by DNS.
 func TestActorEgressRequiresPolicy(t *testing.T) {
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	target := e2e.DeployServerPod(t, ctx, egressHTTPTarget())
-
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-nopolicy", e2e.EgressFixture())
+	url := fmt.Sprintf("http://%s/healthz", target.Address())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
-	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
-	// There is no allowed fetch to prove the route is up, so wait on the
-	// demo's readiness endpoint; otherwise a 503 from a route not yet
-	// propagated would look like the answer we want.
-	waitForActorRoute(t, ctx, router, actorRef)
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		// nil means do not create an EgressPolicy; an empty slice means create
+		// an EgressPolicy with no rules.
+		rules []*ateapi.EgressRule
+	}{
+		{name: "no policy", prefix: "egress-nopolicy"},
+		{name: "empty policy", prefix: "egress-emptypolicy", rules: []*ateapi.EgressRule{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, actorName, _ := createAndResumeActorWithEgress(t, ctx, tc.prefix, e2e.EgressFixture(), tc.rules...)
+			actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
-	url := fmt.Sprintf("http://%s/healthz", target.Address())
-	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
-		t.Fatalf("fetch by an actor with no policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
+			// There is no allowed fetch to prove the route is up, so wait on
+			// the demo's readiness endpoint; otherwise a 503 from a route not
+			// yet propagated would look like the answer we want.
+			waitForActorRoute(t, ctx, router, actorRef)
+
+			status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
+			if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+				t.Fatalf("fetch by an actor with %s returned HTTP %d, want an egress-policy denial; body: %s", tc.name, status, body)
+			}
+			t.Logf("egress was denied as expected: %s", body)
+		})
 	}
-	t.Logf("egress was denied as expected: %s", body)
 }
 
 // TestActorEgressHTTPSByHostname: the policy allows one origin by name for
