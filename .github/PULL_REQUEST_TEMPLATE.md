@@ -1,7 +1,9 @@
 <!-- The PR title becomes the release note. Write it for users. -->
+<!-- Every PR (including drafts and small fixes) must link an issue with the `ready-for-pr` label. See CONTRIBUTING.md. -->
 
-Why is this needed? (Or link the issue. Open one first for features, API, install or CI changes.)
+Why is this needed?
 
+<!-- Keep `Fixes #NNN` if this PR fully resolves the issue, or replace with `Part of #NNN` so merging does not close it early. -->
 Fixes #
 
 <!-- e.g. "AI-assisted, I reviewed and tested it." No AI co-author trailers. -->

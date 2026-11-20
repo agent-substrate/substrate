@@ -70,6 +70,9 @@ project](https://www.kubernetes.dev/docs/guide/pull-requests/#ai-guidance):
 > responses. If you do not engage directly with reviewers, the PR will be
 > closed.
 
+In issues and design discussions, keep comments concise, verify any claims
+yourself, and do not post unvetted or automated AI output.
+
 ### Working hours
 
 We want to move quickly, but we also want to be respectful of each other's
@@ -135,30 +138,48 @@ suspend or resume spends its time on such a cluster, follow
 
 ## Contribution process
 
-This project is focused on iterating quickly but responsibly. This has
-implications for contributors:
+Generating code is cheap now, while design and code review time are not. Driving
+clear issue investigations and design discussions is also how contributors build
+trust toward [Reviewer and Maintainer roles](GOVERNANCE.md), much more than
+submitting a high volume of pull requests.
 
-1) Things move quickly, so PRs may need to be rebased or updated frequently.
-Small PRs that are focused on a single issue or feature are easier to review
-and update than large PRs that touch many different parts of the codebase.
+To keep velocity high and focus on agreed priorities, we **require** issue
+consensus before pull requests:
 
-2) While we welcome new contributors, we do have priorities and many efforts in
-flight. Small fixes and cleanups can go straight to a PR, but before you start anything
-larger, please discuss it with us first. If there is an issue open, comment
-there (and if not, open one). Before jumping into a task, please search open
-PRs, so we are not duplicating work and wasting time. We want to be respectful
-of everyone's time, and to make sure that your work is aligned with our goals
-for the project.
+1) **Discuss on an issue first.** Before starting work, search open issues and
+PRs so you do not duplicate effort already in flight. If an issue exists, join
+the discussion there, or open a new one. If you want to share prototype code
+during discussion, link to a branch or diff on your fork instead of opening a
+PR, to avoid unnecessary CI and review costs.
 
-3) PRs which are not aligned with our priorities and goals may be closed
-without extensive review. We are not trying to be discouraging, but we need to
-make sure that we are focused on the most important work.
+2) **Wait for `ready-for-pr`.** Every PR must have an associated issue with the
+[`ready-for-pr`](https://github.com/agent-substrate/substrate/issues?q=state%3Aopen%20label%3Aready-for-pr)
+label, applied by a maintainer. Applying this label indicates consensus on
+direction and that maintainers are ready to review a PR. There is no exception
+for trivial fixes or cleanups, since unprioritized PRs still consume review
+time and merge-queue capacity. Please let maintainers triage issues as bandwidth
+allows instead of pinging individual maintainers.
 
-4) When in doubt, communicate. We have GitHub, a mailing list, and Slack
-channels, and we encourage you to use them. We also have regular community
-meetings (via video calls), and you are welcome to attend those, too. If you
-are unsure about something, please ask. It can save us all a lot of time and
-effort.
+3) **Link the issue in your PR.** Reference the `ready-for-pr` issue in your PR
+description: use `Fixes #NNN` when the PR fully resolves the issue, or `Part of
+#NNN` when an agreed issue takes multiple PRs (such as a preparatory refactor,
+incremental steps of a larger change, or a partial fix) so merging does not
+close the issue early. PRs (both *Draft* and *Ready for review*) not associated
+with a `ready-for-pr` issue will be closed without review.
+
+4) **Check release milestones for priority.** Maintainers add issues to release
+[milestones](https://github.com/agent-substrate/substrate/milestones) (for
+example, `v1.1`) to communicate prioritization. PRs that are not aligned with
+project priorities and goals may be closed without extensive review.
+
+5) **Keep PRs small and up to date.** Things move quickly, so PRs may need to
+be rebased or updated frequently. Small PRs focused on a single issue are
+easier to review and update than large PRs touching many parts of the codebase.
+
+6) **When in doubt, communicate.** We have GitHub, a mailing list, Slack
+channels, and regular [community meetings](docs/project/community.md), and we
+encourage you to use them. If you are unsure about something, please ask. It
+can save us all a lot of time and effort.
 
 If you are building something that runs *on* Substrate rather than changing
 Substrate itself, see [Integration
@@ -177,8 +198,8 @@ get merged. Please keep that in mind as you work, especially with AI agents.
   update code and tests together).
 * **Small and bulk PRs**: if you find a typo, review the whole file and
   fix everything in one pass rather than sending a single edit. Group
-  related typo, doc, and single-line cleanup fixes into one PR rather
-  than opening several small ones for the same topic. Maintainers may ask
+  related typo, doc, and single-line cleanup fixes into one issue and PR
+  rather than opening several small ones for the same topic. Maintainers may ask
   you to consolidate fragmented PRs into one, or close them in favor of a
   combined submission.
 

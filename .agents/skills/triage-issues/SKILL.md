@@ -79,8 +79,8 @@ Do not guess.
 
 ### Status labels
 
-Apply only when clearly appropriate. Never add `wontfix`, `duplicate`, or `invalid`
-yourself — those are maintainer decisions.
+Apply only when clearly appropriate. Never add `ready-for-pr`, `wontfix`, `duplicate`,
+or `invalid` yourself, as those are maintainer decisions.
 
 | Label | When |
 |---|---|
@@ -108,10 +108,10 @@ Keywords: "Design discussion", "Investigate", "Explore options", "Identify what"
 "Measure", "Research".
 
 The clearest way to distinguish `kind/design` from `kind/feature`:
-- **`kind/feature`**: you could open a PR today — the *what* and *how* are known.
-- **`kind/design`**: a decision or investigation must happen first; a PR cannot be written yet.
+- **`kind/feature`**: the *what* and *how* are already clear enough to implement once a maintainer adds `ready-for-pr`.
+- **`kind/design`**: a decision or investigation must happen first before implementation can be scoped.
 
-When in doubt, ask: *"Could someone reasonably start coding this issue right now?"*
+When in doubt, ask: *"Is the design settled well enough that someone could implement this once approved?"*
 If yes → `kind/feature`. If no → `kind/design`.
 
 **4. Is it a code quality improvement with no behavior change?**
