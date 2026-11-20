@@ -12,27 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Values for a kind cluster that hack/create-kind-cluster.sh creates. Pass this
-# file to the substrate-atelet and substrate releases. The settings match the
-# kind overlay in manifests/ate-install/kind.
+
+# substrate-atelet values for a kind cluster that hack/create-kind-cluster.sh
+# creates. The settings match the kind overlay in manifests/ate-install/kind.
 #
-# Before the install, run hack/install-postgres.sh --kind and create the RustFS
-# credentials Secret, as the substrate chart README shows.
+# Before the install, create the RustFS credentials Secret, as the substrate
+# chart README shows.
 
-# substrate: connect to the bundled PostgreSQL with the projected login
-# certificates.
-postgres:
-  clientCertificates:
-    enabled: true
-
-# substrate-atelet: pull worker images through the kind registry, and log at
-# debug level for development and e2e tests.
+# Pull worker images through the kind registry, and log at debug level for
+# development and e2e tests.
 atelet:
   extraArgs:
   - --localhost-registry-replacement=kind-registry:5000
   - --log-level=debug
 
-# substrate-atelet: use the RustFS that the substrate chart bundles.
+# Use the RustFS that the substrate chart bundles.
 objectStore:
   backend: s3
   endpoint: http://rustfs.ate-system.svc:9000

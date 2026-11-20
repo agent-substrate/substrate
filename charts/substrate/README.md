@@ -39,9 +39,9 @@ helm upgrade --install substrate ./charts/substrate \
   --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner
 ```
 
-On a kind cluster, pass `-f charts/values-kind.yaml` to the substrate-atelet
-and substrate releases, and run `hack/install-postgres.sh --kind` before the
-substrate release.
+On a kind cluster, pass the values files in `charts/scenarios/kind` to the
+matching releases: `substrate-atelet-values.yaml` and `substrate-values.yaml`.
+Run `hack/install-postgres.sh --kind` before the substrate release.
 
 Install substrate-atelet before substrate, and upgrade them in that order. The
 [version skew policy](../../docs/reference/version-skew-policy.md) upgrades
