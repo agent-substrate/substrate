@@ -37,7 +37,8 @@ import (
 
 const testSnapshotURI = "gs://bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1"
 
-// recordingStorage records every object written.
+// recordingStorage records every object written. Like a real object store, it
+// fails a write whose context has ended.
 type recordingStorage struct {
 	mu      sync.Mutex
 	written []string // bucket + "/" + object
@@ -45,9 +46,12 @@ type recordingStorage struct {
 	delay   time.Duration
 }
 
-func (s *recordingStorage) PutObject(_ context.Context, bucket, object string, r io.Reader) error {
+func (s *recordingStorage) PutObject(ctx context.Context, bucket, object string, r io.Reader) error {
 	if s.delay > 0 {
 		time.Sleep(s.delay)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if _, err := io.ReadAll(r); err != nil {
 		return err
@@ -68,10 +72,11 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, detachActor: d, terminate: d}
 }
 
-// herderCalls invokes every Atelet method the herder implements. The
+// herderCalls invokes every Atelet method the herder implements but
+// DetachActor, which waits only when it has a snapshot to detach. The
 // Checkpoint and PromoteSnapshot calls upload a snapshot, so each writes a
 // placeholder.
 func herderCalls(h *herder) map[string]func(context.Context) error {
@@ -214,8 +219,8 @@ func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	}
 }
 
-// A deferred upload happens after Checkpoint returns, which the fake does not
-// model, so only an immediate one writes a placeholder.
+// A deferred upload happens after Checkpoint returns, so Checkpoint itself
+// writes a placeholder only for an immediate upload.
 func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 	storage := &recordingStorage{}
 	h := &herder{storage: storage}
@@ -256,7 +261,7 @@ func TestHerderPromoteSnapshotReportsSnapshotDurable(t *testing.T) {
 		LatestLocal:   &ateletpb.SnapshotReport{Snapshot: snap},
 		LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap},
 	}
-	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform(), ignoreReportTimes); diff != "" {
 		t.Errorf("PromoteSnapshot state mismatch (-want +got):\n%s", diff)
 	}
 }
