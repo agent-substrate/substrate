@@ -118,15 +118,39 @@ ateController:
       cpu: "1"
       memory: 512Mi
 
+# Required. Data plane of the router and the egress gateway: envoy or
+# agentgateway.
+atenetDataPlane: ""
+
 atenetRouter:
+  # agentgateway only: maximum time to wait for a suspended actor to become
+  # routable.
   requestParking:
-    # Maximum time to wait for a suspended actor to become routable.
     budget: "60s"
-  # Timeout for each Substrate ingress API call, including actor resolution.
+  # agentgateway only: timeout for each Substrate ingress API call, including
+  # actor resolution.
   requestTimeout: "60s"
   # mTLS client identities allowed to reach actors. Empty denies all ingress.
   ingressAllowedSPIFFEIDs: []
   agentgateway:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+  # envoy only: the atenet-router container, which serves Envoy its
+  # configuration and resolves actors.
+  router:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  envoy:
     resources:
       requests:
         cpu: 100m
@@ -140,9 +164,10 @@ atenetEgress:
   # when credentialProvider.enabled. name is the host of the ate-secret:// URIs
   # the provider serves, and address is the host:port the gateway dials over
   # mTLS. The provider's serving certificate must chain to the servicedns CA
-  # and name the address host. Optional cacheTtl sets how long the gateway
-  # reuses a fetched credential, 5m by default. A grant the provider revokes
-  # keeps working until then. 0s sends every request to the provider.
+  # and name the address host. Optional cacheTtl, for atenetDataPlane
+  # agentgateway only, sets how long the gateway reuses a fetched credential,
+  # 5m by default. A grant the provider revokes keeps working until then. 0s
+  # sends every request to the provider.
   extraCredentialProviders: []
   # - name: vault.example.com
   #   address: vault-provider.vault.svc:50051
@@ -156,6 +181,32 @@ atenetEgress:
       limits:
         cpu: "2"
         memory: 1Gi
+  # envoy only: Envoy, the ext-proc container that authorizes actors and
+  # injects credentials, and sdsmint, which mints the certificates for HTTPS
+  # interception.
+  envoy:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+  extProc:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  sdsmint:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 768Mi
 
 # Kubernetes Secret provider and AGW HTTP/HTTPS credential injection.
 # Includes get-only Secret RBAC. HTTPS requires egress-mitm-ca-pool and actor trust.

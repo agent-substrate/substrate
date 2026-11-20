@@ -1,0 +1,171 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Envoy data plane
+templates:
+- atenet-router-envoy.yaml
+- atenet-egress-envoy.yaml
+- atenet-router.yaml
+- atenet-egress.yaml
+release:
+  name: custom
+  namespace: custom-system
+# atenetDataPlane is required. Tests of agentgateway set it themselves.
+set:
+  atenetDataPlane: envoy
+tests:
+- it: renders only envoy when selected
+  asserts:
+  - hasDocuments:
+      count: 6
+    template: atenet-router-envoy.yaml
+  - hasDocuments:
+      count: 4
+    template: atenet-egress-envoy.yaml
+  - hasDocuments:
+      count: 0
+    template: atenet-router.yaml
+  - hasDocuments:
+      count: 0
+    template: atenet-egress.yaml
+- it: renders only agentgateway when selected
+  set:
+    atenetDataPlane: agentgateway
+  asserts:
+  - hasDocuments:
+      count: 0
+    template: atenet-router-envoy.yaml
+  - hasDocuments:
+      count: 0
+    template: atenet-egress-envoy.yaml
+- it: requires a data plane
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: ""
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetDataPlane is required: set envoy or agentgateway"
+- it: rejects an unknown data plane
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: nginx
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetDataPlane is required: set envoy or agentgateway"
+- it: points the router at the release's API server and namespace
+  template: atenet-router-envoy.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --ateapi-address=k8s:///custom-api.custom-system.svc:443
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --namespace=custom-system
+  - equal:
+      path: spec.template.spec.serviceAccountName
+      value: custom-atenet-router
+  - equal:
+      path: spec.template.spec.volumes[0].configMap.name
+      value: custom-atenet-router-envoy-config
+- it: allows only the configured router clients
+  template: atenet-router-envoy.yaml
+  set:
+    atenetRouter.ingressAllowedSPIFFEIDs:
+    - spiffe://cluster.local/ns/a/sa/one
+    - spiffe://cluster.local/ns/b/sa/two
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/a/sa/one,spiffe://cluster.local/ns/b/sa/two
+- it: allows no router client by default
+  template: atenet-router-envoy.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: --ingress-allowed-spiffe-ids=
+- it: sends Envoy's spans to the traces endpoint, and none without one
+  template: atenet-router-envoy.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    otel.traces.endpoint: http://collector.otel.svc:4317
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --otlp-collector-address=http://collector.otel.svc:4317
+- it: disables Envoy's spans without a traces endpoint
+  template: atenet-router-envoy.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --otlp-collector-address=
+- it: routes credentials to the bundled and the extra providers
+  template: atenet-egress-envoy.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc:50051
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[1].args
+      content: --credential-provider-name=k8s.io
+  - contains:
+      path: spec.template.spec.containers[1].args
+      content: --credential-provider-server-name=custom-k8s-credential-provider.custom-system.svc
+  - contains:
+      path: spec.template.spec.containers[1].args
+      content: --credential-provider-address=vault-provider.vault.svc:50051
+  - contains:
+      path: spec.template.spec.containers[1].args
+      content: --credential-provider-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+- it: configures no credential providers when every provider is off
+  template: atenet-egress-envoy.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    credentialProvider.enabled: false
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[1].args
+      content: --credential-provider-name=k8s.io
+  - notContains:
+      path: spec.template.spec.containers[1].args
+      content: --credential-provider-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+- it: rejects cacheTtl, which only agentgateway supports
+  template: atenet-egress-envoy.yaml
+  set:
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc:50051
+      cacheTtl: 30s
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetEgress.extraCredentialProviders: vault.example.com sets cacheTtl, which only atenetDataPlane=agentgateway supports"

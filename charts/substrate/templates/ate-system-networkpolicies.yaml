@@ -152,12 +152,14 @@ spec:
   - Ingress
   ingress:
   - ports:
+{{- if eq .Values.atenetDataPlane "agentgateway" }}
     - protocol: TCP
       port: http
     - protocol: TCP
-      port: https
-    - protocol: TCP
       port: connect
+{{- end }}
+    - protocol: TCP
+      port: https
     - protocol: TCP
       port: connect-tls
 ---
@@ -214,8 +216,12 @@ spec:
       port: metrics
     - protocol: TCP
       port: prometheus
+{{- if eq .Values.atenetDataPlane "agentgateway" }}
     - protocol: TCP
       port: gw-metrics
+{{- end }}
+    - protocol: TCP
+      port: envoy-metrics
     - protocol: TCP
       port: health
     - protocol: TCP

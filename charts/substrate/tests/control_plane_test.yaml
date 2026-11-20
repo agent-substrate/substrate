@@ -27,6 +27,9 @@ templates:
 release:
   name: custom
   namespace: custom-system
+# atenetDataPlane is required. Tests of agentgateway set it themselves.
+set:
+  atenetDataPlane: envoy
 tests:
 - it: probes the API health listener and resolves component identities
   template: ate-api-server.yaml
@@ -199,6 +202,8 @@ tests:
       path: spec.ingress
 - it: permits agentgateway metrics but keeps credential provider status private
   template: ate-system-networkpolicies.yaml
+  set:
+    atenetDataPlane: agentgateway
   documentSelector:
     path: metadata.name
     value: custom-ate-system-observability
@@ -378,6 +383,8 @@ tests:
 
 - it: requires a trusted and explicitly allowed router client
   template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
   documentSelector:
     path: kind
     value: ConfigMap
@@ -394,6 +401,7 @@ tests:
 - it: allows the configured router client identities
   template: atenet-router.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetRouter.ingressAllowedSPIFFEIDs:
     - spiffe://cluster.local/ns/client/sa/router-client
   documentSelector:
@@ -405,6 +413,8 @@ tests:
       pattern: 'source.spiffeId in \["spiffe://cluster.local/ns/client/sa/router-client"\]'
 - it: defaults router parking and API request timeouts to sixty seconds
   template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
   documentSelector:
     path: kind
     value: ConfigMap
@@ -418,6 +428,7 @@ tests:
 - it: configures the router request parking budget
   template: atenet-router.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetRouter.requestParking.budget: 30s
   documentSelector:
     path: kind
@@ -432,6 +443,7 @@ tests:
 - it: configures the router API request timeout independently
   template: atenet-router.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetRouter.requestTimeout: 2m
   documentSelector:
     path: kind
@@ -446,6 +458,7 @@ tests:
 - it: configures both router timeouts
   template: atenet-router.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetRouter.requestParking.budget: 90s
     atenetRouter.requestTimeout: 45s
   documentSelector:
@@ -460,6 +473,8 @@ tests:
       pattern: 'policies:\n\s+http:\n\s+requestTimeout: "45s"'
 - it: defaults the egress proxy log filter to info
   template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
   documentSelector:
     path: kind
     value: Deployment
@@ -472,6 +487,7 @@ tests:
 - it: configures the egress proxy log filter
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.agentgateway.logLevel: debug
   documentSelector:
     path: kind
@@ -485,6 +501,7 @@ tests:
 - it: preserves module filters in the egress proxy log filter
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.agentgateway.logLevel: "info,agentgateway=debug"
   documentSelector:
     path: kind
@@ -497,6 +514,8 @@ tests:
         value: "info,agentgateway=debug"
 - it: routes k8s.io credentials to the bundled provider on both listeners
   template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
   documentSelector:
     path: kind
     value: ConfigMap
@@ -509,6 +528,7 @@ tests:
   - atenet-egress.yaml
   - k8s-credential-provider.yaml
   set:
+    atenetDataPlane: agentgateway
     credentialProvider.enabled: false
     atenetEgress.extraCredentialProviders:
     - name: vault.example.com
@@ -534,6 +554,7 @@ tests:
 - it: configures no credential providers when every provider is off
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     credentialProvider.enabled: false
   documentSelector:
     path: kind
@@ -545,6 +566,7 @@ tests:
 - it: rejects an extra provider named k8s.io
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.extraCredentialProviders:
     - name: k8s.io
       address: a.b.svc:50051
@@ -554,6 +576,7 @@ tests:
 - it: rejects an extra provider without a host:port address
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.extraCredentialProviders:
     - name: vault.example.com
       address: vault-provider.vault.svc
@@ -563,6 +586,7 @@ tests:
 - it: passes an extra provider's cacheTtl to both listeners
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.extraCredentialProviders:
     - name: vault.example.com
       address: vault-provider.vault.svc:50051
@@ -577,6 +601,7 @@ tests:
 - it: rejects an extra provider with a misspelled key
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.extraCredentialProviders:
     - name: vault.example.com
       address: vault-provider.vault.svc:50051
@@ -587,6 +612,7 @@ tests:
 - it: rejects an extra provider cacheTtl that is not a duration
   template: atenet-egress.yaml
   set:
+    atenetDataPlane: agentgateway
     atenetEgress.extraCredentialProviders:
     - name: vault.example.com
       address: vault-provider.vault.svc:50051

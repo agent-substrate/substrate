@@ -502,12 +502,6 @@ Deployment/podcertificate-controller-system/podcertificate-controller:
     charts:
       cpu: 10m
       memory: 64Mi
-NetworkPolicy/ate-system/ate-system-observability:
-  spec.ingress[0].ports.TCP/envoy-metrics:
-    ate-setup:
-      port: envoy-metrics
-      protocol: TCP
-    charts: null
 Role/ate-system/atenet-router-endpointslices: only ate-setup
 RoleBinding/ate-system/atenet-router-endpointslices: only ate-setup
 ServiceAccount/podcertificate-controller-system/podcertificate-controller:

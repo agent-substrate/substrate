@@ -291,11 +291,11 @@ and refuses IDs outside the namespace's range.
 {{- end }}
 
 {{/*
-The egress gateway's credentialProviders: the bundled k8s.io provider when
-credentialProvider.enabled, then atenetEgress.extraCredentialProviders. Renders
-nothing when there are none, so every injection fails closed.
+The egress gateway's credential providers as a JSON list of {name, address,
+cacheTtl}: the bundled k8s.io provider when credentialProvider.enabled, then
+atenetEgress.extraCredentialProviders, validated.
 */}}
-{{- define "substrate.credentialProviders" -}}
+{{- define "substrate.credentialProviderList" -}}
 {{- $providers := list -}}
 {{- if .Values.credentialProvider.enabled -}}
 {{- $providers = append $providers (dict "name" "k8s.io" "address" (printf "%s.%s.svc:50051" (include "substrate.fullname" (list "k8s-credential-provider" .)) .Release.Namespace)) -}}
@@ -322,8 +322,20 @@ nothing when there are none, so every injection fails closed.
 {{- fail (printf "atenetEgress.extraCredentialProviders: %s needs cacheTtl in whole ns, us, ms, s, m or h, like 30s or 0s" .name) -}}
 {{- end -}}
 {{- $_ := set $seen .name true -}}
+{{- if and (hasKey . "cacheTtl") (ne $.Values.atenetDataPlane "agentgateway") -}}
+{{- fail (printf "atenetEgress.extraCredentialProviders: %s sets cacheTtl, which only atenetDataPlane=agentgateway supports" .name) -}}
+{{- end -}}
 {{- $providers = append $providers (pick . "name" "address" "cacheTtl") -}}
 {{- end -}}
+{{- toJson $providers -}}
+{{- end -}}
+
+{{/*
+The agentgateway egress gateway's credentialProviders. Renders nothing when
+there are none, so every injection fails closed.
+*/}}
+{{- define "substrate.credentialProviders" -}}
+{{- $providers := include "substrate.credentialProviderList" . | fromJsonArray -}}
 {{- if $providers -}}
 credentialProviders:
 {{- range $providers }}

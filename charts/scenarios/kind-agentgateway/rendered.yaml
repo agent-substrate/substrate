@@ -752,9 +752,9 @@ spec:
     - protocol: TCP
       port: http
     - protocol: TCP
-      port: https
-    - protocol: TCP
       port: connect
+    - protocol: TCP
+      port: https
     - protocol: TCP
       port: connect-tls
 
@@ -817,6 +817,8 @@ spec:
       port: prometheus
     - protocol: TCP
       port: gw-metrics
+    - protocol: TCP
+      port: envoy-metrics
     - protocol: TCP
       port: health
     - protocol: TCP

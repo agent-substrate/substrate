@@ -18,6 +18,8 @@
 #
 # Before the install, run hack/install-postgres.sh --kind.
 
+atenetDataPlane: agentgateway
+
 # Connect to the bundled PostgreSQL with the projected login certificates.
 postgres:
   clientCertificates:

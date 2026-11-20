@@ -14,6 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
+{{- if not (has .Values.atenetDataPlane (list "envoy" "agentgateway")) }}
+{{- fail "atenetDataPlane is required: set envoy or agentgateway" }}
+{{- end }}
+{{- if eq .Values.atenetDataPlane "agentgateway" }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -293,3 +297,4 @@ spec:
     port: 15020
     targetPort: gw-metrics
     protocol: TCP
+{{- end }}

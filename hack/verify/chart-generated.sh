@@ -55,4 +55,15 @@ if ! diff -ruN "${TMP_DIR}/generated" "${TMP_DIR}/chart" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "The chart CRDs and controller Role match ${GENERATED_DIR}."
+mkdir -p "${TMP_DIR}/envoy"
+hack/update/chart-envoy-config.sh "${TMP_DIR}/envoy"
+for file in "${TMP_DIR}/envoy/"*.yaml; do
+  if ! diff -u "${file}" "charts/substrate/files/$(basename "${file}")" >/dev/null 2>&1; then
+    echo "charts/substrate/files/$(basename "${file}") is out of sync with manifests/ate-install." >&2
+    echo "Run hack/update/chart-envoy-config.sh." >&2
+    diff -u "${file}" "charts/substrate/files/$(basename "${file}")" | head -40 >&2 || true
+    exit 1
+  fi
+done
+
+echo "The chart CRDs, controller Role and Envoy configuration match manifests/ate-install."

@@ -43,13 +43,14 @@ go run ./cmd/ate-setup create api-authentication-config
 # Install Substrate after creating the database identities and Secrets
 helm upgrade --install substrate ./charts/substrate \
   --namespace ate-system \
+  --set atenetDataPlane=envoy \
   --set postgres.readWriteConnectionStringSecretRef.name=substrate-postgres-readwrite \
   --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner
 ```
 
-On a kind cluster, pass the values files in
-`charts/scenarios/kind-agentgateway` to the matching releases:
-`substrate-atelet-values.yaml` and `substrate-values.yaml`.
+On a kind cluster, pass the values files in `charts/scenarios/kind`, or in
+`charts/scenarios/kind-agentgateway` for the agentgateway data plane, to the
+matching releases: `substrate-atelet-values.yaml` and `substrate-values.yaml`.
 Run `hack/install-postgres.sh --kind` before the substrate release.
 
 Install substrate-atelet before substrate, and upgrade them in that order. The
@@ -59,6 +60,23 @@ atelet before ate-api-server.
 By default, component images are pulled from `ghcr.io/agent-substrate/substrate`
 using the chart `appVersion` as the tag. Override `image.registry` and
 `image.tag` to install from a different image repository or tag.
+
+## Data plane
+
+`atenetDataPlane` selects the data plane of the router and the egress gateway:
+`envoy` or `agentgateway`. It has no default, and the render fails without it.
+`ate-setup` installs envoy unless told otherwise. The envoy data plane uses the
+`envoy-dataplane` and `atenet` component images.
+
+Some values apply to only one data plane:
+
+- agentgateway only: `atenetRouter.requestParking`, `atenetRouter.requestTimeout`,
+  `atenetEgress.agentgateway.logLevel` and the `cacheTtl` of
+  `atenetEgress.extraCredentialProviders`. With envoy, a `cacheTtl` fails the
+  render.
+- envoy only: `atenetRouter.router`, `atenetRouter.envoy`, `atenetEgress.envoy`,
+  `atenetEgress.extProc` and `atenetEgress.sdsmint`, which set the resources of
+  those containers.
 
 The API server and the egress gateway do not start until the objects from
 `ate-setup create` exist. The chart reads them by their fixed names:
@@ -73,7 +91,7 @@ Namespace grants default to an empty list, denying credential access.
 ## Render manifests without applying
 
 ```bash
-helm template substrate ./charts/substrate
+helm template substrate ./charts/substrate --set atenetDataPlane=envoy
 ```
 
 On OpenShift the chart leaves pod UIDs and fsGroups for the SCC to assign. It
@@ -103,10 +121,11 @@ See `values.yaml` for the full set; the important keys:
 | `postgres.schema` | `substrate` | Store the Substrate tables in this PostgreSQL schema |
 | `postgres.clientCertificates.enabled` | `false` | Project separate owner and runtime login certificates into the API server |
 | `<component>.resources` | see `values.yaml` | Requests and limits for each container, e.g. `ateApi.resources` and `atenetRouter.agentgateway.resources` |
-| `atenetRouter.requestParking.budget` | `60s` | Total budget for actor resolution and resume retries |
-| `atenetRouter.requestTimeout` | `60s` | Timeout for each Substrate ingress API call, including actor resolution |
-| `atenetEgress.extraCredentialProviders` | `[]` | Credential providers you deploy, added after the bundled `k8s.io` provider, each `{name, address, cacheTtl}`. `name` is the host of the `ate-secret://` URIs it serves; `address` is the `host:port` the egress gateway dials over mTLS. Its serving certificate must chain to the servicedns CA. Optional `cacheTtl` sets how long the gateway reuses a fetched credential (default `5m`; `0s` disables caching). See [egress credential injection](../../docs/guides/egress-credential-injection.md#the-plugin-api) |
-| `atenetEgress.agentgateway.logLevel` | `info` | Egress proxy `RUST_LOG` filter, e.g. `debug` or `info,agentgateway=debug` when troubleshooting |
+| `atenetDataPlane` | none, required | Data plane of the router and the egress gateway: `envoy` or `agentgateway`. See "Data plane" |
+| `atenetRouter.requestParking.budget` | `60s` | agentgateway only. Total budget for actor resolution and resume retries |
+| `atenetRouter.requestTimeout` | `60s` | agentgateway only. Timeout for each Substrate ingress API call, including actor resolution |
+| `atenetEgress.extraCredentialProviders` | `[]` | Credential providers you deploy, added after the bundled `k8s.io` provider, each `{name, address, cacheTtl}`. `name` is the host of the `ate-secret://` URIs it serves; `address` is the `host:port` the egress gateway dials over mTLS. Its serving certificate must chain to the servicedns CA. Optional `cacheTtl`, for agentgateway only, sets how long the gateway reuses a fetched credential (default `5m`; `0s` disables caching). See [egress credential injection](../../docs/guides/egress-credential-injection.md#the-plugin-api) |
+| `atenetEgress.agentgateway.logLevel` | `info` | agentgateway only. Egress proxy `RUST_LOG` filter, e.g. `debug` or `info,agentgateway=debug` when troubleshooting |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `ateApi.snapshotLocation` | `""` | Cluster-wide snapshot URI; defaults to `gs://<rustfs.bucket>/` with bundled RustFS |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true`. Set `objectStore.backend` in the substrate-atelet release to the same value |
@@ -129,7 +148,7 @@ See `values.yaml` for the full set; the important keys:
 
 ## Router timeouts
 
-The router uses `ResumeActor` to resolve actor assignments, including actors
+These settings apply to the agentgateway data plane. The router uses `ResumeActor` to resolve actor assignments, including actors
 that already run. `atenetRouter.requestTimeout` sets the HTTP backend request
 timeout for those API calls. `atenetRouter.requestParking.budget` bounds the
 resume attempts and retry delays. Both apply to direct and CONNECT-tunneled
