@@ -58,6 +58,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/selfseccomp"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -129,12 +130,20 @@ const minUsageSampleInterval = 50 * time.Second
 const workloadGracePeriod = 30 * time.Minute
 
 func main() {
-	pid1.RunIfPID1()
 	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return
 	}
+	// Install before pid1.RunIfPID1 so PID 1 is filtered too; the marker keeps
+	// the re-exec'd child from stacking a second filter and is cleared before
+	// spawning runtimes.
+	if err := selfseccomp.InstallOnce(); err != nil {
+		fmt.Fprintf(os.Stderr, "ateworker-gvisor: installing the seccomp filter: %v\n", err)
+		os.Exit(1)
+	}
+	pid1.RunIfPID1()
+	selfseccomp.ClearMarker()
 
 	ctx := context.Background()
 

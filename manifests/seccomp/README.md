@@ -1,10 +1,16 @@
 # Worker seccomp profiles
 
-`substrate-worker-amd64.json` and `substrate-worker-arm64.json` are seccomp
-profiles for the worker container that hosts a sandbox runtime. Substrate does
-not install or apply them yet. Workers run with the `Unconfined` profile because
-`RuntimeDefault` denies `pivot_root`, which runsc and virtiofsd use to build
-their own sandboxes.
+`substrate-worker-amd64.json` and `substrate-worker-arm64.json` define the
+seccomp allow lists for `ateworker-gvisor` and `ateworker-microvm`. Workers
+keep `seccompProfile: Unconfined` in the pod spec because `RuntimeDefault`
+denies `pivot_root`, which runsc and virtiofsd use to build their own
+sandboxes, and because changing the pod template would roll existing
+WorkerPools during `ate-controller` upgrades. Instead, `ateworker` compiles
+the allow list for its architecture into a seccomp-bpf filter and installs it
+on itself at startup (`internal/selfseccomp`, via `SECCOMP_FILTER_FLAG_TSYNC`
+before `pid1.RunIfPID1`), so PID 1, `ateworker`, runsc, virtiofsd and
+cloud-hypervisor all inherit it. Processes started directly via `kubectl exec`
+do not inherit this filter.
 
 ## What the profiles allow
 
@@ -29,5 +35,6 @@ cloud-hypervisor still install their own, narrower filters on top.
 ## Regenerating
 
 The syscall lists are in `hack/seccomp/syscalls.go`. After changing them, run
-`go generate ./hack/seccomp` (`hack/update/codegen.sh` does the same).
-`go test ./hack/seccomp` fails when a committed profile is out of date.
+`go generate ./hack/seccomp ./hack/selfseccomp` (`hack/update/codegen.sh` runs
+both). `go test ./hack/seccomp ./hack/selfseccomp` fails when a committed
+profile or syscall table is out of date.

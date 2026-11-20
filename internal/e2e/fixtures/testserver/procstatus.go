@@ -157,23 +157,29 @@ func parseProcessStatus(status string) (procstatus.Process, error) {
 		return int(n)
 	}
 	p := procstatus.Process{
-		PPID:       dec("PPid"),
-		CapPrm:     hex("CapPrm"),
-		CapEff:     hex("CapEff"),
-		CapBnd:     hex("CapBnd"),
-		CapAmb:     hex("CapAmb"),
-		NoNewPrivs: dec("NoNewPrivs"),
-		Seccomp:    dec("Seccomp"),
+		PPID:           dec("PPid"),
+		CapPrm:         hex("CapPrm"),
+		CapEff:         hex("CapEff"),
+		CapBnd:         hex("CapBnd"),
+		CapAmb:         hex("CapAmb"),
+		NoNewPrivs:     dec("NoNewPrivs"),
+		Seccomp:        dec("Seccomp"),
+		SeccompFilters: dec("Seccomp_filters"),
 	}
 	return p, errors.Join(errs...)
 }
 
-// parseThreadStatus reads a thread's name and seccomp mode out of a
+// parseThreadStatus reads a thread's name and seccomp state out of a
 // /proc/<pid>/task/<tid>/status document.
 func parseThreadStatus(status string) (procstatus.Thread, error) {
 	fields := parseStatusFields(status)
-	seccomp, err := fields.number("Seccomp", 10)
-	return procstatus.Thread{Name: fields["Name"], Seccomp: int(seccomp)}, err
+	seccomp, err1 := fields.number("Seccomp", 10)
+	filters, err2 := fields.number("Seccomp_filters", 10)
+	return procstatus.Thread{
+		Name:           fields["Name"],
+		Seccomp:        int(seccomp),
+		SeccompFilters: int(filters),
+	}, errors.Join(err1, err2)
 }
 
 // statusFields are the "Key:\tvalue" lines of a /proc status document.
