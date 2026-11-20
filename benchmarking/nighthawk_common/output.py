@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Transforms Nighthawk's AdaptiveLoadSessionOutput textproto into the run
-artifacts runner.py uploads:
+artifacts with write_artifacts(), and uploads them with upload_files():
 
   results.json   parse_output_textproto() — the session as JSON, 1:1.
   stats.jsonl    stage_rows() -> stats_records() — one record per stage,
@@ -29,6 +29,8 @@ short native metric names, identifying thresholds).
 
 import json
 import re
+import shutil
+from pathlib import Path
 
 from nighthawk_common import spec as spec_mod
 
@@ -260,3 +262,72 @@ def write_jsonl(records: list[dict], path) -> None:
     with open(path, "w") as f:
         for record in records:
             f.write(json.dumps(record) + "\n")
+
+
+def write_artifacts(
+    output_path: Path,
+    desc_path: str,
+    *,
+    tag: str,
+    name: str,
+    envoy_cpu: int,
+    actors: int,
+    client_concurrency: int | None,
+    tail_latency_slo_ms: float | None,
+    extra: dict | None = None,
+) -> tuple[dict, bool]:
+    """Writes results.json, stats.jsonl and capacity.json next to the client
+    output at output_path, with extra merged into the capacity summary.
+    Returns the summary and whether the output has a testing stage."""
+    work_dir = output_path.parent
+    output_dict = parse_output_textproto(output_path.read_text(), desc_path)
+    (work_dir / "results.json").write_text(json.dumps(output_dict, indent=2) + "\n")
+    rows = stage_rows(output_dict)
+    write_jsonl(stats_records(rows, tag, name), work_dir / "stats.jsonl")
+    summary = capacity_summary(
+        output_dict,
+        envoy_cpu=envoy_cpu,
+        actors=actors,
+        client_concurrency=client_concurrency,
+        tail_latency_slo_ms=tail_latency_slo_ms,
+    )
+    summary.update(extra or {})
+    (work_dir / "capacity.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return summary, any(row["stage"] == "testing" for row in rows)
+
+
+def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
+    # Imported here so non-GCS use doesn't require google-cloud-storage.
+    from google.cloud import storage
+
+    bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
+    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
+        str(local_path)
+    )
+
+
+def upload(src: Path, dest: str) -> None:
+    if dest.startswith("gs://"):
+        upload_to_gcs(src, dest)
+    else:
+        dest_path = Path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dest_path)
+
+
+def upload_files(paths: list[Path], prefix: str) -> list[str]:
+    """Uploads each path that exists to <prefix>/<name> and prints one line
+    per path. Returns one line per failed upload."""
+    failures = []
+    for src in paths:
+        if not src.exists():
+            print(f"Skipping {src}: not produced", flush=True)
+            continue
+        dest = f"{prefix}/{src.name}"
+        try:
+            upload(src, dest)
+            print(f"Uploaded {src} -> {dest}", flush=True)
+        except Exception as e:
+            print(f"Upload of {src} failed: {e}", flush=True)
+            failures.append(f"upload of {src.name} failed: {e}")
+    return failures

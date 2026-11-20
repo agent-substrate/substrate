@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build-time dependencies for generate.sh and for the nighthawk-ingress
-# image's descriptor build. Kept apart from the load test's runtime
+# Build-time dependencies for generate.sh and for the descriptor build of the
+# nighthawk-ingress and nighthawk-egress images. Kept apart from the load test's runtime
 # requirements.txt so that generating the protos does not pull in locust, the
 # opentelemetry exporters and google-cloud-storage.
 #
