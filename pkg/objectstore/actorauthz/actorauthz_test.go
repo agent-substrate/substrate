@@ -21,18 +21,14 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz/actorauthztest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/testcert"
@@ -83,8 +80,8 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	pool := &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
-	srv := serveIssuer(t, pool, nil)
-	e := &env{pool: pool, issuer: srv.URL, issuerCAFile: writeServerCA(t, srv)}
+	srv := actorauthztest.ServeIssuer(t, pool, nil)
+	e := &env{pool: pool, issuer: srv.URL, issuerCAFile: actorauthztest.WriteServerCA(t, srv)}
 	e.ca, err = localca.GenerateCA("test", localca.KeyTypeECDSAP256, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -92,37 +89,6 @@ func newEnv(t *testing.T) *env {
 	e.caFile = writeFile(t, dir, "ca.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.ca.RootCertificate.Raw}))
 	e.bundle = writeFile(t, dir, "client.pem", clientBundle(t, e.ca))
 	return e
-}
-
-// serveIssuer starts a TLS server that serves OIDC discovery and pool's JWKS.
-// connState, if set, is the server's http.Server.ConnState.
-func serveIssuer(t *testing.T, pool *localjwtauthority.ConcretePool, connState func(net.Conn, http.ConnState)) *httptest.Server {
-	t.Helper()
-	keys, err := pool.VerificationKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
-	jwks, err := localjwtauthority.JWKS(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	var srv *httptest.Server
-	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "jwks_uri": srv.URL + "/jwks"})
-	})
-	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(jwks) })
-	srv = httptest.NewUnstartedServer(mux)
-	srv.Config.ConnState = connState
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// writeServerCA writes srv's certificate to a PEM file and returns its path.
-func writeServerCA(t *testing.T, srv *httptest.Server) string {
-	t.Helper()
-	return writeFile(t, t.TempDir(), "issuer-ca.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 }
 
 func writeFile(t *testing.T, dir, name string, data []byte) string {
@@ -414,7 +380,7 @@ func assertGCSBoundaryPrefix(t *testing.T, prefix string) {
 func TestAuthorize_Refusals(t *testing.T) {
 	e := newEnv(t)
 	// dead is an issuer that has stopped, so its keys cannot be fetched.
-	dead := serveIssuer(t, e.pool, nil)
+	dead := actorauthztest.ServeIssuer(t, e.pool, nil)
 	dead.Close()
 	badURI := actor(uid, durable(1, ownerTag, completed, "gs://snaps/not-a-snapshot"))
 	if _, err := actorscope.FromActor(badURI); err == nil {
@@ -536,10 +502,10 @@ func TestClose(t *testing.T) {
 		{name: "New fails after the key fetch", edit: func(c *actorauthz.Config) { c.APIServer.CAFile = filepath.Join(t.TempDir(), "absent.pem") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			conns := &connCounter{closedCh: make(chan struct{}, 1)}
-			issuer := serveIssuer(t, e.pool, conns.connState)
+			conns := actorauthztest.NewConnCounter()
+			issuer := actorauthztest.ServeIssuer(t, e.pool, conns.ConnState)
 			cfg := e.serve(t, &fakeControl{actor: actor(uid, durable(1, ownerTag, completed, tagURI))})
-			cfg.Issuer, cfg.IssuerCAFile = issuer.URL, writeServerCA(t, issuer)
+			cfg.Issuer, cfg.IssuerCAFile = issuer.URL, actorauthztest.WriteServerCA(t, issuer)
 			if tc.edit != nil {
 				tc.edit(&cfg)
 				a, err := actorauthz.New(t.Context(), cfg)
@@ -550,7 +516,7 @@ func TestClose(t *testing.T) {
 				if !strings.Contains(err.Error(), "absent.pem") {
 					t.Fatalf("New: %v, want it to name absent.pem", err)
 				}
-				conns.waitAllClosed(t)
+				conns.WaitAllClosed(t)
 				return
 			}
 			a, err := actorauthz.New(t.Context(), cfg)
@@ -564,44 +530,11 @@ func TestClose(t *testing.T) {
 			if err := a.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
-			conns.waitAllClosed(t)
+			conns.WaitAllClosed(t)
 			// The keys are cached, so this reaches the closed lookup.
 			if _, err := a.Authorize(t.Context(), jwt); status.Code(err) != codes.Canceled {
 				t.Errorf("Authorize after Close: %v, want code %v", err, codes.Canceled)
 			}
 		})
-	}
-}
-
-// connCounter counts the connections a server opens and closes.
-type connCounter struct {
-	opened, closed atomic.Int32
-	closedCh       chan struct{}
-}
-
-func (c *connCounter) connState(_ net.Conn, s http.ConnState) {
-	switch s {
-	case http.StateNew:
-		c.opened.Add(1)
-	case http.StateClosed, http.StateHijacked:
-		c.closed.Add(1)
-		select {
-		case c.closedCh <- struct{}{}:
-		default:
-		}
-	}
-}
-
-// waitAllClosed waits until at least one connection was opened and every
-// opened one is closed.
-func (c *connCounter) waitAllClosed(t *testing.T) {
-	t.Helper()
-	timeout := time.After(10 * time.Second)
-	for c.opened.Load() == 0 || c.closed.Load() < c.opened.Load() {
-		select {
-		case <-c.closedCh:
-		case <-timeout:
-			t.Fatalf("%d of %d issuer connections closed", c.closed.Load(), c.opened.Load())
-		}
 	}
 }

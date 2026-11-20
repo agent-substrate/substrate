@@ -15,19 +15,16 @@
 package main
 
 import (
-	"encoding/json"
-	"encoding/pem"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz/actorauthztest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/testcert"
@@ -55,7 +52,7 @@ func TestNewExchangeService(t *testing.T) {
 	}
 	tlsIssuer := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(tlsIssuer.Close)
-	tlsIssuerCA := writeServerCA(t, tlsIssuer)
+	tlsIssuerCA := actorauthztest.WriteServerCA(t, tlsIssuer)
 	otherCA := filepath.Join(t.TempDir(), "other-ca.pem")
 	if err := os.WriteFile(otherCA, testcert.NewServerTLS(t, net.ParseIP("127.0.0.1")).RootCA, 0o600); err != nil {
 		t.Fatal(err)
@@ -114,9 +111,14 @@ func TestNewExchangeService_ClosesIssuerConnections(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ATE_STORAGE_BACKEND", "gcs")
 			t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", tc.adc)
-			conns := &connCounter{closedCh: make(chan struct{}, 1)}
-			issuer := serveIssuer(t, conns.connState)
-			issuerCA := writeServerCA(t, issuer)
+			auth, err := localjwtauthority.GenerateAuthority("ES256", "k1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pool := &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
+			conns := actorauthztest.NewConnCounter()
+			issuer := actorauthztest.ServeIssuer(t, pool, conns.ConnState)
+			issuerCA := actorauthztest.WriteServerCA(t, issuer)
 			cfg := exchangeConfig{
 				issuer:          issuer.URL,
 				issuerCAFile:    issuerCA,
@@ -142,82 +144,9 @@ func TestNewExchangeService_ClosesIssuerConnections(t *testing.T) {
 				}
 				release()
 			}
-			conns.waitAllClosed(t)
+			conns.WaitAllClosed(t)
 		})
 	}
-}
-
-// serveIssuer starts a TLS server that serves OIDC discovery and a JWKS.
-// connState is the server's http.Server.ConnState.
-func serveIssuer(t *testing.T, connState func(net.Conn, http.ConnState)) *httptest.Server {
-	t.Helper()
-	auth, err := localjwtauthority.GenerateAuthority("ES256", "k1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
-	keys, err := pool.VerificationKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
-	jwks, err := localjwtauthority.JWKS(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	var srv *httptest.Server
-	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "jwks_uri": srv.URL + "/jwks"})
-	})
-	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(jwks) })
-	srv = httptest.NewUnstartedServer(mux)
-	srv.Config.ConnState = connState
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// connCounter counts the connections a server opens and closes.
-type connCounter struct {
-	opened, closed atomic.Int32
-	closedCh       chan struct{}
-}
-
-func (c *connCounter) connState(_ net.Conn, s http.ConnState) {
-	switch s {
-	case http.StateNew:
-		c.opened.Add(1)
-	case http.StateClosed, http.StateHijacked:
-		c.closed.Add(1)
-		select {
-		case c.closedCh <- struct{}{}:
-		default:
-		}
-	}
-}
-
-// waitAllClosed waits until at least one connection was opened and every
-// opened one is closed.
-func (c *connCounter) waitAllClosed(t *testing.T) {
-	t.Helper()
-	timeout := time.After(10 * time.Second)
-	for c.opened.Load() == 0 || c.closed.Load() < c.opened.Load() {
-		select {
-		case <-c.closedCh:
-		case <-timeout:
-			t.Fatalf("%d of %d issuer connections closed", c.closed.Load(), c.opened.Load())
-		}
-	}
-}
-
-// writeServerCA writes srv's certificate to a PEM file and returns its path.
-func writeServerCA(t *testing.T, srv *httptest.Server) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "issuer-ca.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 func TestExchangeTransportCredentials_MissingBundle(t *testing.T) {
