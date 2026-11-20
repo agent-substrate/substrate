@@ -246,7 +246,7 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapi.DrainWorkerReq
 	if errs := apivalidation.ValidateDrainWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	drained, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), func(toUpdate *ateapi.Worker) error {
+	drained, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), toPreconditions(req.GetPreconditions()), func(toUpdate *ateapi.Worker) error {
 		if toUpdate.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING {
 			// already draining, do nothing
 			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapi.Worker)}
@@ -266,7 +266,7 @@ func (s *RPCService) MarkWorkerAvailable(ctx context.Context, req *ateapi.MarkWo
 	if errs := apivalidation.ValidateMarkWorkerAvailableRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	marked, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), func(toUpdate *ateapi.Worker) error {
+	marked, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), toPreconditions(req.GetPreconditions()), func(toUpdate *ateapi.Worker) error {
 		switch toUpdate.GetStatus().GetState() {
 		case ateapi.WorkerState_WORKER_STATE_ACTIVE:
 			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapi.Worker)}
@@ -286,7 +286,7 @@ func (s *RPCService) MarkWorkerUnavailable(ctx context.Context, req *ateapi.Mark
 	if errs := apivalidation.ValidateMarkWorkerUnavailableRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	marked, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), func(toUpdate *ateapi.Worker) error {
+	marked, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), toPreconditions(req.GetPreconditions()), func(toUpdate *ateapi.Worker) error {
 		switch toUpdate.GetStatus().GetState() {
 		case ateapi.WorkerState_WORKER_STATE_UNAVAILABLE:
 			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapi.Worker)}
@@ -307,17 +307,21 @@ func (s *RPCService) MarkWorkerUnavailable(ctx context.Context, req *ateapi.Mark
 // is final.
 var errWorkerDraining = errors.New("worker is draining")
 
-// mutateNamedWorker runs mutate against the named Worker for a request that
-// carries no guards, so the ones the store requires come from a read here
-// rather than from the client. A write that lands in between is reported as a
-// conflict for the caller to retry, the same as any other guarded update.
-func (s *RPCService) mutateNamedWorker(ctx context.Context, name string, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error) {
+// mutateNamedWorker runs mutate against the named Worker for a request whose
+// guards are optional. It checks precondition against a read here, and the
+// guards the store requires come from that read. A write that lands in between
+// is reported as a conflict for the caller to retry, the same as any other
+// guarded update.
+func (s *RPCService) mutateNamedWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error) {
 	observed, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting worker %s: %w", name, err)
+	}
+	if err := checkPreconditions("Worker "+name, precondition, observed.GetMetadata()); err != nil {
+		return nil, err
 	}
 	return s.mutateWorker(ctx, name, store.PreconditionFrom(observed), mutate)
 }

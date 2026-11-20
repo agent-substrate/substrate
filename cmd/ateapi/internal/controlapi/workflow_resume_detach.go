@@ -46,13 +46,18 @@ func shouldDetachFromNode(actor *ateapi.Actor, assignErr error) bool {
 // Unreachable nodes can be forgotten when the latest local snapshot is durable.
 // A deleted node is released even when that snapshot is not durable, so resume
 // tries its upload.
-func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, assignErr error) (_ *ateapi.Actor, err error) {
+func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, assignErr error, precondition store.Precondition) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DetachFromFullNode")
 	defer func() { err = done(err) }()
 
 	node := actor.GetStatus().GetAssignedNode()
-	// Assignment may have retried on a newer version than actor.
-	if actor, err = w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node); err != nil {
+	// Assignment may have retried on a newer version than actor. It does not
+	// under the caller's version guard, so pin actor's version then.
+	var version int64
+	if precondition.Version != 0 {
+		version = actor.GetMetadata().GetVersion()
+	}
+	if actor, err = w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), version, node); err != nil {
 		return nil, err
 	}
 	constraints := schedulingConstraints(actor, actorTemplate)
@@ -92,7 +97,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 				return nil, apierror.Unavailable("while getting atelet conn for node %q: %w (and while checking the node: %w)", node, err, nodeErr)
 			}
 			if gone {
-				return w.recordGoneNode(ctx, actorRef, actor, node)
+				return w.recordGoneNode(ctx, actorRef, actor, version, node)
 			}
 		}
 		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", node, err)
@@ -126,16 +131,20 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 }
 
 // loadPinnedActor reads the actor, and fails with Aborted unless it is still
-// the SUSPENDED incarnation uid, pinned to node.
-func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.ActorRef, uid, node string) (*ateapi.Actor, error) {
+// the SUSPENDED incarnation uid, pinned to node. A nonzero version must match
+// too.
+func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.ActorRef, uid string, version int64, node string) (*ateapi.Actor, error) {
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, fmt.Errorf("while reading Actor %s: %w", actorRef, err)
 	}
+	if version != 0 && actor.GetMetadata().GetVersion() != version {
+		return nil, apierror.Aborted("Actor %s changed during the resume", actorRef)
+	}
 	if actor.GetMetadata().GetUid() != uid ||
 		actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED ||
 		actor.GetStatus().GetAssignedNode() != node {
-		return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
+		return nil, apierror.Aborted("Actor %s changed during the resume", actorRef)
 	}
 	return actor, nil
 }
@@ -161,10 +170,7 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while recording the detach of Actor %s from node %q: %w", actorRef, node, err)
+		return nil, fmt.Errorf("while recording the detach of Actor %s from node %q: %w", actorRef, node, actorWriteError(actorRef, err))
 	}
 	return stored, nil
 }
@@ -173,9 +179,10 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 // snapshot is not recorded durable. atelet may have uploaded it without
 // reporting, so the snapshot keeps its locality and resume restores it from
 // the upload on another node. It reads the actor again first, so an upload
-// recorded during the node lookup detaches it instead.
-func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, node string) (*ateapi.Actor, error) {
-	actor, err := w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node)
+// recorded during the node lookup detaches it instead. A nonzero version pins
+// the read as loadPinnedActor does.
+func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, version int64, node string) (*ateapi.Actor, error) {
+	actor, err := w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), version, node)
 	if err != nil {
 		return nil, err
 	}
@@ -188,9 +195,9 @@ func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.A
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
+			return nil, apierror.Aborted("Actor %s changed during the resume", actorRef)
 		}
-		return nil, fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, err)
+		return nil, fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, actorWriteError(actorRef, err))
 	}
 	slog.InfoContext(ctx, "Released actor from its deleted node to restore its snapshot's upload on another node",
 		slog.Any("actor", actorRef),

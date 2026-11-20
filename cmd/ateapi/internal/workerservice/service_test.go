@@ -42,6 +42,9 @@ type fakeControl struct {
 	calls []*ateapi.SuspendActorRequest
 	resp  *ateapi.SuspendActorResponse
 	err   error
+	// onSuspend, if set, runs before SuspendActor returns, as a write that
+	// races the suspend would.
+	onSuspend func()
 
 	reports    []appliedReport
 	reportErr  error
@@ -51,6 +54,9 @@ type fakeControl struct {
 
 func (f *fakeControl) SuspendActor(_ context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
 	f.calls = append(f.calls, req)
+	if f.onSuspend != nil {
+		f.onSuspend()
+	}
 	return f.resp, f.err
 }
 

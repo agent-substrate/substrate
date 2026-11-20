@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"google.golang.org/grpc/codes"
+
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
@@ -41,7 +43,8 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 
 	workerName := req.GetWorker().GetName()
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	if err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid()); err != nil {
+	actor, err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid())
+	if err != nil {
 		return nil, err
 	}
 
@@ -50,12 +53,25 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 	// suspendable, and a proposal that races a resume, suspend, or delete loses
 	// to whichever holds the Actor's lease.
 	//
-	// TODO: the checks above run outside the Actor's lease, so there is a small
-	// race with the suspend that follows: within the one round trip it takes
-	// the workflow to acquire the lease, the Actor can be resumed onto another
-	// Worker, or deleted and recreated under the same name, and the workflow
-	// suspends whatever the reference resolves to by then. See #1773.
-	resp, err := s.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: req.GetActor()})
+	// The checks above run outside the Actor's lease. The uid and version
+	// preconditions make the workflow refuse the Actor if anything wrote it
+	// since, such as a resume onto another Worker or a delete and recreate.
+	resp, err := s.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor: req.GetActor(),
+		Preconditions: &ateapi.Preconditions{
+			Uid:     actor.GetMetadata().GetUid(),
+			Version: actor.GetMetadata().GetVersion(),
+		},
+	})
+	if apierror.Code(err) == codes.Aborted {
+		// The workflow also refuses with ABORTED when a precondition fails.
+		// Check again so an Actor the caller no longer hosts is NotFound, as
+		// above. If the caller still hosts it, the ABORTED stands, and the
+		// worker retries against the Actor's new version.
+		if _, authErr := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid()); apierror.Code(authErr) == codes.NotFound {
+			return nil, authErr
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,15 +85,16 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 
 // authorizeHostedActor checks that the calling atelet may speak for actorRef:
 // workerName must be on the caller's node, and the actor must be assigned to it.
-func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Caller, workerName string, actorRef resources.ActorRef, actorUID string) error {
+// It returns the actor it checked.
+func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Caller, workerName string, actorRef resources.ActorRef, actorUID string) (*ateapi.Actor, error) {
 	// Use authoritative state to authorize the request, never the request
 	// itself: the caller proves which node it is on, and nothing else.
 	worker, err := s.store.GetWorker(ctx, workerName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Worker %s not found", workerName)
+			return nil, apierror.NotFound("Worker %s not found", workerName)
 		}
-		return fmt.Errorf("while fetching worker %s: %w", workerName, err)
+		return nil, fmt.Errorf("while fetching worker %s: %w", workerName, err)
 	}
 	if worker.GetNodeName() != caller.NodeName {
 		// Do not disclose Workers on other nodes.
@@ -86,17 +103,20 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 			slog.String("worker_node", worker.GetNodeName()),
 			slog.String("caller_node", caller.NodeName),
 			slog.String("caller_pod", caller.PodName))
-		return apierror.NotFound("Worker %s not found", workerName)
+		return nil, apierror.NotFound("Worker %s not found", workerName)
 	}
 
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
-		return fmt.Errorf("while fetching actor %s: %w", actorRef, err)
+		return nil, fmt.Errorf("while fetching actor %s: %w", actorRef, err)
 	}
-	return checkActorHostedBy(ctx, actor, workerName, actorUID)
+	if err := checkActorHostedBy(ctx, actor, workerName, actorUID); err != nil {
+		return nil, err
+	}
+	return actor, nil
 }
 
 // checkActorHostedBy reports whether the Worker may speak for this Actor: the

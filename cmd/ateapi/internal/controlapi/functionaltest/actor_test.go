@@ -1055,7 +1055,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	otherLifecycle := proto.Clone(created).(*ateapi.Actor)
 	otherLifecycle.Metadata.Uid = staleUID
 	_, err = update(otherLifecycle, "other-lifecycle")
-	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+	assertGrpcError(t, err, codes.Aborted, "actor test-atespace/id1 has a different uid than expected")
 
 	// Both guards matching the observed state: the update goes through, and
 	// moves the resource past the version observed above.

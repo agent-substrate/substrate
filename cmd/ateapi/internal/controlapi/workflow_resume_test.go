@@ -100,7 +100,7 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	st := &leaseCountingStore{Interface: persistence}
 	w := &ActorWorkflow{store: st}
 
-	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.Precondition{})
 	if err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestAssignWorkerAttempt_BindNotFound(t *testing.T) {
 			st := &bindErrorStore{Interface: persistence, err: tc.bindErr}
 			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 
-			_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+			_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("assignWorkerAttempt error = %v, want %v", err, tc.wantErr)
@@ -375,7 +375,7 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapi.ActorTemplate{}
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, store.Precondition{})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want ErrVersionConflict", err)
 	}
@@ -419,7 +419,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "actor-uid"},
 	}
 	tmpl := &ateapi.ActorTemplate{}
-	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
+	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl, store.Precondition{})
 	if apierror.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no worker has room)", err)
 	}
@@ -476,7 +476,7 @@ func TestEnsureWorkerAssigned_MissingUploadClaimsNoWorker(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	if _, _, err := w.ensureWorkerAssigned(ctx, actorRef, actor, &ateapi.ActorTemplate{}); apierror.Code(err) != codes.DataLoss {
+	if _, _, err := w.ensureWorkerAssigned(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{}); apierror.Code(err) != codes.DataLoss {
 		t.Fatalf("ensureWorkerAssigned() error = %v, want DataLoss", err)
 	}
 
@@ -558,7 +558,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapi.ActorTemplate{}
-	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, store.Precondition{})
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt() on retry = %v, want nil (must re-pick a free worker)", err)
 	}
@@ -646,16 +646,35 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 	return actor, wc
 }
 
+// recreatingGetStore deletes and recreates the actor on the first GetActor.
+type recreatingGetStore struct {
+	store.Interface
+	once     sync.Once
+	recreate func()
+}
+
+func (s *recreatingGetStore) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
+	s.once.Do(s.recreate)
+	return s.Interface.GetActor(ctx, actorRef)
+}
+
 // TestAssignWorkerAttempt_ConflictRefreshesActor verifies the actor write's
 // conflict handling within a single attempt: a concurrent spec write leaves
 // ErrVersionConflict with the refreshed actor returned for the retry, while
-// a concurrent transition out of a resumable state aborts the resume.
+// a concurrent transition out of a resumable state, or a recreated actor,
+// aborts the resume.
 func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
 		// mutate is the racing concurrent write applied to the fresh actor.
 		mutate func(fresh *ateapi.Actor)
+		// recreateOnRefresh deletes and recreates the actor between the
+		// failed bind and the refresh.
+		recreateOnRefresh bool
+		// versionGuard passes the caller's version guard, checked against the
+		// actor before the racing write.
+		versionGuard bool
 		// wantRetry means the attempt surfaces ErrVersionConflict with the
 		// refreshed actor returned; otherwise Aborted.
 		wantRetry bool
@@ -678,6 +697,24 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 			wantRetry:       false,
 			wantStoredState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
+		{
+			name: "the actor is recreated before the refresh",
+			mutate: func(fresh *ateapi.Actor) {
+				fresh.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"team": "blue"}}
+			},
+			recreateOnRefresh: true,
+			wantRetry:         false,
+			wantStoredState:   ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+		},
+		{
+			name: "another writer refreshes the Actor under a version guard",
+			mutate: func(fresh *ateapi.Actor) {
+				fresh.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"team": "blue"}}
+			},
+			versionGuard:    true,
+			wantRetry:       false,
+			wantStoredState: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -686,8 +723,21 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 			persistence := newTestPersistence(t)
 			actor, wc := seedAssignFixture(t, ctx, persistence)
 
+			base := persistence
+			if tc.recreateOnRefresh {
+				base = &recreatingGetStore{Interface: persistence, recreate: func() {
+					if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor), store.Precondition{}); err != nil {
+						t.Errorf("recreate DeleteActor: %v", err)
+						return
+					}
+					storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+						Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+						Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+					})
+				}}
+			}
 			var injected *ateapi.Actor
-			st := &conflictInjectingStore{Interface: persistence, inject: func() {
+			st := &conflictInjectingStore{Interface: base, inject: func() {
 				fresh, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 				if err != nil {
 					t.Errorf("inject GetActor: %v", err)
@@ -706,7 +756,11 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 
 			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 			tmpl := &ateapi.ActorTemplate{}
-			refreshed, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+			var precondition store.Precondition
+			if tc.versionGuard {
+				precondition.Version = actor.GetMetadata().GetVersion()
+			}
+			refreshed, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, precondition)
 
 			if tc.wantRetry {
 				if !errors.Is(err, store.ErrVersionConflict) {
@@ -730,6 +784,9 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 			}
 			if stored.GetStatus().GetState() != tc.wantStoredState {
 				t.Errorf("stored state = %v, want %v", stored.GetStatus().GetState(), tc.wantStoredState)
+			}
+			if got := stored.GetMetadata().GetUid() != actor.GetMetadata().GetUid(); got != tc.recreateOnRefresh {
+				t.Errorf("stored actor recreated = %v, want %v", got, tc.recreateOnRefresh)
 			}
 			// The losing bind rolls back with the actor update.
 			if worker := storetest.WorkerHostingActor(t, ctx, persistence, stored.GetMetadata().GetUid()); worker != "" {
@@ -786,7 +843,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			})
 
-			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.Precondition{})
 			if tc.wantErr {
 				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -835,7 +892,7 @@ func TestEnsureWorkerAssigned_RejectsNonResumableStates(t *testing.T) {
 			continue
 		}
 		actor := &ateapi.Actor{Status: &ateapi.ActorStatus{State: st}, Metadata: &ateapi.ResourceMetadata{Name: "id1", Uid: "actor-uid-1"}}
-		_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Name: "id1"}, actor, &ateapi.ActorTemplate{})
+		_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		assertPrerequisiteResult(t, st, err, false)
 	}
 }
@@ -871,7 +928,7 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 				}
 			})
 
-			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.Precondition{})
 			if tt.wantRecord && err == nil {
 				t.Fatal("expected resume to fail, got nil error")
 			}
@@ -1081,7 +1138,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence}
 
-	actor, tmpl, err := w.loadActorForResume(ctx, actorRef)
+	actor, tmpl, err := w.loadActorForResume(ctx, actorRef, store.Precondition{})
 	if err != nil {
 		t.Fatalf("loadActorForResume() unexpected error = %v", err)
 	}
@@ -1923,7 +1980,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				a.Status.LastAssignedGeneration = gen
 			})
 
-			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
+			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef, store.Precondition{})
 			var tele restoreTelemetry
 			if err == nil {
 				tele, _, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
@@ -2329,7 +2386,7 @@ func TestEnsureWorkerAssigned_ContentionRecordsOneObservation(t *testing.T) {
 	}
 	w, actor, reader := newContendedWorkflow(t, sched)
 
-	_, worker, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+	_, worker, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 	if err != nil {
 		t.Fatalf("ensureWorkerAssigned: %v", err)
 	}
@@ -2363,7 +2420,7 @@ func TestEnsureWorkerAssigned_ExhaustedBackoffRecordsOneError(t *testing.T) {
 	}
 	w, actor, reader := newContendedWorkflow(t, sched)
 
-	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 	if err == nil {
 		t.Fatal("ensureWorkerAssigned succeeded, want a failure after the backoff ended")
 	}
@@ -2432,7 +2489,7 @@ func TestEnsureWorkerAssigned_CancelledDuringBackoffRecordsOne(t *testing.T) {
 	}
 	defer cancel()
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
 	}
@@ -2462,7 +2519,7 @@ func TestEnsureWorkerAssigned_CancelledBeforeFirstAttemptRecordsNothing(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
 	}
@@ -2494,7 +2551,7 @@ func TestEnsureWorkerAssigned_CancelledInLastSleepRecordsOne(t *testing.T) {
 	}
 	defer cancel()
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
 	}
@@ -2523,7 +2580,7 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 	}
 	w, actor, reader := newContendedWorkflow(t, sched)
 
-	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.DeadlineExceeded", err)
 	}
@@ -2588,7 +2645,7 @@ func TestEnsureWorkerAssigned_CapacityOutcome(t *testing.T) {
 			w, actor, reader := newContendedWorkflow(t, sched)
 			actor.Status.AssignedNode = tt.assignedNode
 
-			_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+			_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Errorf("ensureWorkerAssigned() = %v, want code %v", err, tt.wantCode)
 			}
@@ -2766,7 +2823,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", amd64RT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, amd64RT))
 
-		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2782,7 +2839,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
-		stored, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		stored, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2797,7 +2854,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		seedRuntimeWorker(t, ctx, st, "arm-pod", "node-arm", arm64RT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, amd64RT))
 
-		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2825,7 +2882,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 				snap.Fidelity = fidelity
 				actor := seedActorWithSnapshot(t, ctx, st, suspended, "", snap)
 
-				_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+				_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 				if apierror.Code(err) != codes.ResourceExhausted {
 					t.Fatalf("assignWorkerAttempt with only a microvm worker = %v, want ResourceExhausted", err)
 				}
@@ -2842,7 +2899,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		local.SandboxRuntime = amd64RT
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
 
-		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		if got := apierror.Code(err); got != codes.ResourceExhausted {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
 		}
@@ -2872,7 +2929,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
 		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: worker}}
-		stored, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		stored, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2892,7 +2949,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
 		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: stale}}
-		stored, bound, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
+		stored, bound, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{}, store.Precondition{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -3238,7 +3295,7 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 			// u is declared but not mounted; o is not declared at all.
 			tmpl := volumeTemplate([]string{"a", "u", "b"}, "a", "b")
 
-			assigned, worker, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+			assigned, worker, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl, store.Precondition{})
 			if err != nil {
 				t.Fatalf("assignWorkerAttempt: %v", err)
 			}
@@ -3507,7 +3564,7 @@ func TestAssignWorkerAttempt_WorkerWithoutNodeRejectsVolumes(t *testing.T) {
 			w := newVolumeAssignWorkflow(persistence, wc, plugin)
 			tmpl := volumeTemplate([]string{"vol"}, tt.mounted...)
 
-			_, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+			_, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl, store.Precondition{})
 			stored, gerr := persistence.GetActor(ctx, actorRef)
 			if gerr != nil {
 				t.Fatalf("GetActor: %v", gerr)
@@ -3545,13 +3602,13 @@ func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = locked
 
 	tmpl := &ateapi.ActorTemplate{Resources: &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: 256 << 20}}}
-	_, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	_, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, store.Precondition{})
 	if !errors.Is(err, errWorkerFilledUp) {
 		t.Fatalf("assignWorkerAttempt() = %v, want %v", err, errWorkerFilledUp)
 	}
 
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = cached
-	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl); err != nil {
+	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, store.Precondition{}); err != nil {
 		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
 	}
 }

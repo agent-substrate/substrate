@@ -586,6 +586,72 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 	})
 }
 
+func TestWorkerCustomMethods_Preconditions(t *testing.T) {
+	ctx := context.Background()
+	methods := []struct {
+		name string
+		call func(svc *RPCService, p *ateapi.Preconditions) (*ateapi.Worker, error)
+	}{
+		{"DrainWorker", func(svc *RPCService, p *ateapi.Preconditions) (*ateapi.Worker, error) {
+			resp, err := svc.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName), Preconditions: p})
+			return resp.GetWorker(), err
+		}},
+		{"MarkWorkerAvailable", func(svc *RPCService, p *ateapi.Preconditions) (*ateapi.Worker, error) {
+			resp, err := svc.MarkWorkerAvailable(ctx, &ateapi.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName), Preconditions: p})
+			return resp.GetWorker(), err
+		}},
+		{"MarkWorkerUnavailable", func(svc *RPCService, p *ateapi.Preconditions) (*ateapi.Worker, error) {
+			resp, err := svc.MarkWorkerUnavailable(ctx, &ateapi.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName), Preconditions: p})
+			return resp.GetWorker(), err
+		}},
+	}
+	for _, m := range methods {
+		t.Run(m.name, func(t *testing.T) {
+			svc, persistence := newWorkerAPIService(t)
+			seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			md := seeded.GetMetadata()
+
+			for _, tc := range []struct {
+				name string
+				p    *ateapi.Preconditions
+			}{
+				{"stale version", &ateapi.Preconditions{Version: md.GetVersion() + 7}},
+				{"foreign uid", &ateapi.Preconditions{Uid: apiOtherWorkerName}},
+			} {
+				if _, err := m.call(svc, tc.p); apierror.Code(err) != codes.Aborted {
+					t.Errorf("%s: code = %v (err %v), want %v", tc.name, apierror.Code(err), err, codes.Aborted)
+				}
+			}
+			stored, err := persistence.GetWorker(ctx, apiWorkerName)
+			if err != nil {
+				t.Fatalf("GetWorker() failed: %v", err)
+			}
+			if diff := cmp.Diff(seeded, stored, protocmp.Transform()); diff != "" {
+				t.Errorf("refused calls changed the worker (-seeded +stored):\n%s", diff)
+			}
+
+			matching := &ateapi.Preconditions{Uid: md.GetUid(), Version: md.GetVersion()}
+			got, err := m.call(svc, matching)
+			if err != nil {
+				t.Fatalf("matching preconditions failed: %v", err)
+			}
+
+			// A retry with the same version fails once the first call wrote
+			// the Worker. A retry with the uid alone succeeds.
+			wantRetry := codes.OK
+			if got.GetMetadata().GetVersion() != md.GetVersion() {
+				wantRetry = codes.Aborted
+			}
+			if _, err := m.call(svc, matching); apierror.Code(err) != wantRetry {
+				t.Errorf("retry with the same version: code = %v (err %v), want %v", apierror.Code(err), err, wantRetry)
+			}
+			if _, err := m.call(svc, &ateapi.Preconditions{Uid: md.GetUid()}); err != nil {
+				t.Errorf("retry with uid alone failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestDrainWorker(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
