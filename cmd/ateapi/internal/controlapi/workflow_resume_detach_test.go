@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -118,6 +120,9 @@ func TestDetachFromFullNode(t *testing.T) {
 		otherRuntime *ateapi.ActorSandboxRuntime
 		// snapRuntime stamps the MEMORY snapshot.
 		snapRuntime *ateapi.ActorSandboxRuntime
+		// limits are the template's limits. The workers report no CPU or
+		// memory, so any limit makes the actor larger than every worker.
+		limits *ateapi.Resources
 		// completed records the snapshot's upload COMPLETED.
 		completed bool
 		cancel    bool
@@ -201,6 +206,12 @@ func TestDetachFromFullNode(t *testing.T) {
 		name:     "no node has room: the assignment's error, without detaching",
 		node:     "node-1",
 		wantCode: codes.ResourceExhausted,
+	}, {
+		name:      "no worker on any node fits the actor: FailedPrecondition, without detaching",
+		node:      "node-1",
+		otherNode: true,
+		limits:    resources.CPUMemory(1000, 0),
+		wantCode:  codes.FailedPrecondition,
 	}, {
 		name:         "room only on another runtime: detaches",
 		node:         "node-1",
@@ -432,7 +443,8 @@ func TestDetachFromFullNode(t *testing.T) {
 				t.Fatalf("GetActor: %v", err)
 			}
 
-			stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom)
+			tmpl := &ateapi.ActorTemplate{Resources: &ateapi.ResourceRequirements{Limits: tt.limits}}
+			stored, err := w.detachFromFullNode(ctx, actorRef, actor, tmpl, noRoom)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("detachFromFullNode() = %v, want code %v", err, tt.wantCode)
 			}
@@ -489,15 +501,51 @@ func TestDetachFromFullNode(t *testing.T) {
 }
 
 // TestResumeActor_DetachesFromFullNode resumes an actor pinned to node-1 with
-// room on node-2: it moves to node-2 only when node-1 is full.
+// room on node-2: it moves to node-2 only when node-1 is full. Each resume
+// writes one scheduler record, unless the detach fails after its scheduler
+// check.
 func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 	tests := []struct {
-		name     string
-		node1    bool
-		wantNode string
+		name      string
+		node1     bool
+		node2Full bool
+		// limits are the template's limits. The workers report no CPU or
+		// memory, so any limit makes the actor larger than every worker.
+		limits *ateapi.Resources
+		// detachErr is the error atelet returns from DetachActor.
+		detachErr    error
+		wantCode     codes.Code
+		wantNode     string
+		wantOutcomes []string
 	}{
-		{name: "node-1 full: detaches and resumes on node-2", wantNode: "node-2"},
-		{name: "node-1 has room: resumes there from the local copy", node1: true, wantNode: "node-1"},
+		{
+			name:         "node-1 full: detaches and resumes on node-2",
+			wantNode:     "node-2",
+			wantOutcomes: []string{ateattr.SchedulerOutcomeAssigned},
+		},
+		{
+			name:         "node-1 has room: resumes there from the local copy",
+			node1:        true,
+			wantNode:     "node-1",
+			wantOutcomes: []string{ateattr.SchedulerOutcomeAssigned},
+		},
+		{
+			name:         "both nodes full: ResourceExhausted without detaching",
+			node2Full:    true,
+			wantCode:     codes.ResourceExhausted,
+			wantOutcomes: []string{ateattr.SchedulerOutcomeNoCapacity},
+		},
+		{
+			name:         "no worker fits the actor: FailedPrecondition without detaching",
+			limits:       resources.CPUMemory(1000, 0),
+			wantCode:     codes.FailedPrecondition,
+			wantOutcomes: []string{ateattr.SchedulerOutcomeError + "/" + codes.FailedPrecondition.String()},
+		},
+		{
+			name:      "atelet unreachable: Unavailable after the scheduler check, no record",
+			detachErr: apierror.Unavailable("connection refused"),
+			wantCode:  codes.Unavailable,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -509,6 +557,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			if _, err := st.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
 				Metadata:       &ateapi.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
 				SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
+				Resources:      &ateapi.ResourceRequirements{Limits: tt.limits},
 			}); err != nil {
 				t.Fatalf("create template: %v", err)
 			}
@@ -519,6 +568,12 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			if !tt.node1 {
 				fillWorker(t, st, workers["node-1"])
 			}
+			if tt.node2Full {
+				seedAssignment(t, st, workers["node-2"].GetMetadata().GetName(), &ateapi.ActorAssignment{
+					Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "other-2"},
+					ActorUid: "other-2-uid",
+				})
+			}
 			snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = "node-1"
@@ -526,12 +581,27 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 				a.Status.Snapshots = []*ateapi.Snapshot{proto.CloneOf(snap)}
 			})
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
+			instruments, reader := newAssignmentReader(t)
+			w.instruments = instruments
 			addAteletOnNode(t, w, "node-2")
 			atelet.detachState = detachedState(snap)
+			atelet.detachErr = tt.detachErr
 
 			got, resumed, err := w.ResumeActor(ctx, actorRef)
-			if err != nil {
-				t.Fatalf("ResumeActor: %v", err)
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("ResumeActor() = %v, want code %v", err, tt.wantCode)
+			}
+			// The attempt on the full node-1 writes no record.
+			_, outcomes := assignmentObservations(t, reader)
+			if !slices.Equal(outcomes, tt.wantOutcomes) {
+				t.Errorf("recorded outcomes = %v, want %v", outcomes, tt.wantOutcomes)
+			}
+			if tt.wantCode != codes.OK {
+				detached := atelet.detachRequest() != nil
+				if wantDetach := tt.detachErr != nil; detached != wantDetach {
+					t.Errorf("DetachActor called = %v, want %v", detached, wantDetach)
+				}
+				return
 			}
 			if !resumed || got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 				t.Fatalf("ResumeActor = (state %v, resumed %v), want RUNNING and resumed", got.GetStatus().GetState(), resumed)

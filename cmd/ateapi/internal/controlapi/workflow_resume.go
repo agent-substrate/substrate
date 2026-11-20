@@ -413,7 +413,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	pool := ""
 	class := ""
 	defer func() {
-		if schedulerRecordable(err) {
+		// Do not record scheduling errors for actors that can be detached from
+		// a node. Scheduling of those will be retried, so we don't want to
+		// double count.
+		if schedulerRecordable(err) && !shouldDetachFromNode(actor, err) {
 			w.instruments.recordSchedulerAssignment(ctx, time.Since(start), outcome, poolNamespace, pool, class, err)
 		}
 	}()
@@ -429,6 +432,13 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		assignedWorker, err = w.scheduler.Schedule(ctx, constraints)
 	}
 	if err != nil {
+		// Return FailedPrecondition only when we fail to schedule an actor
+		// that could resume on any node, but doesn't fit any of them.
+		// Scheduling failures for pinned actors will be retried, so we
+		// return ResourceExhausted in that case.
+		if errors.Is(err, scheduling.ErrDoesNotFit) && len(constraints.RequiredNodes) == 0 {
+			return nil, nil, apierror.FailedPrecondition("%w", errActorDoesNotFit)
+		}
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			outcome = ateattr.SchedulerOutcomeNoCapacity
 			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
@@ -525,6 +535,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 // errNoWorkerRoom reports that no worker has room for the Actor under its
 // constraints.
 var errNoWorkerRoom = errors.New("no worker has room for the actor")
+
+// errActorDoesNotFit reports that the Actor would not fit any eligible worker
+// even if that worker were empty. Retrying succeeds only once a larger worker
+// is active.
+var errActorDoesNotFit = errors.New("the actor is larger than every eligible worker")
 
 // errWorkerFilledUp reports that the Worker the scheduler picked would not take
 // the Actor once the store asked under its row lock. Retryable: the next

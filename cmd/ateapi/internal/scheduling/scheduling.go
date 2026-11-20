@@ -71,14 +71,21 @@ type Constraints struct {
 // the constraints at all.
 var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 
+// ErrDoesNotFit wraps ErrNoCapacity. Schedule returns it when no worker has room
+// and the actor exceeds the whole capacity of every worker that meets the
+// constraints. See doesNotFit for which workers count.
+var ErrDoesNotFit = fmt.Errorf("%w: the actor exceeds the capacity of every such worker", ErrNoCapacity)
+
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
 	// Schedule returns a worker that meets constraints and has room.
-	// Returns ErrNoCapacity when no worker that meets constraints has room.
+	// Returns ErrNoCapacity when no worker that meets constraints has room,
+	// or ErrDoesNotFit when the actor exceeds the capacity of each of them.
 	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
 
-	// Applies reports whether worker satisfies non-capacity constraints. Capacity
-	// is excluded so an existing assignment does not make its Worker ineligible.
+	// Applies reports whether worker is ACTIVE and satisfies non-capacity
+	// constraints. Capacity is excluded so an existing assignment does not make
+	// its Worker ineligible.
 	Applies(worker *ateapi.Worker, constraints Constraints) bool
 
 	// HasRoom reports whether worker's remaining capacity admits one more actor
@@ -141,6 +148,9 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	}
 
 	if len(candidates) == 0 {
+		if doesNotFit(workers, constraints) {
+			return nil, ErrDoesNotFit
+		}
 		return nil, ErrNoCapacity
 	}
 	if len(candidates) == 1 {
@@ -156,6 +166,34 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return candidates[j].worker, nil
 	}
 	return candidates[i].worker, nil
+}
+
+// doesNotFit reports whether at least one registered worker meets constraints,
+// and the actor exceeds the whole capacity of each of them, including UNAVAILABLE
+// workers.
+//
+// TODO(#198): check WorkerPool sizes too.
+func doesNotFit(workers []*ateapi.Worker, constraints Constraints) bool {
+	eligible := false
+	for _, worker := range workers {
+		// A DRAINING worker never takes actors again, so its size is
+		// irrelevant.
+		if worker.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING {
+			continue
+		}
+		// Skip a worker that is unregistered or fails the other constraints.
+		// Its state is ignored, so an UNAVAILABLE worker still counts.
+		if !appliesAnyState(worker, constraints) {
+			continue
+		}
+		eligible = true
+		// The worker meets the constraints. If the actor fits its whole
+		// capacity, it may fit once the worker frees room or becomes ACTIVE.
+		if booking, ok := Booking(worker, constraints); ok && fitsEmpty(worker, booking) {
+			return false
+		}
+	}
+	return eligible
 }
 
 // candidate pairs an eligible worker with its cached compute utilization.
@@ -233,6 +271,13 @@ func Registered(worker *ateapi.Worker) bool {
 }
 
 func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool {
+	return worker.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE &&
+		appliesAnyState(worker, constraints)
+}
+
+// appliesAnyState reports whether a registered worker satisfies the
+// non-capacity constraints in any state.
+func appliesAnyState(worker *ateapi.Worker, constraints Constraints) bool {
 	if !Registered(worker) {
 		return false
 	}
@@ -240,19 +285,12 @@ func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool
 	if constraints.SandboxClass != "" && workerClass != constraints.SandboxClass {
 		return false
 	}
-
-	if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
-		return false
-	}
-
 	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, worker.GetNodeName()) {
 		return false
 	}
-
 	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
 		return false
 	}
-
 	set := labels.Set(worker.GetLabels())
 	if constraints.TemplateSelector != nil && !constraints.TemplateSelector.Matches(set) {
 		return false
@@ -316,6 +354,12 @@ func sum(vs ...int64) (int64, bool) {
 		total += v
 	}
 	return total, true
+}
+
+// fitsEmpty reports whether want fits the worker's whole capacity. It ignores
+// the actor count, which limits how many actors fit and not how large one is.
+func fitsEmpty(worker *ateapi.Worker, want *ateapi.Resources) bool {
+	return resources.Covers(resources.Free(worker.GetStatus().GetCapacity(), nil), want)
 }
 
 func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) {

@@ -2541,6 +2541,65 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 	}
 }
 
+// TestEnsureWorkerAssigned_CapacityOutcome checks the record of an attempt
+// that finds no room. An actor larger than every worker records error. A pinned
+// actor records nothing, because detachFromFullNode records it.
+func TestEnsureWorkerAssigned_CapacityOutcome(t *testing.T) {
+	tests := []struct {
+		name         string
+		assignedNode string
+		schedErr     error
+		wantCode     codes.Code
+		wantOutcomes []string
+	}{
+		{
+			name:         "full workers",
+			schedErr:     scheduling.ErrNoCapacity,
+			wantCode:     codes.ResourceExhausted,
+			wantOutcomes: []string{ateattr.SchedulerOutcomeNoCapacity},
+		},
+		{
+			name:         "larger than every worker",
+			schedErr:     scheduling.ErrDoesNotFit,
+			wantCode:     codes.FailedPrecondition,
+			wantOutcomes: []string{ateattr.SchedulerOutcomeError + "/" + codes.FailedPrecondition.String()},
+		},
+		{
+			name:         "pinned, full workers on the node",
+			assignedNode: "node-1",
+			schedErr:     scheduling.ErrNoCapacity,
+			wantCode:     codes.ResourceExhausted,
+			// No outcomes for pinned actors
+		},
+		{
+			name:         "pinned, larger than every worker on the node",
+			assignedNode: "node-1",
+			schedErr:     scheduling.ErrDoesNotFit,
+			wantCode:     codes.ResourceExhausted,
+			// No outcomes for pinned actors
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sched := &filledUpScheduler{
+				workers: []*ateapi.Worker{contendedWorker("free-pod")},
+				err:     tt.schedErr,
+			}
+			w, actor, reader := newContendedWorkflow(t, sched)
+			actor.Status.AssignedNode = tt.assignedNode
+
+			_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("ensureWorkerAssigned() = %v, want code %v", err, tt.wantCode)
+			}
+			_, outcomes := assignmentObservations(t, reader)
+			if diff := cmp.Diff(tt.wantOutcomes, outcomes); diff != "" {
+				t.Errorf("recorded outcomes (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // testRuntime is a gvisor ActorSandboxRuntime for arch under compatibility schema
 // v1. A non-empty bundleHash adds a sandbox_bundle_hash attribute, so two
 // runtimes can share an architecture and still differ, as two versions of
