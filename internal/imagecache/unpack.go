@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/tarutil"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -317,8 +318,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := tarutil.Lchown(root, name, hdr); err != nil {
 				return nil, err
 			}
-			// The symlink's own mtime is not restored: Chtimes follows the link,
-			// so it would stamp the target instead.
+			if err := restoreLinkModTime(root, name, hdr.ModTime); err != nil {
+				return nil, err
+			}
 
 		case tar.TypeLink:
 			linkname, linkSkip, err := validateTarName(hdr.Linkname)
@@ -530,6 +532,25 @@ func restoreModTime(root *os.Root, name string, modTime time.Time) error {
 		return nil
 	}
 	if err := root.Chtimes(name, modTime, modTime); err != nil {
+		return fmt.Errorf("while restoring mtime on %q: %w", name, err)
+	}
+	return nil
+}
+
+// restoreLinkModTime is restoreModTime for a symlink. Root.Chtimes follows the
+// link, so this sets the link's own times relative to its parent, opened in
+// root, without following it.
+func restoreLinkModTime(root *os.Root, name string, modTime time.Time) error {
+	if modTime.IsZero() {
+		return nil
+	}
+	parent, err := root.Open(filepath.Dir(name))
+	if err != nil {
+		return fmt.Errorf("while restoring mtime on %q: %w", name, err)
+	}
+	defer parent.Close()
+	ts := unix.NsecToTimespec(modTime.UnixNano())
+	if err := unix.UtimesNanoAt(int(parent.Fd()), filepath.Base(name), []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return fmt.Errorf("while restoring mtime on %q: %w", name, err)
 	}
 	return nil
