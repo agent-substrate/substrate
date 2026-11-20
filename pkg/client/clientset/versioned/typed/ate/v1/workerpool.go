@@ -40,6 +40,7 @@ type WorkerPoolInterface interface {
 	// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
 	UpdateStatus(ctx context.Context, workerPool *atev1.WorkerPool, opts metav1.UpdateOptions) (*atev1.WorkerPool, error)
 	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+	DeleteWithResult(ctx context.Context, name string, opts metav1.DeleteOptions) (metav1.APIResult, error)
 	DeleteCollection(ctx context.Context, opts metav1.DeleteOptions, listOpts metav1.ListOptions) error
 	Get(ctx context.Context, name string, opts metav1.GetOptions) (*atev1.WorkerPool, error)
 	List(ctx context.Context, opts metav1.ListOptions) (*atev1.WorkerPoolList, error)

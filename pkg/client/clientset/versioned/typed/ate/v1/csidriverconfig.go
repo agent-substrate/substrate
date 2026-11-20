@@ -38,6 +38,7 @@ type CSIDriverConfigInterface interface {
 	Create(ctx context.Context, cSIDriverConfig *atev1.CSIDriverConfig, opts metav1.CreateOptions) (*atev1.CSIDriverConfig, error)
 	Update(ctx context.Context, cSIDriverConfig *atev1.CSIDriverConfig, opts metav1.UpdateOptions) (*atev1.CSIDriverConfig, error)
 	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+	DeleteWithResult(ctx context.Context, name string, opts metav1.DeleteOptions) (metav1.APIResult, error)
 	DeleteCollection(ctx context.Context, opts metav1.DeleteOptions, listOpts metav1.ListOptions) error
 	Get(ctx context.Context, name string, opts metav1.GetOptions) (*atev1.CSIDriverConfig, error)
 	List(ctx context.Context, opts metav1.ListOptions) (*atev1.CSIDriverConfigList, error)
