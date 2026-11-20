@@ -56,3 +56,16 @@ func Lchown(root *os.Root, name string, hdr *tar.Header) error {
 	}
 	return fmt.Errorf("restoring ownership of %q to %d:%d: %w", name, hdr.Uid, hdr.Gid, err)
 }
+
+// Fchown applies hdr's numeric owner to an open file, avoiding a second path
+// walk through root when the caller just created f.
+func Fchown(f *os.File, hdr *tar.Header) error {
+	err := f.Chown(hdr.Uid, hdr.Gid)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, os.ErrPermission) && os.Geteuid() != 0 {
+		return nil
+	}
+	return fmt.Errorf("restoring ownership of %q to %d:%d: %w", f.Name(), hdr.Uid, hdr.Gid, err)
+}
