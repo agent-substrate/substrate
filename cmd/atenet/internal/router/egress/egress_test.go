@@ -406,6 +406,7 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 		},
 		{name: "https rule on another port", policy: httpsPolicy("api.example.com"), dialed: "93.184.216.34:8443"},
 		{name: "https rule on the dialed port", policy: httpsPolicyOnPorts(ports(8443), "api.example.com"), dialed: "93.184.216.34:8443", want: mitm("api.example.com")},
+		{name: "named CONNECT", policy: httpsPolicyOnPorts(ports(8443), "api.example.com"), dialed: "api.example.com:8443", want: mitm("api.example.com")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -833,14 +834,14 @@ func TestHandleRequestHeadersPicksUpRotatedCA(t *testing.T) {
 	}
 }
 
-// atunnel always sends the address the actor's kernel dialed; a name here is
-// not a tunnel this gateway can carry, and is refused where it can still say so.
-func TestHandleRequestHeadersRejectsNonAddressAuthority(t *testing.T) {
+// A CONNECT authority that is not a valid host:port is refused here, where
+// there is still a response to do it with.
+func TestHandleRequestHeadersRejectsMalformedAuthority(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
 	h := egressHandler(ca.loadRoots, runningActor(), nil)
 
-	for _, authority := range []string{"example.com:443", "93.184.216.34", ""} {
+	for _, authority := range []string{"93.184.216.34", "example.com", "exa mple.com:443", ""} {
 		md := egressMetadata(xfccHeader(leaf))
 		md.Host = authority
 		md.Headers[":authority"] = authority

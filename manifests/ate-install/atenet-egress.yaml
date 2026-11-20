@@ -16,8 +16,8 @@
 #   * downstream mTLS on :443 (present servicedns identity, require + verify an
 #     actor-identity client cert),
 #   * terminate the actor's HTTP CONNECT, whose authority is the actor's
-#     original destination, always sent as IP:port. The gateway never dials
-#     that address.
+#     original destination: the IP:port it dialed, or the name:port atunnel
+#     correlated it to. The gateway never dials it.
 #
 # What goes through the tunnel is authorized against the actor's EgressPolicy
 # by the ext_proc sidecar. Cleartext HTTP and the TLS this gateway terminates
@@ -195,8 +195,8 @@ data:
                       # Without this an absent SAN renders as "-", which is a
                       # non-empty string and fails open at whatever reads it.
                       omit_empty_values: true
-                  # The IP:port the actor dialed, for the request legs to match a
-                  # rule's ports against: a port in a request's Host is not it.
+                  # The CONNECT authority, for the request legs to match a rule's
+                  # ports against its port: a port in a request's Host is not it.
                   - object_key: dev.ate.connect.authority
                     factory_key: envoy.hashable_string
                     # This will further partition connection pool per destination port, preventing
@@ -294,11 +294,10 @@ data:
       # through the mitm_internal cluster's envoy_internal_address, so it
       # cannot be dialled from outside this pod.
       #
-      # It exists because the CONNECT authority is an IP:port (atunnel takes it
-      # from SO_ORIGINAL_DST and rejects hostnames), so the destination
-      # hostname is visible only inside the tunnel. This leg terminates the
-      # tunnelled TLS with a leaf sdsmint mints for the SNI, reads the real
-      # Host, and re-originates.
+      # It exists because the gateway decides on the hostname inside the
+      # tunnel, the SNI or the Host, and never on the CONNECT authority. This
+      # leg terminates the tunnelled TLS with a leaf sdsmint mints for the SNI,
+      # reads the real Host, and re-originates.
       #
       # The egress-policy module (cmd/dataplane/envoy/dynamic-modules/egress-policy)
       # writes the chain name to dev.ate.egress.filter_chain: TLS matching an

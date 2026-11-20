@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/resources"
@@ -51,13 +52,18 @@ type hostedActor struct {
 	// memoryBytes is the actor's memory limit, what it books on the worker.
 	// Immutable after admission.
 	memoryBytes int64
+	// fakeIPs is the actor's fake address table, saved with its checkpoint.
+	// Nil for an actor that has none. Immutable after admission.
+	fakeIPs *fakeip.Table
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
 // resumesGuest is true when the activation resumes a guest from a snapshot,
 // whose CPU counters come back with it. memoryBytes is what the actor books.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64) (*hostedActor, *actornet.SandboxSession, error) {
+// fakeIPs is the actor's fake address table, or nil for an actor that has
+// none.
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64, fakeIPs *fakeip.Table) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *actornet.SandboxSession
@@ -66,17 +72,17 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, re
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest), memoryBytes: memoryBytes}
+	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest), memoryBytes: memoryBytes, fakeIPs: fakeIPs}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
-// hostActor sets up the actor's network, replacing any stale one. resumesGuest
-// and memoryBytes are as for admitActor.
-func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64) (*hostedActor, error) {
+// hostActor sets up the actor's network, replacing any stale one. resumesGuest,
+// memoryBytes and fakeIPs are as for admitActor.
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64, fakeIPs *fakeip.Table) (*hostedActor, error) {
 	uid := attribution.UID
 
-	hosted, stale, err := s.admitActor(attribution, resumesGuest, memoryBytes)
+	hosted, stale, err := s.admitActor(attribution, resumesGuest, memoryBytes, fakeIPs)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +100,7 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		ActorUID:   uid,
 		EgressPort: s.tunnel.EgressPort,
 		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
+		FakeIPs:    s.tunnel.ServedFakeIPs(fakeIPs),
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()

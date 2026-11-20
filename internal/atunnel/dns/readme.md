@@ -74,3 +74,12 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
 - `egressPolicyCheck` adapts the source to the `dnsHandler`'s `queryPolicy` hook, caching the compiled `*evaluator` for the current `*ateletpb.EgressPolicy` pointer and consulting it for every query. Fetching uses the `Server`'s context, so `Stop()` cancels a fetch in progress.
 - `allowQuery` evaluates a single `dnsmessage.Question` against a policy using `evaluator`.
 - `metrics` (`metrics.go`) counts each decision on `ate.dns.queries`, by `ate.dns.decision`.
+
+#### Fake addresses
+
+`correlation.go`: with the `DnsCorrelationInWorker` preview, the relay gives each name the Actor resolves its own fake address, so that atunnel can tunnel a connection to that address by name (see `internal/atunnel/fakeip` and `internal/atunnel/egress/correlation.go`).
+
+- The query is still checked against the egress policy and forwarded upstream. Only a `NOERROR` response to an `A` query that holds an `A` record is replaced: the Actor gets one `A` record with the name's fake address and a short TTL, so it connects to an address atunnel can map back to the name. Every other response reaches the Actor as it is, so a denied name is still `NXDOMAIN`, a name that does not exist still fails, and the `resolv.conf` search list keeps working.
+- A response with a loopback, link-local or unspecified address is not replaced either: the Actor's connections to those never leave the sandbox, so a tunnel would not reach what the name points at.
+- The fake address comes from the Actor's `fakeip.Table`, which the ateworker saves in every snapshot and loads on restore, whether or not it runs with `--dns-correlation`. The table never gives an address to a second name.
+- When the table has no address left for a new name, the upstream response is delivered as it is, as without DNS correlation: connections to the real addresses are tunneled by address, and the gateway decides on the SNI or Host. Reusing an address instead would send a client that kept it to another name. The table logs a warning the first time it runs out.

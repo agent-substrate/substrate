@@ -168,6 +168,12 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 	previewArg := "--preview=" + strings.Join(enabledGates(), ",")
 	args = append(args, previewArg)
 
+	// Passed only on opt-in: a worker exits on a flag it does not know, and
+	// refuses this one without the gate.
+	if wp.Annotations[atev1.WorkerPoolDNSCorrelationAnnotation] == "true" && preview.IsEnabled(preview.GateDNSCorrelationInWorker) {
+		args = append(args, "--dns-correlation")
+	}
+
 	containerAC := corev1ac.Container().
 		WithName("worker").
 		WithImage(wp.Spec.WorkerImage).

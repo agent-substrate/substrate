@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/atunnel/dns/protocol"
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -62,9 +63,12 @@ type dnsHandler struct {
 	limiter *limiter
 	allow   queryPolicy
 	metrics *metrics
+	// fakeIPs holds the fake addresses A queries are answered with. Nil
+	// answers with real addresses.
+	fakeIPs *fakeip.Table
 }
 
-func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, metrics *metrics) *dnsHandler {
+func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, metrics *metrics, fakeIPs *fakeip.Table) *dnsHandler {
 	if allow == nil {
 		allow = func(dnsmessage.Question) bool { return true }
 	}
@@ -73,6 +77,7 @@ func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, me
 		limiter: lim,
 		allow:   allow,
 		metrics: metrics,
+		fakeIPs: fakeIPs,
 	}
 }
 
@@ -224,7 +229,7 @@ func (h *dnsHandler) onUDPResponse(raw []byte, from net.Addr) action {
 	clientAddr := entry.clientAddr
 	h.pending.deleteEntryLocked(hdr.ID)
 
-	out := bytes.Clone(raw)
+	out := bytes.Clone(h.withFakeAddress(raw, hdr, q, &p))
 	binary.BigEndian.PutUint16(out[0:2], clientID)
 
 	return action{
@@ -249,15 +254,17 @@ func (h *dnsHandler) onTCPResponse(raw []byte) action {
 		return action{kind: actionDrop}
 	}
 	var p dnsmessage.Parser
-	if _, err := p.Start(raw); err != nil {
+	hdr, err := p.Start(raw)
+	if err != nil {
 		return action{kind: actionDrop}
 	}
-	if _, err := p.Question(); err != nil {
+	q, err := p.Question()
+	if err != nil {
 		return action{kind: actionDrop}
 	}
 	return action{
 		kind:    actionDeliver,
-		payload: raw,
+		payload: h.withFakeAddress(raw, hdr, q, &p),
 	}
 }
 

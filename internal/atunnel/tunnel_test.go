@@ -54,6 +54,7 @@ func TestRegisterFlags(t *testing.T) {
 		"--atunnel-egress-listen-address=0.0.0.0:3",
 		"--atunnel-egress-trust-bundle=egress-trust",
 		"--dns-egress-policy=enforce-in-atunnel",
+		"--dns-correlation",
 	}
 	want := Config{
 		ListenAddress:        ":1",
@@ -65,6 +66,7 @@ func TestRegisterFlags(t *testing.T) {
 		EgressListenAddress:  "0.0.0.0:3",
 		EgressTrustBundle:    "egress-trust",
 		DNSEgressPolicy:      egresspolicy.DNSEgressPolicyEnforceInAtunnel,
+		DNSCorrelation:       true,
 	}
 
 	std := flag.NewFlagSet("std", flag.ContinueOnError)
@@ -317,6 +319,10 @@ func TestStartErrors(t *testing.T) {
 		},
 		"invalid dns egress policy": {
 			edit:    func(_ *testing.T, cfg *Config) { cfg.DNSEgressPolicy = "invalid" },
+			wantErr: true,
+		},
+		"dns correlation without the preview gate": {
+			edit:    func(_ *testing.T, cfg *Config) { cfg.DNSCorrelation = true },
 			wantErr: true,
 		},
 		"no resolvers": {

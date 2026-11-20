@@ -176,6 +176,7 @@ func TestRequestLegAnswersTheNameToDial(t *testing.T) {
 		name      string
 		leg       string
 		authority string
+		attrs     map[string]string
 		want      string
 	}{
 		{name: "hostname", leg: extproc.EgressCleartextFilterChainName, authority: "api.example.com", want: "api.example.com"},
@@ -186,11 +187,12 @@ func TestRequestLegAnswersTheNameToDial(t *testing.T) {
 		{name: "ipv4-mapped literal", leg: extproc.EgressCleartextFilterChainName, authority: "[::ffff:203.0.113.9]", want: "203.0.113.9"},
 		// Envoy would read an unbracketed IPv6 literal's last group as a port.
 		{name: "ipv6 literal with a port", leg: extproc.EgressCleartextFilterChainName, authority: "[2001:db8::7]:8080", want: "[2001:db8::7]"},
+		{name: "named CONNECT authority", leg: extproc.EgressCleartextFilterChainName, authority: "api.example.com", attrs: dialed("other.example:80"), want: "api.example.com"},
 	}
 	h := policyHandler(combined(httpPolicy("*"), httpsPolicy("*")))
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(tc.leg, "GET", tc.authority, nil))
+			res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(tc.leg, "GET", tc.authority, tc.attrs))
 			wantDial(t, res, err, extproc.EgressDialName)
 			if got := hostOf(res); got != tc.want {
 				t.Errorf("host = %q, want %q", got, tc.want)
@@ -228,7 +230,10 @@ func TestRequestLegDecidesHostAndDialedPort(t *testing.T) {
 		{name: "any port in the http rule", policy: httpPolicyOnPorts(allPorts(), "api.example.com"), authority: "api.example.com", attrs: dialed("93.184.216.34:8080")},
 		{name: "no CONNECT authority leaves ports unenforced", policy: httpPolicyOnPorts(ports(8080), "api.example.com"), authority: "api.example.com", noAuthority: true},
 		{name: "unparseable CONNECT authority", policy: httpPolicy("api.example.com"), authority: "api.example.com", attrs: dialed("not an address:80"), want: envoy_type.StatusCode_Forbidden},
-		{name: "name in the CONNECT authority", policy: httpPolicy("api.example.com"), authority: "api.example.com", attrs: dialed("example.com:80"), want: envoy_type.StatusCode_Forbidden},
+		// A named CONNECT authority counts only for its port, as an address does.
+		{name: "named CONNECT authority", policy: httpPolicy("api.example.com"), authority: "api.example.com", attrs: dialed("other.example:80")},
+		{name: "named CONNECT authority on a port outside the http rule", policy: httpPolicy("api.example.com"), authority: "api.example.com", attrs: dialed("api.example.com:8080"), want: envoy_type.StatusCode_Forbidden},
+		{name: "named CONNECT authority does not decide", policy: httpPolicy("api.example.com"), authority: "evil.example", attrs: dialed("api.example.com:80"), want: envoy_type.StatusCode_Forbidden},
 		{name: "CONNECT authority without a port", policy: httpPolicy("api.example.com"), authority: "api.example.com", attrs: dialed("93.184.216.34"), want: envoy_type.StatusCode_Forbidden},
 		{name: "other hostname", policy: httpPolicy("api.example.com"), authority: "evil.example", want: envoy_type.StatusCode_Forbidden},
 		{name: "wildcard does not match the apex", policy: httpPolicy("*.example.com"), authority: "example.com", want: envoy_type.StatusCode_Forbidden},

@@ -22,6 +22,8 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 )
 
 type serverConfig struct {
@@ -31,6 +33,9 @@ type serverConfig struct {
 	policy PolicySource
 	// metrics counts the policy decisions. Nil records nothing.
 	metrics *metrics
+	// fakeIPs holds the fake addresses A queries are answered with. Nil
+	// answers with real addresses.
+	fakeIPs *fakeip.Table
 }
 
 type netConn struct {
@@ -90,7 +95,7 @@ func newServer(
 
 	s.pendingRequests = newPendingRequests(s.limiter)
 	// The check fetches with serveCtx, so that Stop cancels one in progress.
-	s.dns = newDNSHandler(s.pendingRequests, s.limiter, egressPolicyCheck(serveCtx, config.policy), config.metrics)
+	s.dns = newDNSHandler(s.pendingRequests, s.limiter, egressPolicyCheck(serveCtx, config.policy), config.metrics, config.fakeIPs)
 	s.udp = newUDPHandler(netC.udp, netC.egressUDP, udpAddrs, s.dns, s.pendingRequests)
 	s.tcp = newTCPHandler(config.upstreams, netC.tcpListener, netC.dialer, s.dns, s.limiter)
 

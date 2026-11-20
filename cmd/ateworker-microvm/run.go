@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
@@ -269,13 +270,14 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	attribution := p.actorAttribution()
+	p.fakeIPs = s.tunnel.NewFakeIPs(attribution)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false, p.size.MemoryBytes); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false, p.size.MemoryBytes, p.fakeIPs); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -320,6 +322,9 @@ type actorBootParams struct {
 	// from it instead of starting from a pristine dir. A ROOTFS restore sets it
 	// to the restore dir.
 	rootfsUpperSnapshotDir string
+	// fakeIPs is the actor's fake address table, nil for an actor that has
+	// none.
+	fakeIPs *fakeip.Table
 }
 
 func (p actorBootParams) attribution() resources.ActorAttribution {
@@ -369,7 +374,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false, p.size.MemoryBytes); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false, p.size.MemoryBytes, p.fakeIPs); err != nil {
 			return err
 		}
 	}

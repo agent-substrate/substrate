@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/resources"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
@@ -239,11 +240,18 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	// The guest is paused, so the table holds every address it was given.
+	if hosted != nil {
+		if file := atunnel.SaveFakeIPs(ctx, attribution, hosted.fakeIPs, checkpointDir); file != "" {
+			durableFiles = append(durableFiles, file)
+		}
+	}
 
 	// Report exactly the files we wrote so atelet ships precisely this snapshot:
 	// for MEMORY, the CH snapshot (config.json + state.json + memory-ranges +
 	// base-id) plus the upper and durable-dir tars; for ROOTFS, the upper and
-	// durable-dir tars; for VOLUMES, the durable-dir tars alone.
+	// durable-dir tars; for VOLUMES, the durable-dir tars alone. Every fidelity
+	// also gets the fake address table, if the actor has one.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
