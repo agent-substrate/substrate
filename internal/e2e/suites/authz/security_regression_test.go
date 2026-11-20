@@ -349,7 +349,9 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 //  2. CreateActorTemplate referencing an ExternalVolumeClass is denied for an
 //     ungranted atespace, including for the bootstrap global owner, and
 //     succeeds once the atespace is granted allowed_atespace.
-//  3. Deleting and recreating the atespace scrubs its class grant so
+//  3. CreateActor in another atespace from that template is denied until the
+//     actor's atespace is granted too.
+//  4. Deleting and recreating the atespace scrubs its class grant so
 //     CreateActorTemplate is denied again.
 func testExternalVolumeClassGovernance(t *testing.T, ctx context.Context, f *fixture) {
 	e2e.RequirePreview(t, preview.GateExternalVolumes)
@@ -470,13 +472,52 @@ func testExternalVolumeClassGovernance(t *testing.T, ctx context.Context, f *fix
 	if t.Failed() {
 		return
 	}
+
+	// 3. An actor in another atespace that uses the template needs its own
+	// grant: CreateActor checks can_reference for the actor's atespace.
+	// editor can use the template (editor on targetAtespace) and create
+	// actors in actorAtespace, so only the class grant differs.
+	actorAtespace := targetAtespace + "-b"
+	createAtespace(t, ctx, f.clients, actorAtespace)
+	setAtespacePolicy(t, ctx, f.clients, actorAtespace, binding("editor", editor))
+	crossActor := &ateapi.ObjectRef{Atespace: actorAtespace, Name: "evc-cross"}
+	deleteCrossActor := func(ctx context.Context) {
+		if _, err := f.clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: crossActor}); err != nil && status.Code(err) != codes.NotFound {
+			t.Errorf("DeleteActor(%s/%s): %v", crossActor.GetAtespace(), crossActor.GetName(), err)
+		}
+	}
+	// Registered after createAtespace, so it runs first: the atespace can't
+	// be deleted while it holds the actor.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		deleteCrossActor(cleanupCtx)
+	})
+	createCrossActor := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: crossActor.GetAtespace(), Name: crossActor.GetName()},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: targetAtespace, Name: "evc-allowed"},
+		}})
+		return err
+	}
+	expectAll(t, ctx, []call{
+		{"CreateActor in an ungranted atespace from a granted template", editor, createCrossActor, denied},
+	})
+	e2e.AllowAtespaceOnExternalVolumeClass(ctx, t, f.clients, className, actorAtespace)
+	expectAll(t, ctx, []call{
+		{"CreateActor in a granted atespace", editor, createCrossActor, allowed},
+	})
+	deleteCrossActor(ctx)
+	if t.Failed() {
+		return
+	}
 	if _, err := f.clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{
 		ActorTemplate: &ateapi.ObjectRef{Atespace: targetAtespace, Name: "evc-allowed"},
 	}); err != nil && status.Code(err) != codes.NotFound {
 		t.Fatalf("DeleteActorTemplate(evc-allowed): %v", err)
 	}
 
-	// 3. Delete and recreate targetAtespace -> grant is scrubbed and CreateActorTemplate is denied again.
+	// 4. Delete and recreate targetAtespace -> grant is scrubbed and CreateActorTemplate is denied again.
 	if err := deleteAtespace(ctx, f.clients, targetAtespace); err != nil {
 		t.Fatalf("DeleteAtespace(%q): %v", targetAtespace, err)
 	}

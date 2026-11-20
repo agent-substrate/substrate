@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -403,6 +404,43 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 			userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: tc.user, Kind: principal.KindJWT})
 			handlerCalled := false
 			_, err := interceptor(userCtx, tc.call.req, &grpc.UnaryServerInfo{FullMethod: tc.call.fullMethod}, func(context.Context, any) (any, error) {
+				handlerCalled = true
+				return "ok", nil
+			})
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
+			}
+			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
+			}
+		})
+	}
+
+	// can_reference is checked only for requests with the ExternalVolumes
+	// gate. team-a has no class grant, so an opted-in request is denied, and
+	// an opted-out one reaches the handler, whose validation rejects the field.
+	preview.InitForTest(t, "ExternalVolumes")
+	createTemplateWithClass := &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: local.GetAtespace(), Name: local.GetName()},
+		Volumes: []*ateapi.Volume{{
+			Name: "data",
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+			}},
+		}},
+	}}
+	editorCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "editor", Kind: principal.KindJWT})
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		wantCode codes.Code
+	}{
+		{"opted out skips can_reference", preview.ContextWithOptOut(editorCtx), codes.OK},
+		{"opted in checks can_reference", editorCtx, codes.PermissionDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handlerCalled := false
+			_, err := interceptor(tc.ctx, createTemplateWithClass, &grpc.UnaryServerInfo{FullMethod: ateapi.Control_CreateActorTemplate_FullMethodName}, func(context.Context, any) (any, error) {
 				handlerCalled = true
 				return "ok", nil
 			})

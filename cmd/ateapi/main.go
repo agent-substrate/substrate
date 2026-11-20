@@ -350,6 +350,7 @@ func main() {
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		*snapshotLocation,
+		authorizer,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
@@ -370,13 +371,16 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
+	// preview marks a request that did not opt in to preview features before
+	// authz runs, because authz skips checks on preview fields the request
+	// cannot set.
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
+		preview.UnaryServerInterceptor,
 		authz.UnaryServerInterceptor(authorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		preview.UnaryServerInterceptor,
 	}
 
 	mux := grpc.NewServer(
@@ -397,8 +401,8 @@ func main() {
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
-			authz.StreamServerInterceptor(),
 			preview.StreamServerInterceptor,
+			authz.StreamServerInterceptor(),
 		),
 	)
 	reflection.Register(mux)

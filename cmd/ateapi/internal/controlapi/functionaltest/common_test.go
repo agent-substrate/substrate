@@ -228,6 +228,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		testStorageLocation,
+		nil, // no authz in functional tests
 	)
 
 	// 5. Start REAL gRPC Server for ATE API

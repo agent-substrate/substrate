@@ -161,6 +161,8 @@ kubectl ate delete atespace <atespace>
 
 An **external volume class** (`ExternalVolumeClass`) is a global-scoped resource that names the CSI driver (`driverName`) and driver-specific `parameters` used to provision external volumes for actors. External volume classes are immutable. To change one, delete and recreate it. Creating an external volume class requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI.
 
+Deleting an external volume class also deletes its access policy, which removes every `allowed_atespace` grant. A class recreated under the same name starts with no grants: grant each atespace again with `kubectl ate update access-policy -c <class> --add-member atespace:<atespace>` before templates that use the class can create actors or provision new volumes.
+
 Example `volume-class.yaml`:
 
 ```yaml

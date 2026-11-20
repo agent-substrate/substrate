@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
@@ -45,6 +46,35 @@ func templateHasExternalVolumes(template *ateapi.ActorTemplate) bool {
 		}
 	}
 	return false
+}
+
+// checkExternalVolumeClassAccess checks that atespace may reference every
+// ExternalVolumeClass that template uses. A nil checker skips the check.
+func checkExternalVolumeClassAccess(ctx context.Context, checker SubjectChecker, atespace string, template *ateapi.ActorTemplate) error {
+	_, err := checkVolumeClassAccess(ctx, checker, atespace, template, nil)
+	return err
+}
+
+// checkVolumeClassAccess checks that atespace may reference the
+// ExternalVolumeClass of each template volume that include accepts, or of
+// every volume when include is nil. Each class is checked once. On failure it
+// returns the class that failed with the checker's error.
+func checkVolumeClassAccess(ctx context.Context, checker SubjectChecker, atespace string, template *ateapi.ActorTemplate, include func(*ateapi.Volume) bool) (string, error) {
+	if checker == nil {
+		return "", nil
+	}
+	checked := make(map[string]bool)
+	for _, vol := range template.GetVolumes() {
+		name := vol.GetExternal().GetTemplate().GetExternalVolumeClass().GetName()
+		if name == "" || checked[name] || (include != nil && !include(vol)) {
+			continue
+		}
+		checked[name] = true
+		if err := checker.CheckSubject(ctx, authz.AtespaceObject(atespace), authz.RelationCanReference, authz.ExternalVolumeClassObject(name)); err != nil {
+			return name, err
+		}
+	}
+	return "", nil
 }
 
 // externalVolumeClassGetter reads an ExternalVolumeClass by name. ServiceImpl

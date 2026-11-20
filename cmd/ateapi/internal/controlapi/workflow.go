@@ -114,6 +114,9 @@ type ActorWorkflow struct {
 	pluginRegistry          VolumePluginRegistry
 	objectStorePlugin       objectstore.ControlProviderClient
 	clusterSnapshotLocation string
+	// subjectChecker rechecks ExternalVolumeClass references before first
+	// provisioning; nil skips the check.
+	subjectChecker SubjectChecker
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.

@@ -119,6 +119,11 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 			}
 			return nil, resources.ToAPIError(errs)
 		}
+		// The template's atespace was checked when the template was created.
+		// The actor's atespace can differ, so check it too.
+		if err := checkExternalVolumeClassAccess(ctx, s.subjectChecker, atespace, template); err != nil {
+			return nil, err
+		}
 		if initVols, err = initialExternalVolumes(ctx, s, template); err != nil {
 			return nil, err
 		}
@@ -347,6 +352,9 @@ func (s *ServiceImpl) validatedActorMutation(ctx context.Context, mutate func(*a
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
+				return err
+			}
+			if err := checkExternalVolumeClassAccess(ctx, s.subjectChecker, newVal.GetMetadata().GetAtespace(), newTemplate); err != nil {
 				return err
 			}
 			if err := s.validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
