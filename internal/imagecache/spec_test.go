@@ -27,6 +27,7 @@ func TestOverlaySpecRoundTrip(t *testing.T) {
 	bundle := t.TempDir()
 	in := &OverlaySpec{
 		Layers:    []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"},
+		EROFS:     true,
 		ExtraDirs: []string{"/run/ate"},
 	}
 	if err := WriteSpec(bundle, in); err != nil {
@@ -45,6 +46,9 @@ func TestOverlaySpecRoundTrip(t *testing.T) {
 	}
 	if !slices.Equal(out.ExtraDirs, in.ExtraDirs) {
 		t.Errorf("ExtraDirs = %v, want %v", out.ExtraDirs, in.ExtraDirs)
+	}
+	if !out.EROFS {
+		t.Error("EROFS = false, want true")
 	}
 }
 
