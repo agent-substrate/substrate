@@ -651,10 +651,11 @@ func TestUnpackLayer_KeepsFileModes(t *testing.T) {
 	}
 }
 
-// Files and directories keep the mtimes their tar entries record, so Python can
-// trust the .pyc files shipped in an image. A directory keeps its mtime although
-// its children are written after it, read-only directories included, and a link
-// entry never re-stamps its target.
+// Files, directories and symlinks keep the mtimes their tar entries record, so
+// Python can trust the .pyc files shipped in an image and every node unpacks a
+// layer to the same tree. A directory keeps its mtime although its children are
+// written after it, read-only directories included, and a link entry never
+// re-stamps its target, even one outside the layer.
 func TestUnpackLayer_RestoresModTimes(t *testing.T) {
 	var (
 		fileTime  = time.Date(2025, 9, 10, 9, 37, 24, 0, time.UTC)
@@ -663,6 +664,13 @@ func TestUnpackLayer_RestoresModTimes(t *testing.T) {
 		staleTime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 		linkTime  = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	)
+	host := filepath.Join(t.TempDir(), "host")
+	if err := os.WriteFile(host, nil, 0o644); err != nil {
+		t.Fatalf("write host file: %v", err)
+	}
+	if err := os.Chtimes(host, staleTime, staleTime); err != nil {
+		t.Fatalf("chtimes host file: %v", err)
+	}
 	entries := []tarEntry{
 		{name: "app/", typeflag: tar.TypeDir, modTime: staleTime},
 		{name: "app/main.py", typeflag: tar.TypeReg, body: "print()\n", modTime: fileTime},
@@ -671,6 +679,7 @@ func TestUnpackLayer_RestoresModTimes(t *testing.T) {
 		// Chtimes would follow a symlink, and a hardlink shares the target's
 		// inode: either way, the target must keep its own mtime.
 		{name: "app/sym", typeflag: tar.TypeSymlink, linkname: "main.py", modTime: linkTime},
+		{name: "app/abs", typeflag: tar.TypeSymlink, linkname: host, modTime: linkTime},
 		{name: "app/hard", typeflag: tar.TypeLink, linkname: "app/main.py", modTime: linkTime},
 		// A repeated dir entry: the last one's mtime wins, as its mode does.
 		{name: "app/", typeflag: tar.TypeDir, modTime: dirTime},
@@ -695,6 +704,8 @@ func TestUnpackLayer_RestoresModTimes(t *testing.T) {
 		{path: "app/main.py", want: fileTime},
 		{path: "app/sub/mod.py", want: fileTime},
 		{path: "app/hard", want: fileTime},
+		{path: "app/sym", want: linkTime},
+		{path: "app/abs", want: linkTime},
 		{path: "app/sub", want: subTime},
 		{path: "app", want: dirTime},
 		{path: "ro/bin", want: fileTime},
@@ -708,6 +719,11 @@ func TestUnpackLayer_RestoresModTimes(t *testing.T) {
 		if got := fi.ModTime(); !got.Equal(tc.want) {
 			t.Errorf("%s mtime = %v, want %v", tc.path, got.UTC(), tc.want)
 		}
+	}
+	if fi, err := os.Stat(host); err != nil {
+		t.Errorf("stat host file: %v", err)
+	} else if !fi.ModTime().Equal(staleTime) {
+		t.Errorf("host file mtime = %v, want %v untouched by app/abs", fi.ModTime().UTC(), staleTime)
 	}
 	if fi, err := os.Stat(filepath.Join(dir, "ro")); err != nil {
 		t.Errorf("stat ro: %v", err)
