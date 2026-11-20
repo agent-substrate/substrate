@@ -97,6 +97,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
+	if err := e.requireTokenExchangeCA(ctx); err != nil {
+		return err
+	}
 	var microvmPrep *microVMPrepared
 	if microvm {
 		microvmPrep, err = e.prepareMicroVMDeps(ctx)
@@ -554,6 +557,9 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 
 	providers, err := e.Cfg.CredentialProviders()
 	if err != nil {
+		return err
+	}
+	if err := e.requireTokenExchangeCA(ctx); err != nil {
 		return err
 	}
 	if err := e.EnsureCRDs(ctx); err != nil {
