@@ -313,20 +313,46 @@ func normalize(obj *unstructured.Unstructured) map[string]any {
 			panic(err)
 		}
 	}
+	if obj.GetKind() == "ConfigMap" {
+		parseYAMLData(obj.Object)
+	}
 	sortFlags(obj.Object)
 	obj.SetLabels(withoutHelmKeys(obj.GetLabels()))
 	obj.SetAnnotations(withoutHelmKeys(obj.GetAnnotations()))
 	return withoutDigests(obj.Object).(map[string]any)
 }
 
-// sortFlags sorts each args list whose items are all flags, and each list
-// whose items all have a name.
+// parseYAMLData replaces each ConfigMap value under a .yaml or .yml key with
+// the data it holds, so that comments, anchors and layout do not count as
+// differences.
+func parseYAMLData(obj map[string]any) {
+	data, _ := obj["data"].(map[string]any)
+	for k, v := range data {
+		s, ok := v.(string)
+		if !ok || !(strings.HasSuffix(k, ".yaml") || strings.HasSuffix(k, ".yml")) {
+			continue
+		}
+		var parsed any
+		if err := yaml.Unmarshal([]byte(s), &parsed); err == nil {
+			data[k] = parsed
+		}
+	}
+}
+
+// sortFlags sorts the flags in each args list, after any leading subcommand,
+// and each list whose items all have a name. It drops --preview=, because an
+// empty value is the default.
 func sortFlags(v any) {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, item := range v {
-			if args, ok := item.([]any); ok && k == "args" && allFlags(args) {
-				slices.SortFunc(args, func(a, b any) int { return strings.Compare(a.(string), b.(string)) })
+			if args, ok := item.([]any); ok && k == "args" {
+				if head, flags, ok := splitFlags(args); ok {
+					flags = slices.DeleteFunc(flags, func(a any) bool { return a == "--preview=" })
+					slices.SortFunc(flags, func(a, b any) int { return strings.Compare(a.(string), b.(string)) })
+					item = append(head, flags...)
+					v[k] = item
+				}
 			}
 			sortFlags(item)
 		}
@@ -355,13 +381,29 @@ func allNamed(items []any) bool {
 	return len(items) > 0
 }
 
-func allFlags(args []any) bool {
-	for _, arg := range args {
-		if s, ok := arg.(string); !ok || !strings.HasPrefix(s, "--") {
-			return false
+// splitFlags splits args into the arguments before the first flag, such as a
+// subcommand, and the flags. It fails when an argument after the first flag is
+// not a flag.
+func splitFlags(args []any) (head, flags []any, ok bool) {
+	for i, arg := range args {
+		s, isString := arg.(string)
+		if !isString {
+			return nil, nil, false
+		}
+		if strings.HasPrefix(s, "--") {
+			head, flags = args[:i:i], args[i:]
+			break
 		}
 	}
-	return true
+	if flags == nil {
+		return nil, nil, false
+	}
+	for _, arg := range flags {
+		if !strings.HasPrefix(arg.(string), "--") {
+			return nil, nil, false
+		}
+	}
+	return head, flags, true
 }
 
 func withoutDigests(v any) any {
@@ -398,6 +440,8 @@ func withoutHelmKeys(m map[string]string) map[string]string {
 // charts". The result is in the form that readDifferences returns.
 func differences(t *testing.T, setup, charts map[string]map[string]any) map[string]any {
 	t.Helper()
+	resolvePortNames(setup)
+	resolvePortNames(charts)
 	found := map[string]any{}
 	for k, a := range setup {
 		b, ok := charts[k]
@@ -430,9 +474,32 @@ func differences(t *testing.T, setup, charts map[string]map[string]any) map[stri
 }
 
 // diffPaths adds each path at which a and b differ, with both values. It goes
-// into maps, and into lists of the same length. A list that changes length
-// differs as a whole.
+// into maps, into lists of named items by name, as in env[POD_NAME], and into
+// other lists of the same length. Any other list that changes length differs
+// as a whole.
 func diffPaths(path string, a, b any, fields map[string]any) {
+	if headA, fa, ok := argList(a); ok {
+		if headB, fb, ok := argList(b); ok && cmp.Equal(headA, headB) {
+			onlyA, onlyB := without(fa, fb), without(fb, fa)
+			if len(onlyA) > 0 || len(onlyB) > 0 {
+				fields[path] = map[string]any{"ate-setup": onlyA, "charts": onlyB}
+			}
+			return
+		}
+	}
+	if as, bs, ok := namedItems(a, b); ok {
+		names := map[string]bool{}
+		for n := range as {
+			names[n] = true
+		}
+		for n := range bs {
+			names[n] = true
+		}
+		for n := range names {
+			diffPaths(fmt.Sprintf("%s[%s]", path, n), as[n], bs[n], fields)
+		}
+		return
+	}
 	switch a := a.(type) {
 	case map[string]any:
 		if b, ok := b.(map[string]any); ok {
@@ -459,6 +526,122 @@ func diffPaths(path string, a, b any, fields map[string]any) {
 	if !cmp.Equal(a, b) {
 		fields[path] = map[string]any{"ate-setup": a, "charts": b}
 	}
+}
+
+func argList(v any) (head, flags []any, ok bool) {
+	args, isList := v.([]any)
+	if !isList {
+		return nil, nil, false
+	}
+	return splitFlags(args)
+}
+
+// without returns the items of a that are not in b.
+func without(a, b []any) []any {
+	out := []any{}
+	for _, item := range a {
+		if !slices.Contains(b, item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// resolvePortNames replaces a named port in Service targetPorts and
+// NetworkPolicy ports with its number, when every container port with that
+// name in the install has the same number. It then turns each list of
+// NetworkPolicy ports, whose order does not matter, into a map keyed by
+// protocol and port.
+func resolvePortNames(objs map[string]map[string]any) {
+	numbers := map[string]map[any]bool{}
+	for _, o := range objs {
+		podSpec := nested(o, "spec", "template", "spec")
+		for _, list := range []string{"containers", "initContainers"} {
+			for _, c := range items(podSpec[list]) {
+				for _, p := range items(c["ports"]) {
+					if name, ok := p["name"].(string); ok {
+						if numbers[name] == nil {
+							numbers[name] = map[any]bool{}
+						}
+						numbers[name][p["containerPort"]] = true
+					}
+				}
+			}
+		}
+	}
+	resolve := func(port map[string]any, field string) {
+		if name, ok := port[field].(string); ok && len(numbers[name]) == 1 {
+			for n := range numbers[name] {
+				port[field] = n
+			}
+		}
+	}
+	for _, o := range objs {
+		switch o["kind"] {
+		case "Service":
+			for _, p := range items(nested(o, "spec")["ports"]) {
+				resolve(p, "targetPort")
+			}
+		case "NetworkPolicy":
+			for _, dir := range []string{"ingress", "egress"} {
+				for _, rule := range items(nested(o, "spec")[dir]) {
+					if _, ok := rule["ports"]; !ok {
+						continue
+					}
+					byPort := map[string]any{}
+					for _, p := range items(rule["ports"]) {
+						resolve(p, "port")
+						byPort[fmt.Sprintf("%v/%v", p["protocol"], p["port"])] = p
+					}
+					rule["ports"] = byPort
+				}
+			}
+		}
+	}
+}
+
+// nested returns the map at the path in m, or nil.
+func nested(m map[string]any, path ...string) map[string]any {
+	for _, k := range path {
+		m, _ = m[k].(map[string]any)
+	}
+	return m
+}
+
+// items returns the maps in a list, skipping anything else.
+func items(v any) []map[string]any {
+	list, _ := v.([]any)
+	var out []map[string]any
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// namedItems returns a and b as maps from item name to item, when each is a
+// list of items with unique names, or missing while the other is such a list.
+func namedItems(a, b any) (map[string]any, map[string]any, bool) {
+	as, aok := byName(a)
+	bs, bok := byName(b)
+	return as, bs, (aok || a == nil) && (bok || b == nil) && (aok || bok)
+}
+
+func byName(v any) (map[string]any, bool) {
+	items, ok := v.([]any)
+	if !ok || !allNamed(items) {
+		return nil, false
+	}
+	m := map[string]any{}
+	for _, item := range items {
+		name := item.(map[string]any)["name"].(string)
+		if _, dup := m[name]; dup {
+			return nil, false
+		}
+		m[name] = item
+	}
+	return m, true
 }
 
 func readDifferences(t *testing.T, path string) map[string]any {
