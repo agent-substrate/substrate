@@ -58,7 +58,7 @@ metadata:
   name: {{ include "substrate.fullname" (list "atenet-router-envoy-config" .) }}
   namespace: {{ .Release.Namespace }}
 # files/atenet-router-envoy-config.yaml is generated from
-# manifests/ate-install/atenet-router.yaml by hack/update/chart-envoy-config.sh.
+# manifests/ate-install/atenet-router.yaml by hack/update/chart-files.sh.
 data:
 {{ .Files.Get "files/atenet-router-envoy-config.yaml" | indent 2 }}
 ---

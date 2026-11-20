@@ -45,6 +45,19 @@ postgres:
   ownerRole: substrate_owner
   schema: substrate
 
+# The class-default SandboxConfigs, which WorkerPools of each sandbox class
+# use unless they name another SandboxConfig.
+sandboxConfigs:
+  gvisor:
+    enabled: true
+  # atelet fetches the microVM assets from assetBucket, as s3://<bucket> or
+  # gs://<bucket>, under microvm-assets/. Use the scheme of the object store
+  # that the atelet object-store plugin serves. The chart does not upload the
+  # assets: see "microVM sandboxes" in the README.
+  microvm:
+    enabled: false
+    assetBucket: ""
+
 rustfs:
   enabled: true
   storageSize: 1Gi

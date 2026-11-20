@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
+{{- if .Values.sandboxConfigs.gvisor.enabled }}
 # Cluster-wide SandboxConfig for the gVisor (runsc) sandbox class, shipped with
 # the platform as the class default so gVisor WorkerPools resolve it unless
 # they pin a specific configRef. atelet fetches the gVisor release tarball
@@ -64,3 +65,4 @@ spec:
         gvisor:
           url: "gs://gvisor/releases/release/20261102.0/aarch64/gvisor.tar.zstd"
           sha256: "f702ae92ad7a0c4134be34ca23f52966dbb696db0c0f5b8ec439210ab2cd7c6a"
+{{- end }}

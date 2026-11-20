@@ -27,7 +27,7 @@ metadata:
   name: {{ include "substrate.fullname" (list "atenet-egress" .) }}
   namespace: {{ .Release.Namespace }}
 # files/atenet-egress-envoy-config.yaml is generated from
-# manifests/ate-install/atenet-egress.yaml by hack/update/chart-envoy-config.sh.
+# manifests/ate-install/atenet-egress.yaml by hack/update/chart-files.sh.
 data:
 {{ .Files.Get "files/atenet-egress-envoy-config.yaml" | indent 2 }}
 ---

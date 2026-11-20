@@ -78,6 +78,32 @@ Some values apply to only one data plane:
   `atenetEgress.extProc` and `atenetEgress.sdsmint`, which set the resources of
   those containers.
 
+## microVM sandboxes
+
+The chart installs the class-default SandboxConfigs: `gvisor-default` unless
+`sandboxConfigs.gvisor.enabled` is false, and `microvm` when
+`sandboxConfigs.microvm.enabled` is true. Nodes for microVM workers need
+`/dev/kvm`.
+
+atelet fetches the microVM assets (cloud-hypervisor, virtiofsd, the guest
+kernel and the guest image) from `sandboxConfigs.microvm.assetBucket`, under
+`microvm-assets/<arch>/<sha256>`. The chart does not upload them. After the
+install, run:
+
+```bash
+go run ./cmd/ate-setup deploy sandboxconfig --sandbox-classes=microvm
+```
+
+It assembles and verifies the assets, uploads them, and applies the same
+`microvm` SandboxConfig. On kind it uploads to the bundled RustFS bucket, so set
+`assetBucket: s3://ate-snapshots`. Elsewhere it uploads to
+`<bucket>-assets` in GCS, where `<bucket>` is its `--storage-bucket-name`, so set
+`assetBucket: gs://<bucket>-assets`.
+
+A `microvm` SandboxConfig that `ate-setup` applied before the chart managed it
+is not part of the release, and the install refuses to replace it. Let Helm
+adopt it with `helm upgrade --take-ownership`, which needs Helm 3.17 or later.
+
 The API server and the egress gateway do not start until the objects from
 `ate-setup create` exist. The chart reads them by their fixed names:
 `actor-id-ca-pool`, `actor-id-ca-certs`, `actor-id-jwt-pool`,
@@ -126,6 +152,9 @@ See `values.yaml` for the full set; the important keys:
 | `atenetRouter.requestTimeout` | `60s` | agentgateway only. Timeout for each Substrate ingress API call, including actor resolution |
 | `atenetEgress.extraCredentialProviders` | `[]` | Credential providers you deploy, added after the bundled `k8s.io` provider, each `{name, address, cacheTtl}`. `name` is the host of the `ate-secret://` URIs it serves; `address` is the `host:port` the egress gateway dials over mTLS. Its serving certificate must chain to the servicedns CA. Optional `cacheTtl`, for agentgateway only, sets how long the gateway reuses a fetched credential (default `5m`; `0s` disables caching). See [egress credential injection](../../docs/guides/egress-credential-injection.md#the-plugin-api) |
 | `atenetEgress.agentgateway.logLevel` | `info` | agentgateway only. Egress proxy `RUST_LOG` filter, e.g. `debug` or `info,agentgateway=debug` when troubleshooting |
+| `sandboxConfigs.gvisor.enabled` | `true` | Install the class-default gVisor SandboxConfig, `gvisor-default` |
+| `sandboxConfigs.microvm.enabled` | `false` | Install the class-default microVM SandboxConfig, `microvm`. See "microVM sandboxes" |
+| `sandboxConfigs.microvm.assetBucket` | `""` | Bucket that holds the microVM assets, as `s3://<bucket>` or `gs://<bucket>`. Required with microVM |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `ateApi.snapshotLocation` | `""` | Cluster-wide snapshot URI; defaults to `gs://<rustfs.bucket>/` with bundled RustFS |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true`. Set `objectStore.backend` in the substrate-atelet release to the same value |

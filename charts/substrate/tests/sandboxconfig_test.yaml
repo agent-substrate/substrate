@@ -1,0 +1,60 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: SandboxConfigs
+templates:
+- sandboxconfig-gvisor.yaml
+- sandboxconfig-microvm.yaml
+tests:
+- it: installs only the gVisor SandboxConfig by default
+  asserts:
+  - hasDocuments:
+      count: 1
+    template: sandboxconfig-gvisor.yaml
+  - hasDocuments:
+      count: 0
+    template: sandboxconfig-microvm.yaml
+- it: leaves out the gVisor SandboxConfig when it is off
+  template: sandboxconfig-gvisor.yaml
+  set:
+    sandboxConfigs.gvisor.enabled: false
+  asserts:
+  - hasDocuments:
+      count: 0
+- it: points the microVM assets at the asset bucket
+  template: sandboxconfig-microvm.yaml
+  set:
+    sandboxConfigs.microvm.enabled: true
+    sandboxConfigs.microvm.assetBucket: gs://example-assets
+  asserts:
+  - equal:
+      path: metadata.name
+      value: microvm
+  - equal:
+      path: spec.sandboxClass
+      value: microvm
+  - matchRegex:
+      path: spec.versions[0].assets.amd64.cloud-hypervisor.url
+      pattern: ^gs://example-assets/microvm-assets/amd64/[0-9a-f]{64}$
+  - equal:
+      path: metadata.annotations["sandboxconfig.ate.dev/is-class-default"]
+      value: "true"
+- it: requires the asset bucket for microVM
+  template: sandboxconfig-microvm.yaml
+  set:
+    sandboxConfigs.microvm.enabled: true
+    sandboxConfigs.microvm.assetBucket: example-assets
+  asserts:
+  - failedTemplate:
+      errorMessage: sandboxConfigs.microvm.assetBucket must be s3://<bucket> or gs://<bucket> when sandboxConfigs.microvm.enabled
