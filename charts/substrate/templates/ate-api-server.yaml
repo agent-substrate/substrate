@@ -20,7 +20,7 @@ limitations under the License.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "substrate.fullname" (list "ate-api-server-role" .) }}
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
 rules:
 - apiGroups: [""]
   resources: ["pods"]
@@ -49,14 +49,14 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "substrate.fullname" (list "ate-api-server-binding" .) }}
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
 subjects:
 - kind: ServiceAccount
   name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
   namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "substrate.fullname" (list "ate-api-server-role" .) }}
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: apps/v1
@@ -154,7 +154,6 @@ spec:
         - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
         - --snapshot-location=@env
-        - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
         - {{ printf "--authz-bootstrap-owners=%s" (join "," (.Values.ateApi.authorization.bootstrapOwners | default (list (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "substrate.fullname" (list "ate-client" .)))))) | quote }}
@@ -181,20 +180,7 @@ spec:
 {{ toYaml . | indent 8 }}
 {{- end }}
         env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: POD_UID
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.uid
-        - name: OTEL_RESOURCE_ATTRIBUTES
-          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+        {{- include "substrate.otel.resourceEnv" . | nindent 8 }}
         - name: ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING
           valueFrom:
             secretKeyRef:
@@ -224,6 +210,10 @@ spec:
 {{- end }}
         - { name: api-config, mountPath: /run/apiconfig.ate.dev, readOnly: true }
         - { name: authentication-config, mountPath: /etc/ateapi/authentication, readOnly: true }
+        # Server CA of an external PostgreSQL, for connection strings with
+        # sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem.
+        # Empty unless the postgres-server-ca Secret exists.
+        - { name: postgres-server-ca, mountPath: /run/postgres-server-ca, readOnly: true }
         ports:
         - containerPort: 443
         - name: prometheus
@@ -315,6 +305,10 @@ spec:
               userAnnotations:
                 postgres.podcert.ate.dev/username: substrate_readwrite_user
 {{- end }}
+      - name: postgres-server-ca
+        secret:
+          secretName: postgres-server-ca
+          optional: true
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -334,6 +328,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   clusterIP: None
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: ate-api-server
   ports:

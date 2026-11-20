@@ -95,22 +95,16 @@ spec:
 {{ toYaml .Values.ateController.resources | indent 10 }}
         args:
         - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
-        # The atecontroller binary defaults --ateapi-conn-spec to
-        # dns:///api.ate-system.svc:443, which is correct only for the
-        # canonical render (release name "substrate" in namespace
-        # "ate-system"). Pass the chart-resolved Service so the controller
-        # dials the right backend when substrate is installed as a subchart.
-        - "--ateapi-conn-spec=dns:///{{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443"
+        # The binary default names the api Service for release "substrate" in
+        # namespace "ate-system". k8s:/// watches the Service's EndpointSlices.
+        - "--ateapi-conn-spec=k8s:///{{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443"
         - '--atelet-service-account={{ include "substrate.fullname" (list "atelet" .) }}'
         - '--router-service-account={{ include "substrate.fullname" (list "atenet-router" .) }}'
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         - "--dns-egress-policy=enforce-in-atunnel"
         env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
+        {{- include "substrate.otel.resourceEnv" . | nindent 8 }}
 {{- range $signal := list "logs" "traces" "metrics" }}
         - name: ATE_WORKER_OTEL_{{ upper $signal }}_EXPORTER
           value: {{ ternary "otlp" "none" (not (empty (include "substrate.otel.signalEndpoint" (list $signal $)))) | quote }}

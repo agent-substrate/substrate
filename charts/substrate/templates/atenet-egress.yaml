@@ -23,7 +23,7 @@ metadata:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-config" .) }}
+  name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-substrate-config" .) }}
   namespace: {{ .Release.Namespace }}
 data:
   config.yaml: |
@@ -67,6 +67,19 @@ data:
           cert: /run/egress-mitm/tls.crt
           key: /run/egress-mitm/tls.key
         routes:
+        - name: reject-websocket-upgrade
+          matches:
+          - headers:
+            - name: Connection
+              value:
+                regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
+            - name: Upgrade
+              value:
+                regex: '(?i)(^|,)\s*websocket\s*(,|$)'
+          policies:
+            directResponse:
+              status: 403
+              body: WebSocket egress is not supported
         - backends:
           - dynamic: {}
             policies:
@@ -83,6 +96,19 @@ data:
 {{- include "substrate.credentialProviders" . | nindent 14 }}
       - protocol: HTTP
         routes:
+        - name: reject-websocket-upgrade
+          matches:
+          - headers:
+            - name: Connection
+              value:
+                regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
+            - name: Upgrade
+              value:
+                regex: '(?i)(^|,)\s*websocket\s*(,|$)'
+          policies:
+            directResponse:
+              status: 403
+              body: WebSocket egress is not supported
         - backends:
           - dynamic:
               target: 'destination.address + ":" + string(destination.port)'
@@ -184,7 +210,7 @@ spec:
             path: tls.key
       - name: config
         configMap:
-          name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-config" .) }}
+          name: {{ include "substrate.fullname" (list "atenet-egress-agentgateway-substrate-config" .) }}
       - name: servicedns
         projected:
           sources:

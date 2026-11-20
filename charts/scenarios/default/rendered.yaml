@@ -262,15 +262,29 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: atelet-role
+  name: atelet
 rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
   resources: ["csidriverconfigs"]
-  verbs: ["get", "watch", "list"]
-# Sync failures are reported as Warning Events on the worker pod.
+  verbs: ["get", "list", "watch"]
+# SandboxConfigs are watched to pre-download sandbox assets into the node's
+# cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go),
+# and to write the runtimes of the configs local workers use to each worker's
+# sandbox runtimes file (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["ate.dev"]
+  resources: ["sandboxconfigs"]
+  verbs: ["get", "list", "watch"]
+# WorkerPools are watched to find the SandboxConfig each local worker's pool
+# uses, whose versions atelet writes to the worker's sandbox runtimes file
+# (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch"]
+# Sync failures are reported as Warning Events on the worker pod
+# (see cmd/atelet/worker_sandbox_syncer.go).
 - apiGroups: ["events.k8s.io"]
   resources: ["events"]
   verbs: ["create", "patch"]
@@ -280,24 +294,20 @@ rules:
 - apiGroups: ["certificates.k8s.io"]
   resources: ["clustertrustbundles"]
   verbs: ["get", "watch", "list"]
-# WorkerPools and SandboxConfigs resolve and prewarm each local worker's runtimes.
-- apiGroups: ["ate.dev"]
-  resources: ["sandboxconfigs", "workerpools"]
-  verbs: ["get", "list", "watch"]
 
 ---
 # Source: substrate-atelet/templates/atelet.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: atelet-binding
+  name: atelet
 subjects:
 - kind: ServiceAccount
   name: atelet
   namespace: ate-system
 roleRef:
   kind: ClusterRole
-  name: atelet-role
+  name: atelet
   apiGroup: rbac.authorization.k8s.io
 
 ---
@@ -351,6 +361,10 @@ spec:
     spec:
       serviceAccountName: atelet
       priorityClassName: system-cluster-critical
+      # Covers atelet's default --drain-timeout (5m), plus slack for the forced
+      # stop and the telemetry flush. Checkpoint and Restore stream multi-GiB
+      # snapshots, and a kill mid-upload crashes the actor.
+      terminationGracePeriodSeconds: 330
       # Run on nodes reserved for any WorkerPool sandbox class.
       tolerations:
       - key: ate.dev/sandboxClass
@@ -1018,7 +1032,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: atenet-egress-agentgateway-config
+  name: atenet-egress-agentgateway-substrate-config
   namespace: ate-system
 data:
   config.yaml: |
@@ -1062,6 +1076,19 @@ data:
           cert: /run/egress-mitm/tls.crt
           key: /run/egress-mitm/tls.key
         routes:
+        - name: reject-websocket-upgrade
+          matches:
+          - headers:
+            - name: Connection
+              value:
+                regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
+            - name: Upgrade
+              value:
+                regex: '(?i)(^|,)\s*websocket\s*(,|$)'
+          policies:
+            directResponse:
+              status: 403
+              body: WebSocket egress is not supported
         - backends:
           - dynamic: {}
             policies:
@@ -1086,6 +1113,19 @@ data:
                       root: /run/servicedns.podcert.ate.dev/trust-bundle.pem
       - protocol: HTTP
         routes:
+        - name: reject-websocket-upgrade
+          matches:
+          - headers:
+            - name: Connection
+              value:
+                regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
+            - name: Upgrade
+              value:
+                regex: '(?i)(^|,)\s*websocket\s*(,|$)'
+          policies:
+            directResponse:
+              status: 403
+              body: WebSocket egress is not supported
         - backends:
           - dynamic:
               target: 'destination.address + ":" + string(destination.port)'
@@ -1271,7 +1311,7 @@ spec:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ate-api-server-role
+  name: ate-api-server
 rules:
 - apiGroups: [""]
   resources: ["pods"]
@@ -1424,14 +1464,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ate-api-server-binding
+  name: ate-api-server
 subjects:
 - kind: ServiceAccount
   name: ate-api-server
   namespace: ate-system
 roleRef:
   kind: ClusterRole
-  name: ate-api-server-role
+  name: ate-api-server
   apiGroup: rbac.authorization.k8s.io
 
 ---
@@ -1516,6 +1556,8 @@ metadata:
   namespace: ate-system
 spec:
   clusterIP: None
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: ate-api-server
   ports:
@@ -1765,7 +1807,6 @@ spec:
         - "--preview="
         - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
         - --snapshot-location=@env
-        - "--grpc-listen-addr=0.0.0.0:443"
         - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
         - "--authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client"
@@ -1832,6 +1873,10 @@ spec:
         - { name: podidentity,         mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
         - { name: api-config, mountPath: /run/apiconfig.ate.dev, readOnly: true }
         - { name: authentication-config, mountPath: /etc/ateapi/authentication, readOnly: true }
+        # Server CA of an external PostgreSQL, for connection strings with
+        # sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem.
+        # Empty unless the postgres-server-ca Secret exists.
+        - { name: postgres-server-ca, mountPath: /run/postgres-server-ca, readOnly: true }
         ports:
         - containerPort: 443
         - name: prometheus
@@ -1906,6 +1951,10 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
+      - name: postgres-server-ca
+        secret:
+          secretName: postgres-server-ca
+          optional: true
 
 ---
 # Source: substrate/templates/ate-controller.yaml
@@ -1943,22 +1992,29 @@ spec:
             memory: 128Mi
         args:
         - "--preview="
-        # The atecontroller binary defaults --ateapi-conn-spec to
-        # dns:///api.ate-system.svc:443, which is correct only for the
-        # canonical render (release name "substrate" in namespace
-        # "ate-system"). Pass the chart-resolved Service so the controller
-        # dials the right backend when substrate is installed as a subchart.
-        - "--ateapi-conn-spec=dns:///api.ate-system.svc:443"
+        # The binary default names the api Service for release "substrate" in
+        # namespace "ate-system". k8s:/// watches the Service's EndpointSlices.
+        - "--ateapi-conn-spec=k8s:///api.ate-system.svc:443"
         - '--atelet-service-account=atelet'
         - '--router-service-account=atenet-router'
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         - "--dns-egress-policy=enforce-in-atunnel"
         env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
         - name: ATE_WORKER_OTEL_LOGS_EXPORTER
           value: "none"
         - name: ATE_WORKER_OTEL_TRACES_EXPORTER
@@ -2166,7 +2222,7 @@ spec:
             path: tls.key
       - name: config
         configMap:
-          name: atenet-egress-agentgateway-config
+          name: atenet-egress-agentgateway-substrate-config
       - name: servicedns
         projected:
           sources:
@@ -2349,6 +2405,20 @@ spec:
         - "--injector-identity=spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
         - "--log-level=info"
         env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
         - name: OTEL_TRACES_EXPORTER
           value: none
         - name: OTEL_METRICS_EXPORTER

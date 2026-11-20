@@ -32,6 +32,14 @@ helm upgrade --install substrate-atelet ./charts/substrate-atelet \
   --set objectStore.pathStyle=true \
   --set objectStore.credentialsSecret=rustfs-credentials
 
+# Create the key pools and the API server authentication config.
+# Pass --namespace when the release namespace is not ate-system.
+go run ./cmd/ate-setup create actor-id-ca-pool
+go run ./cmd/ate-setup create actor-id-ca-certs
+go run ./cmd/ate-setup create jwt-authority-pool
+go run ./cmd/ate-setup create egress-mitm-ca-pool
+go run ./cmd/ate-setup create api-authentication-config
+
 # Install Substrate after creating the database identities and Secrets
 helm upgrade --install substrate ./charts/substrate \
   --namespace ate-system \
@@ -52,10 +60,14 @@ By default, component images are pulled from `ghcr.io/agent-substrate/substrate`
 using the chart `appVersion` as the tag. Override `image.registry` and
 `image.tag` to install from a different image repository or tag.
 
+The API server and the egress gateway do not start until the objects from
+`ate-setup create` exist. The chart reads them by their fixed names:
+`actor-id-ca-pool`, `actor-id-ca-certs`, `actor-id-jwt-pool`,
+`egress-mitm-ca-pool` and `ate-api-authentication`.
+
 The chart installs the Kubernetes credential provider and enables HTTPS egress
-interception. Create the `egress-mitm-ca-pool` Secret with
-`go run ./cmd/ate-setup create egress-mitm-ca-pool`, and configure actor trust
-as described in [egress credential injection](../../docs/guides/egress-credential-injection.md).
+interception with the `egress-mitm-ca-pool` Secret. Configure actor trust as
+described in [egress credential injection](../../docs/guides/egress-credential-injection.md).
 Namespace grants default to an empty list, denying credential access.
 
 ## Render manifests without applying
@@ -160,6 +172,13 @@ certificates for the bundled development database.
 
 For an operator-managed database, the operator must provision the identities,
 schema, and grants, and create both connection Secrets in the release namespace.
+
+To verify the server certificate of an external database, create the
+`postgres-server-ca` Secret in the release namespace with the CA in the
+`server-ca.pem` key. The API server mounts it at `/run/postgres-server-ca`. Add
+`sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem` to both
+connection strings. For Cloud SQL, get the CA with
+`gcloud sql ssl server-ca-certs list --instance=<name> --format="value(cert)"`.
 
 Substrate runs `SET ROLE` for each new connection. It rejects a login without
 the required membership.

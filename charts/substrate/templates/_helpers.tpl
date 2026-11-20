@@ -109,6 +109,32 @@ Usage:
 {{- end -}}
 
 {{/*
+Pod identity env entries and the OTel resource attributes built from them, for
+a Go component's main container. The POD_* names come first, because
+OTEL_RESOURCE_ATTRIBUTES refers to them.
+
+Usage:
+  env:
+  {{- include "substrate.otel.resourceEnv" . | nindent 8 }}
+*/}}
+{{- define "substrate.otel.resourceEnv" -}}
+- name: POD_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+- name: POD_NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: POD_UID
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.uid
+- name: OTEL_RESOURCE_ATTRIBUTES
+  value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+{{- end -}}
+
+{{/*
 OTEL_* env entries for a Go component, as a list of "- name/value" items.
 Empty when nothing under .Values.otel is set, so callers can gate the env
 key on the result.

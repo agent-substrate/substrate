@@ -287,8 +287,10 @@ var digest = regexp.MustCompile(`@sha256:[0-9a-f]{64}`)
 // normalize removes the fields that the API server sets, the labels and
 // annotations that Helm adds, and the image digests that ate-setup adds. It
 // removes the pod template annotations that roll pods when an excluded
-// configuration object changes. It also sorts each list of flags, because
-// their order does not matter.
+// configuration object changes. It also sorts each list of flags and each list
+// of named items, such as volumes and env, because their order does not change
+// what gets installed. The order of env can matter to a $(VAR) reference, which
+// this does not check.
 func normalize(obj *unstructured.Unstructured) map[string]any {
 	obj = obj.DeepCopy()
 	delete(obj.Object, "status")
@@ -317,7 +319,8 @@ func normalize(obj *unstructured.Unstructured) map[string]any {
 	return withoutDigests(obj.Object).(map[string]any)
 }
 
-// sortFlags sorts each args list whose items are all flags.
+// sortFlags sorts each args list whose items are all flags, and each list
+// whose items all have a name.
 func sortFlags(v any) {
 	switch v := v.(type) {
 	case map[string]any:
@@ -328,10 +331,28 @@ func sortFlags(v any) {
 			sortFlags(item)
 		}
 	case []any:
+		if allNamed(v) {
+			slices.SortStableFunc(v, func(a, b any) int {
+				return strings.Compare(a.(map[string]any)["name"].(string), b.(map[string]any)["name"].(string))
+			})
+		}
 		for _, item := range v {
 			sortFlags(item)
 		}
 	}
+}
+
+func allNamed(items []any) bool {
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return false
+		}
+		if _, ok := m["name"].(string); !ok {
+			return false
+		}
+	}
+	return len(items) > 0
 }
 
 func allFlags(args []any) bool {

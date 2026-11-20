@@ -43,15 +43,29 @@ data:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "substrate.fullname" (list "atelet-role" .) }}
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
 rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
   resources: ["csidriverconfigs"]
-  verbs: ["get", "watch", "list"]
-# Sync failures are reported as Warning Events on the worker pod.
+  verbs: ["get", "list", "watch"]
+# SandboxConfigs are watched to pre-download sandbox assets into the node's
+# cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go),
+# and to write the runtimes of the configs local workers use to each worker's
+# sandbox runtimes file (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["ate.dev"]
+  resources: ["sandboxconfigs"]
+  verbs: ["get", "list", "watch"]
+# WorkerPools are watched to find the SandboxConfig each local worker's pool
+# uses, whose versions atelet writes to the worker's sandbox runtimes file
+# (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch"]
+# Sync failures are reported as Warning Events on the worker pod
+# (see cmd/atelet/worker_sandbox_syncer.go).
 - apiGroups: ["events.k8s.io"]
   resources: ["events"]
   verbs: ["create", "patch"]
@@ -61,22 +75,18 @@ rules:
 - apiGroups: ["certificates.k8s.io"]
   resources: ["clustertrustbundles"]
   verbs: ["get", "watch", "list"]
-# WorkerPools and SandboxConfigs resolve and prewarm each local worker's runtimes.
-- apiGroups: ["ate.dev"]
-  resources: ["sandboxconfigs", "workerpools"]
-  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "substrate.fullname" (list "atelet-binding" .) }}
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
 subjects:
 - kind: ServiceAccount
   name: {{ include "substrate.fullname" (list "atelet" .) }}
   namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "substrate.fullname" (list "atelet-role" .) }}
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -139,6 +149,10 @@ spec:
     spec:
       serviceAccountName: {{ include "substrate.fullname" (list "atelet" .) }}
       priorityClassName: system-cluster-critical
+      # Covers atelet's default --drain-timeout (5m), plus slack for the forced
+      # stop and the telemetry flush. Checkpoint and Restore stream multi-GiB
+      # snapshots, and a kill mid-upload crashes the actor.
+      terminationGracePeriodSeconds: 330
       {{- with .Values.atelet.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
