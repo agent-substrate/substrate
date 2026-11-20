@@ -160,7 +160,10 @@ func buildFixtureImage(t *testing.T, repo string) string {
 // external volumes are enabled and the class is registered, and "" if not.
 // External volumes are a preview feature and the CSI driver is optional, so
 // either missing drops the external volume from the template instead of
-// failing every test in the suite.
+// failing every test in the suite. The exception is a missing class with the
+// gate on when e2e.ExternalVolumeClassRequired (CI or
+// REQUIRE_EXTERNAL_VOLUME_CLASS): that fails the test, so the external-volume
+// cases cannot pass by skipping.
 func externalVolumeClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients) string {
 	t.Helper()
 
@@ -172,6 +175,9 @@ func externalVolumeClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.
 		ExternalVolumeClass: &ateapi.ObjectRef{Name: e2e.ExternalVolumeClass},
 	}); err != nil {
 		if status.Code(err) == codes.NotFound {
+			if e2e.ExternalVolumeClassRequired() {
+				t.Fatalf("ExternalVolumeClass %q not found; register it with `ATE_PREVIEW=ExternalVolumes go run ./cmd/ate-setup --kind setup csi nfs` or pass --external-volume-class. This is fatal because CI or REQUIRE_EXTERNAL_VOLUME_CLASS is set", e2e.ExternalVolumeClass)
+			}
 			t.Logf("ExternalVolumeClass %q not found; the external-volume case will be skipped", e2e.ExternalVolumeClass)
 			return ""
 		}

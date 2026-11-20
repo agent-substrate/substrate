@@ -32,6 +32,15 @@ var (
 	ExternalVolumeClass string
 )
 
+// ExternalVolumeClassRequired reports whether a missing --external-volume-class
+// fails the external-volume tests rather than skipping them. CI installs the
+// NFS CSI driver and registers its class, so a skip there would pass having
+// checked nothing. Set REQUIRE_EXTERNAL_VOLUME_CLASS=true to get the same
+// behavior locally.
+func ExternalVolumeClassRequired() bool {
+	return os.Getenv("CI") == "true" || os.Getenv("REQUIRE_EXTERNAL_VOLUME_CLASS") == "true"
+}
+
 var (
 	suiteCleanupsMu sync.Mutex
 	suiteCleanups   []func()
