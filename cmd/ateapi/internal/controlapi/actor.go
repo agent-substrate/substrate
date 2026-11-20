@@ -150,10 +150,10 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	stored, err := s.store.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("Actor %s already exists", name)
+			return nil, apierror.AlreadyExists("Actor %s already exists", name).WithCause(err)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
+			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace).WithCause(err)
 		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
@@ -171,7 +171,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapi.ObjectRef, template *ateapi.ActorTemplate) (*ateapi.Tag, error) {
 	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.FailedPrecondition("Tag not found")
+		return nil, apierror.FailedPrecondition("Tag not found").WithCause(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
@@ -208,7 +208,7 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapi.GetActorRequest) 
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	actor, err := s.impl.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Actor %s not found", actorRef)
+		return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -302,11 +302,11 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 func actorWriteError(actorRef resources.ActorRef, err error) error {
 	switch {
 	case errors.Is(err, store.ErrVersionConflict), errors.Is(err, store.ErrUIDConflict):
-		return apierror.Aborted("concurrent update conflict, please retry")
+		return apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 	case errors.Is(err, store.ErrNotFound):
-		return apierror.NotFound("actor %s not found", actorRef)
+		return apierror.NotFound("actor %s not found", actorRef).WithCause(err)
 	case errors.Is(err, store.ErrPreconditionRequired):
-		return apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
+		return apierror.InvalidArgument("while updating actor %s: %w", actorRef, err)
 	}
 	return err
 }
@@ -491,10 +491,10 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, err
 	}
@@ -513,10 +513,10 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, err
 	}
@@ -531,7 +531,7 @@ func (s *RPCService) CrashActorReportedByWorker(ctx context.Context, actorRef re
 	actor, err := s.actorWorkflow.CrashActorReportedByWorker(ctx, actorRef, actorUID, workerName, message)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, err
 	}
@@ -549,10 +549,10 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapi.RevertActorReq
 	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, err
 	}
@@ -572,7 +572,7 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtR
 	// running, since we may need to issue JWTs during actor boot / resume.
 	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("actor not found")
+		return nil, apierror.NotFound("actor not found").WithCause(err)
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
