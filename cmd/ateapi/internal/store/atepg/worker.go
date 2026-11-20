@@ -116,9 +116,7 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 		if err != nil {
 			return nil, err
 		}
-		// An update requires both guards. A mark for deletion checks only the
-		// guards the caller set.
-		if err := checkPrecondition(precondition, dbWorker.GetMetadata(), markForDeletion); err != nil {
+		if err := precondition.Check(dbWorker.GetMetadata()); err != nil {
 			return nil, err
 		}
 
@@ -166,7 +164,7 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, preconditio
 		if err != nil {
 			return nil, err
 		}
-		if err := precondition.CheckOptional(deleted.GetMetadata()); err != nil {
+		if err := precondition.Check(deleted.GetMetadata()); err != nil {
 			return nil, err
 		}
 		// Binds and releases lock the Worker row first, so this sees every

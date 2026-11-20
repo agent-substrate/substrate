@@ -2725,6 +2725,79 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
+	t.Run("BindActorToWorker_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 0, 0)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		for _, tt := range []struct {
+			name         string
+			precondition store.Precondition
+		}{
+			{"no precondition", store.Precondition{}},
+			{"guarding on only a uid", store.Precondition{UID: actor.GetMetadata().GetUid()}},
+			{"guarding on only a version", store.Precondition{Version: actor.GetMetadata().GetVersion()}},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.BindActorToWorker(ctx, testWorkerName, assignment, nil, ref, tt.precondition, func(*ateapi.Actor) error {
+					t.Error("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("BindActorToWorker error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the refused binds = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("UpdateActorAndRelease_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 0, 0)
+		bind(t, s, testWorkerName, assignment)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		for _, tt := range []struct {
+			name         string
+			precondition store.Precondition
+		}{
+			{"no precondition", store.Precondition{}},
+			{"guarding on only a uid", store.Precondition{UID: actor.GetMetadata().GetUid()}},
+			{"guarding on only a version", store.Precondition{Version: actor.GetMetadata().GetVersion()}},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateActorAndRelease(ctx, ref, tt.precondition, func(*ateapi.Actor) error {
+					t.Error("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("UpdateActorAndRelease error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); err != nil {
+			t.Errorf("GetWorkerAssignment after the refused releases = %v, want the assignment kept", err)
+		}
+	})
+
 	t.Run("UpdateActorAndRelease_LeavesOtherAssignments", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

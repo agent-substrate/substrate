@@ -113,9 +113,9 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
-	// An update requires both guards. A mark for deletion checks only the
-	// guards the caller set.
-	if err := checkPrecondition(precondition, dbActor.GetMetadata(), markForDeletion); err != nil {
+	// Updates validated both guards on entry. A mark for deletion checks
+	// only the guards the caller set.
+	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbActor.Metadata)
@@ -176,7 +176,7 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	if err := unmarshalStored(protoBytes, deleted); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor to delete: %w", err)
 	}
-	if err := precondition.CheckOptional(deleted.GetMetadata()); err != nil {
+	if err := precondition.Check(deleted.GetMetadata()); err != nil {
 		return nil, err
 	}
 	if deleted.GetStatus().GetWorkerAssignment() != nil {

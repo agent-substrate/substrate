@@ -67,7 +67,7 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	}
 	currentUID := dbPolicy.GetMetadata().GetUid()
 	currentVersion := dbPolicy.GetMetadata().GetVersion()
-	if err := precondition.CheckRequired(dbPolicy.GetMetadata()); err != nil {
+	if err := precondition.Check(dbPolicy.GetMetadata()); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbPolicy.Metadata)

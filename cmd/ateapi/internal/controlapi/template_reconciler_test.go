@@ -108,7 +108,7 @@ func (s *fakeTemplateStore) UpdateActorTemplate(_ context.Context, ref resources
 	if !ok {
 		return nil, store.ErrNotFound
 	}
-	if err := precondition.CheckRequired(tmpl.GetMetadata()); err != nil {
+	if err := precondition.Check(tmpl.GetMetadata()); err != nil {
 		return nil, err
 	}
 	updated := proto.Clone(tmpl).(*ateapi.ActorTemplate)

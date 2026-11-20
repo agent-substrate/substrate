@@ -41,8 +41,7 @@ func TestPreconditionCheck(t *testing.T) {
 	tests := []struct {
 		name         string
 		precondition Precondition
-		wantRequired error
-		wantOptional error
+		wantErr      error
 	}{
 		{
 			name:         "the guarded object is still the stored one",
@@ -51,47 +50,38 @@ func TestPreconditionCheck(t *testing.T) {
 		{
 			name:         "the name now addresses a different incarnation",
 			precondition: Precondition{UID: staleUID, Version: storedVer},
-			wantRequired: ErrUIDConflict,
-			wantOptional: ErrUIDConflict,
+			wantErr:      ErrUIDConflict,
 		},
 		{
 			name:         "the version moved under the caller",
 			precondition: Precondition{UID: storedUID, Version: staleVer},
-			wantRequired: ErrVersionConflict,
-			wantOptional: ErrVersionConflict,
+			wantErr:      ErrVersionConflict,
 		},
 		{
 			// The uid is reported first: a new incarnation makes the version
 			// meaningless, and it is the failure a retry can never resolve.
 			name:         "both stale reports the uid conflict",
 			precondition: Precondition{UID: staleUID, Version: staleVer},
-			wantRequired: ErrUIDConflict,
-			wantOptional: ErrUIDConflict,
+			wantErr:      ErrUIDConflict,
 		},
 		{
-			name:         "no guards",
-			wantRequired: ErrPreconditionRequired,
+			name: "no guards",
 		},
 		{
 			name:         "uid only",
 			precondition: Precondition{UID: storedUID},
-			wantRequired: ErrPreconditionRequired,
 		},
 		{
 			name:         "stale version only",
 			precondition: Precondition{Version: staleVer},
-			wantRequired: ErrPreconditionRequired,
-			wantOptional: ErrVersionConflict,
+			wantErr:      ErrVersionConflict,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.precondition.CheckRequired(storedMetadata); !errors.Is(err, tt.wantRequired) {
-				t.Errorf("CheckRequired(storedMetadata) = %v, want one matching %v", err, tt.wantRequired)
-			}
-			if err := tt.precondition.CheckOptional(storedMetadata); !errors.Is(err, tt.wantOptional) {
-				t.Errorf("CheckOptional(storedMetadata) = %v, want one matching %v", err, tt.wantOptional)
+			if err := tt.precondition.Check(storedMetadata); !errors.Is(err, tt.wantErr) {
+				t.Errorf("Check(storedMetadata) = %v, want one matching %v", err, tt.wantErr)
 			}
 		})
 	}

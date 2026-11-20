@@ -81,7 +81,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	if err != nil {
 		return nil, err
 	}
-	if err := precondition.CheckRequired(dbPolicy.GetMetadata()); err != nil {
+	if err := precondition.Check(dbPolicy.GetMetadata()); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbPolicy.Metadata)
@@ -167,7 +167,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err != nil {
 		return nil, err
 	}
-	if err := precondition.CheckRequired(dbPolicy.GetMetadata()); err != nil {
+	if err := precondition.Check(dbPolicy.GetMetadata()); err != nil {
 		return nil, err
 	}
 	oldMeta := proto.CloneOf(dbPolicy.Metadata)
