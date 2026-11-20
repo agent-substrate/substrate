@@ -45,17 +45,15 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 		return nil, err
 	}
 
-	// From here it is an ordinary suspend. Running the same workflow Control
-	// runs is the point: its preconditions already refuse an Actor that is not
-	// suspendable, and a proposal that races a resume, suspend, or delete loses
-	// to whichever holds the Actor's lease.
+	// Worker proposals always take the actor lease. A proposal that races an
+	// operation holding the lease returns Aborted.
 	//
 	// TODO: the checks above run outside the Actor's lease, so there is a small
 	// race with the suspend that follows: within the one round trip it takes
 	// the workflow to acquire the lease, the Actor can be resumed onto another
 	// Worker, or deleted and recreated under the same name, and the workflow
 	// suspends whatever the reference resolves to by then. See #1773.
-	resp, err := s.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: req.GetActor()})
+	actor, err := s.control.SuspendActorRequestedByWorker(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +62,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 		slog.String("actor", actorRef.String()),
 		slog.String("actor_uid", req.GetActorUid()),
 		slog.String("node", caller.NodeName))
-	return &ateapi.RequestActorSuspendResponse{Actor: resp.GetActor()}, nil
+	return &ateapi.RequestActorSuspendResponse{Actor: actor}, nil
 }
 
 // authorizeHostedActor checks that the calling atelet may speak for actorRef:

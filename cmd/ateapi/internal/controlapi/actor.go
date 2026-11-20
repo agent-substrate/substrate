@@ -513,6 +513,21 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 	setSpanActorRefAttributes(ctx, actorRef)
 
 	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
+	actor, err = suspendActorResult(ctx, actorRef, actor, err)
+	if err != nil {
+		return nil, err
+	}
+	return &ateapi.SuspendActorResponse{Actor: actor}, nil
+}
+
+// SuspendActorRequestedByWorker runs a suspend proposal authorized by the caller.
+func (s *RPCService) SuspendActorRequestedByWorker(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
+	setSpanActorRefAttributes(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActorRequestedByWorker(ctx, actorRef)
+	return suspendActorResult(ctx, actorRef, actor, err)
+}
+
+func suspendActorResult(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, err error) (*ateapi.Actor, error) {
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -523,7 +538,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 		return nil, err
 	}
 	setSpanActorAttributes(ctx, actor)
-	return &ateapi.SuspendActorResponse{Actor: actor}, nil
+	return actor, nil
 }
 
 // CrashActorReportedByWorker crashes a RUNNING actor whose sandbox died, on

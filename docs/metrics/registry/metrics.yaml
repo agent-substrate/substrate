@@ -937,16 +937,14 @@ groups:
         requirement_level:
           conditionally_required: >
             The operation is a create, or ateapi loaded the actor. Thus this key
-            is absent when a delete fails or when the load step fails. For a
-            resume and a suspend, the load step also reads the
-            ActorTemplate.
+            is absent when a delete fails or when the load step fails. An
+            already suspended actor supplies its template reference directly.
       - ref: ate.template.name
         requirement_level:
           conditionally_required: >
             The operation is a create, or ateapi loaded the actor. Thus this key
-            is absent when a delete fails or when the load step fails. For a
-            resume and a suspend, the load step also reads the
-            ActorTemplate.
+            is absent when a delete fails or when the load step fails. An
+            already suspended actor supplies its template reference directly.
       - ref: ate.workerpool.namespace
         requirement_level:
           conditionally_required: The operation is not a create or a delete, and the actor has a worker.
