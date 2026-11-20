@@ -130,6 +130,37 @@ func TestApplyPostgresSize10Overrides(t *testing.T) {
 	}
 }
 
+func TestApplyPostgresSize100Overrides(t *testing.T) {
+	cfg := &config.Config{Root: repoRoot(t), ClusterSize: config.ClusterSizeSize100}
+	objs, err := (&Env{Cfg: cfg}).postgresObjects()
+	if err != nil {
+		t.Fatalf("postgresObjects(size100): %v", err)
+	}
+	cm := findObject(objs, "ConfigMap", "postgres-config")
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	for _, want := range []string{
+		"shared_buffers = 35GB",
+		"max_connections = 2000",
+		"max_wal_size = 32GB",
+		"ssl = on",
+	} {
+		if !strings.Contains(data["postgresql.conf"], want) {
+			t.Errorf("size100 postgresql.conf lacks %q:\n%s", want, data["postgresql.conf"])
+		}
+	}
+	ss := findObject(objs, "StatefulSet", "postgres")
+	containers, _, _ := unstructured.NestedSlice(ss.Object, "spec", "template", "spec", "containers")
+	resources, _, _ := unstructured.NestedMap(containers[0].(map[string]any), "resources")
+	requests, _ := resources["requests"].(map[string]any)
+	limits, _ := resources["limits"].(map[string]any)
+	if requests["cpu"] != size10PostgresCPURequest {
+		t.Errorf("requests.cpu = %v, want %s", requests["cpu"], size10PostgresCPURequest)
+	}
+	if requests["memory"] != size10PostgresMemory || limits["memory"] != size10PostgresMemory {
+		t.Errorf("memory request/limit = %v/%v, want %s for both", requests["memory"], limits["memory"], size10PostgresMemory)
+	}
+}
+
 func TestApplyPostgresSize10OverridesRejectsMissingObjects(t *testing.T) {
 	root := repoRoot(t)
 	conf, err := os.ReadFile(filepath.Join(root, "manifests", "ate-install", "postgres-size10", "postgres-config-patch.yaml"))

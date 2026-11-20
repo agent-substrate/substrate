@@ -149,9 +149,19 @@ func TestLoadClusterSize(t *testing.T) {
 			wantSize: ClusterSizeSize10,
 		},
 		{
+			name:     "flag size100",
+			opts:     Options{ClusterSize: ClusterSizeSize100},
+			wantSize: ClusterSizeSize100,
+		},
+		{
 			name:     "environment",
 			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
 			wantSize: ClusterSizeSize10,
+		},
+		{
+			name:     "environment size100",
+			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize100},
+			wantSize: ClusterSizeSize100,
 		},
 		{
 			name:     "flag beats the environment",
@@ -178,13 +188,25 @@ func TestLoadClusterSize(t *testing.T) {
 			if cfg.ClusterSize != tc.wantSize {
 				t.Errorf("ClusterSize = %q, want %q", cfg.ClusterSize, tc.wantSize)
 			}
-			if cfg.Size10() != (tc.wantSize == ClusterSizeSize10) {
-				t.Errorf("Size10() = %v, want %v", cfg.Size10(), tc.wantSize == ClusterSizeSize10)
+			wantSize10 := tc.wantSize == ClusterSizeSize10 || tc.wantSize == ClusterSizeSize100
+			if cfg.Size10() != wantSize10 {
+				t.Errorf("Size10() = %v, want %v", cfg.Size10(), wantSize10)
+			}
+			wantSize100 := tc.wantSize == ClusterSizeSize100
+			if cfg.Size100() != wantSize100 {
+				t.Errorf("Size100() = %v, want %v", cfg.Size100(), wantSize100)
+			}
+			wantPoolConns := ""
+			if wantSize100 {
+				wantPoolConns = "192"
+			}
+			if cfg.PostgresPoolMaxConns != wantPoolConns {
+				t.Errorf("PostgresPoolMaxConns = %q, want %q", cfg.PostgresPoolMaxConns, wantPoolConns)
 			}
 			env := scriptEnvMap(t, cfg)
-			if tc.wantSize == ClusterSizeSize10 {
-				if env["ATE_INSTALL_CLUSTER_SIZE"] != ClusterSizeSize10 {
-					t.Errorf("ScriptEnv()[ATE_INSTALL_CLUSTER_SIZE] = %q, want size10", env["ATE_INSTALL_CLUSTER_SIZE"])
+			if tc.wantSize != ClusterSizeSize0 {
+				if env["ATE_INSTALL_CLUSTER_SIZE"] != tc.wantSize {
+					t.Errorf("ScriptEnv()[ATE_INSTALL_CLUSTER_SIZE] = %q, want %s", env["ATE_INSTALL_CLUSTER_SIZE"], tc.wantSize)
 				}
 			} else if _, ok := env["ATE_INSTALL_CLUSTER_SIZE"]; ok {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CLUSTER_SIZE = %q for the default profile, want it absent", env["ATE_INSTALL_CLUSTER_SIZE"])
@@ -613,6 +635,32 @@ func TestLoadPostgresTuning(t *testing.T) {
 	}
 	if want := "/etc/ssl/server-ca.pem"; cfg.PostgresServerCAFile != want {
 		t.Errorf("PostgresServerCAFile = %q, want %q", cfg.PostgresServerCAFile, want)
+	}
+
+	cfgSize100, err := Load(Options{ClusterSize: ClusterSizeSize100})
+	if err != nil {
+		t.Fatalf("Load(size100) error = %v", err)
+	}
+	if cfgSize100.PostgresPoolMaxConns != "50" {
+		t.Errorf("size100 PostgresPoolMaxConns with explicit env = %q, want 50", cfgSize100.PostgresPoolMaxConns)
+	}
+}
+
+func TestIsTransientGcloudError(t *testing.T) {
+	for _, tc := range []struct {
+		stderr string
+		want   bool
+	}{
+		{"ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=503, message=Service Unavailable", true},
+		{"ERROR: RESOURCE_EXHAUSTED: Quota exceeded for quota metric", true},
+		{"ERROR: Post https://container.googleapis.com/...: net/http: TLS handshake timeout", true},
+		{"ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=404, message=Not found: projects/p/zones/z/clusters/bad.", false},
+		{"ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403, message=Required \"container.clusters.get\" permission(s)", false},
+		{"ERROR: (gcloud.container.clusters.get-credentials) You do not currently have an active account selected.", false},
+	} {
+		if got := isTransientGcloudError(tc.stderr); got != tc.want {
+			t.Errorf("isTransientGcloudError(%q) = %v, want %v", tc.stderr, got, tc.want)
+		}
 	}
 }
 

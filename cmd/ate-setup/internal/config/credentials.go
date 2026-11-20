@@ -15,10 +15,13 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
@@ -42,16 +45,60 @@ func (c *Config) EnsureClusterCredentials(ctx context.Context) error {
 
 	log.Stepf("gcloud container clusters get-credentials %s", c.ClusterName)
 	defer log.Elapsed(time.Now(), "gcloud get-credentials")
-	cmd := exec.CommandContext(ctx, "gcloud", "container", "clusters", "get-credentials",
-		c.ClusterName,
-		"--location", c.ClusterLocation,
-		"--project", c.ProjectID,
-	)
-	cmd.Env = c.ScriptEnv()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("while fetching credentials for cluster %s: %w", c.ClusterName, err)
+	backoffs := []time.Duration{2 * time.Second, 5 * time.Second}
+	var lastErr error
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		var stderr bytes.Buffer
+		cmd := exec.CommandContext(ctx, "gcloud", "container", "clusters", "get-credentials",
+			c.ClusterName,
+			"--location", c.ClusterLocation,
+			"--project", c.ProjectID,
+		)
+		cmd.Env = c.ScriptEnv()
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+		lastErr = cmd.Run()
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < len(backoffs) && isTransientGcloudError(stderr.String()) {
+			log.Warnf("gcloud get-credentials attempt %d/%d failed: %v; retrying in %s", attempt+1, len(backoffs)+1, lastErr, backoffs[attempt])
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoffs[attempt]):
+			}
+			continue
+		}
+		break
 	}
-	return nil
+	return fmt.Errorf("while fetching credentials for cluster %s: %w", c.ClusterName, lastErr)
+}
+
+// isTransientGcloudError reports whether stderr from gcloud get-credentials
+// matches a transient server, rate-limit, or transport failure rather than a
+// configuration or authentication error.
+func isTransientGcloudError(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	for _, token := range []string{
+		"502",
+		"503",
+		"504",
+		"bad gateway",
+		"service unavailable",
+		"gateway timeout",
+		"ratelimitexceeded",
+		"resource_exhausted",
+		"unavailable",
+		"deadline_exceeded",
+		"connection reset",
+		"tls handshake timeout",
+		"i/o timeout",
+		"temporary failure",
+	} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
 }

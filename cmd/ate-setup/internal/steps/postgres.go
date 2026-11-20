@@ -83,7 +83,7 @@ func (e *Env) setupBundledPostgres(ctx context.Context) error {
 }
 
 func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
-	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.rolloutTimeout()); err != nil {
 		return err
 	}
 	return e.setupBundledPostgres(ctx)
@@ -205,6 +205,12 @@ func (e *Env) postgresObjects() ([]*unstructured.Unstructured, error) {
 		}
 		if err := applyPostgresSize10Overrides(objs, conf); err != nil {
 			return nil, err
+		}
+		if e.Cfg.Size100() {
+			log.Step("apply_postgres_size100_overrides")
+			if err := applyPostgresSize100Overrides(objs); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return objs, nil
@@ -335,6 +341,26 @@ func applyPostgresSize10Overrides(objs []*unstructured.Unstructured, confPatch [
 		return fmt.Errorf("while resizing %s: %w", kube.Describe(statefulSet), err)
 	}
 	return nil
+}
+
+// applyPostgresSize100Overrides raises max_connections to 2000 and
+// max_wal_size to 32GB on configmap/postgres-config for the size100
+// multi-replica control-plane profile while keeping shared_buffers = 35GB
+// and all other size10 PostgreSQL settings intact.
+func applyPostgresSize100Overrides(objs []*unstructured.Unstructured) error {
+	for _, obj := range objs {
+		if obj.GetNamespace() != NamespaceAteSystem || obj.GetKind() != "ConfigMap" || obj.GetName() != "postgres-config" {
+			continue
+		}
+		conf, _, err := unstructured.NestedString(obj.Object, "data", "postgresql.conf")
+		if err != nil || conf == "" {
+			return fmt.Errorf("%s carries no postgresql.conf to resize for size100", kube.Describe(obj))
+		}
+		conf = strings.ReplaceAll(conf, "max_connections = 300", "max_connections = 2000")
+		conf = strings.ReplaceAll(conf, "max_wal_size = 16GB", "max_wal_size = 32GB")
+		return unstructured.SetNestedField(obj.Object, conf, "data", "postgresql.conf")
+	}
+	return fmt.Errorf("the postgres manifest has no configmap/postgres-config to resize for size100")
 }
 
 // DeployPostgres deploys the experimental single-replica PostgreSQL
