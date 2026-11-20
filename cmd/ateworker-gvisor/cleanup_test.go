@@ -106,3 +106,28 @@ func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
 	}
 	assertCalls(t, f, want...)
 }
+
+func TestTerminateContainers(t *testing.T) {
+	containers := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
+	tests := []struct {
+		name          string
+		sandboxReaped bool
+		wantStopCalls []string
+	}{
+		{name: "sandbox reaped", sandboxReaped: true},
+		{
+			name:          "sandbox exit unconfirmed",
+			wantStopCalls: []string{"kill app SIGKILL", "wait app", "kill sidecar SIGKILL", "wait sidecar"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRunsc("app", "sidecar", "_sandbox")
+			if err := terminateContainers(context.Background(), f, containers, tc.sandboxReaped); err != nil {
+				t.Fatalf("terminateContainers: %v", err)
+			}
+			want := append(tc.wantStopCalls, "delete app sidecar _sandbox")
+			assertCalls(t, f, want...)
+		})
+	}
+}
