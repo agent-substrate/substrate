@@ -197,11 +197,19 @@ func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 
 func TestUnbookedMemory(t *testing.T) {
 	const limit = 4 << 30
-	s := &AteWorkerService{actors: map[string]*hostedActor{
-		"a": {memoryBytes: 1 << 30},
-		"b": {memoryBytes: 256 << 20},
-	}}
-	if got, want := s.unbookedMemory(limit), int64(limit-memoryReservedBytes-1<<30-256<<20); got != want {
-		t.Errorf("unbookedMemory() = %d, want %d", got, want)
+	const booked = 1<<30 + 256<<20
+	for _, slots := range []int{1, defaultCheckpointWriteSlots, 4} {
+		s := NewService(nil, nil, 10, slots, nil, "boot")
+		s.actors = map[string]*hostedActor{
+			"a": {memoryBytes: 1 << 30},
+			"b": {memoryBytes: 256 << 20},
+		}
+		if got := cap(s.checkpointWrites); got != slots {
+			t.Errorf("slots=%d: cap(checkpointWrites) = %d, want %d", slots, got, slots)
+		}
+		want := int64(limit - (32<<20 + int64(slots)*checkpointWriteHeadroom) - booked)
+		if got := s.unbookedMemory(limit); got != want {
+			t.Errorf("slots=%d: unbookedMemory() = %d, want %d", slots, got, want)
+		}
 	}
 }

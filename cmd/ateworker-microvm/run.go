@@ -146,10 +146,14 @@ const kataAgentPath = "/usr/bin/kata-agent"
 // memfd's xarray.
 var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
 
-// memoryReservedBytes is how much of the worker pod's memory limit we keep from
-// actors: the worker process itself, and the page cache of snapshot writes in
-// flight.
-const memoryReservedBytes = 32<<20 + snapshotWriteSlots*snapshotWriteHeadroom
+const workerProcessMemoryReservedBytes = 32 << 20
+
+// reservedMemoryBytes is how much of the worker pod's memory limit we keep
+// from actors: the worker process itself, and the page cache of snapshot
+// writes in flight.
+func reservedMemoryBytes(slots int) int64 {
+	return workerProcessMemoryReservedBytes + int64(slots)*snapshotWriteHeadroom
+}
 
 // minGuestMemMiB is the floor for guest RAM, and so for an actor's memory limit. A
 // smaller one is rejected at cold boot (see resolveGuestMemMiB), since too little
