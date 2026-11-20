@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -35,8 +36,9 @@ import (
 const sandboxExitTimeout = 10 * time.Second
 
 // sandboxProcess is the runsc sandbox across a checkpoint, which stops it.
-// The sandbox exits shortly after the checkpoint returns, and cleanup must wait
-// for that.
+// Since gvisor/gvisor@f80859d424 (release-20260921.0) runsc treats an exited
+// sandbox as stopped, zombie included, so once it exits cleanup can skip
+// stopping its containers.
 type sandboxProcess struct {
 	pid   int
 	pidfd int
@@ -80,27 +82,19 @@ func (p *sandboxProcess) Close() {
 }
 
 // waitExited blocks until the sandbox has exited.
-func (p *sandboxProcess) waitExited(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		left := time.Until(deadline)
-		if left <= 0 {
-			return fmt.Errorf("sandbox %d still running after %v", p.pid, timeout)
-		}
-		// the pidfd turns readable once the process exits, zombie included
-		fds := []unix.PollFd{{Fd: int32(p.pidfd), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, int(left.Milliseconds())+1)
-		if err == unix.EINTR {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("polling sandbox %d: %w", p.pid, err)
-		}
-		if n > 0 {
-			if fds[0].Revents&unix.POLLNVAL != 0 {
-				return fmt.Errorf("polling sandbox %d: invalid pidfd", p.pid)
-			}
-			return nil
-		}
+func (p *sandboxProcess) waitExited(ctx context.Context, timeout time.Duration) error {
+	exited, err := p.exited()
+	if err != nil {
+		return fmt.Errorf("watching sandbox %d: %w", p.pid, err)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-exited:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("sandbox %d still running after %v", p.pid, timeout)
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for sandbox %d to exit: %w", p.pid, ctx.Err())
 	}
 }

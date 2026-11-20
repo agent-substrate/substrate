@@ -1018,7 +1018,7 @@ func waitSandboxExited(ctx context.Context, sandbox *sandboxProcess) bool {
 	if sandbox == nil {
 		return false
 	}
-	if err := sandbox.waitExited(sandboxExitTimeout); err != nil {
+	if err := sandbox.waitExited(ctx, sandboxExitTimeout); err != nil {
 		slog.WarnContext(ctx, "Sandbox did not exit after checkpoint", slog.Any("err", err))
 		return false
 	}
