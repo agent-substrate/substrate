@@ -540,7 +540,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
 	}
 
-	workerFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(workerFacingTLS)))
+	workerFacingSrv := grpc.NewServer(workerSupportServerOptions(credentials.NewTLS(workerFacingTLS))...)
 
 	ateletpb.RegisterWorkerSupportServer(workerFacingSrv, &workerSupportServer{
 		workers: workerService,
@@ -613,6 +613,15 @@ func ateletServerOptions(creds credentials.TransportCredentials) []grpc.ServerOp
 		grpc.Creds(creds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
+	}
+}
+
+// workerSupportServerOptions are the options of the gRPC server that serves
+// WorkerSupport to ateworker. It rejects fields atelet does not know.
+func workerSupportServerOptions(creds credentials.TransportCredentials) []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.UnaryInterceptor(ateinterceptors.RejectUnknownFieldsStatusUnaryInterceptor),
 	}
 }
 

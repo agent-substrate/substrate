@@ -47,6 +47,23 @@ func (requestLogHerder) Restore(context.Context, *ateletpb.RestoreRequest) (*ate
 	return nil, apierror.Unavailable("asset fetch failed")
 }
 
+// serveBufconn serves srv on an in-memory listener until the test ends, and
+// returns a client connection to it.
+func serveBufconn(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	go srv.Serve(lis)
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
 // TestAteletRequestLogMasksEnvVarValue sends Run and Restore with an
 // environment variable value through a server built with atelet's own options
 // and logger, and checks the request log masks the value while keeping the
@@ -58,19 +75,9 @@ func TestAteletRequestLogMasksEnvVarValue(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(origLogger) })
 	serverboot.InitLoggerWithWriter(&logBuf)
 
-	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(ateletServerOptions(insecure.NewCredentials())...)
 	ateletpb.RegisterAteletServer(srv, requestLogHerder{})
-	go srv.Serve(lis)
-	t.Cleanup(srv.Stop)
-	conn, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	client := ateletpb.NewAteletClient(conn)
+	client := ateletpb.NewAteletClient(serveBufconn(t, srv))
 
 	spec := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{

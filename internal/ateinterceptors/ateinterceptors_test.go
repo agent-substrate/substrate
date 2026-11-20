@@ -153,10 +153,17 @@ func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 	tests := []struct {
 		name       string
+		req        any
 		handlerErr error
 		wantCode   codes.Code
 		wantMsg    string
 	}{
+		{
+			name:     "request with an unknown field is InvalidArgument",
+			req:      withUnknown(&ateletpb.RestoreRequest{}, 9999),
+			wantCode: codes.InvalidArgument,
+			wantMsg:  "request: Invalid value: unknown field with protobuf tag 9999",
+		},
 		{
 			name:       "apierror keeps its code",
 			handlerErr: apierror.FailedPrecondition("snapshot is corrupt"),
@@ -199,10 +206,17 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				if tt.handlerErr == nil {
+					t.Fatal("handler called for a request the interceptor rejects")
+				}
 				return nil, tt.handlerErr
 			}
 
-			_, err := interceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
+			req := tt.req
+			if req == nil {
+				req = "request"
+			}
+			_, err := interceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
