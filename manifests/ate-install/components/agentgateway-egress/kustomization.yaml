@@ -31,6 +31,9 @@ patches:
       metadata:
         name: atenet-egress
         namespace: ate-system
+        # Keeps components/sizing-default from sizing the dropped sdsmint.
+        labels:
+          ate.dev/dataplane: agentgateway
       spec:
         template:
           spec:

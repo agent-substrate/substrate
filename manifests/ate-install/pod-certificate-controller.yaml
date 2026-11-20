@@ -135,7 +135,6 @@ metadata:
   labels:
     app: podcertificate-controller
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: podcertificate-controller

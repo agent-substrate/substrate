@@ -219,9 +219,9 @@ func TestResolveManifestInjectsPreview(t *testing.T) {
 			want: []string{"podcertificate-controller"},
 		},
 		{
-			name: "podcert size10 overlay",
+			name: "podcert file under size10",
 			cfg:  config.Config{ClusterSize: config.ClusterSizeSize10},
-			path: func(e *Env) string { return e.Cfg.Manifest("podcert-size10") },
+			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
 			want: []string{"podcertificate-controller"},
 		},
 		{
