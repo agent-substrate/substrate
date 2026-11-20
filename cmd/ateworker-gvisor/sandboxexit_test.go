@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"os"
 	"os/exec"
@@ -77,16 +78,18 @@ func TestWaitSandboxExitedReturnsFalseWhenExitUnconfirmed(t *testing.T) {
 
 func TestSandboxWaitExited(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		kill    bool
-		reap    bool
-		timeout time.Duration
-		wantErr bool
+		name     string
+		kill     bool
+		reap     bool
+		canceled bool
+		timeout  time.Duration
+		wantErr  string
 	}{
 		{name: "reaped", kill: true, reap: true, timeout: 5 * time.Second},
 		// nothing reaps it until cleanup
 		{name: "zombie", kill: true, timeout: 5 * time.Second},
-		{name: "running", timeout: 10 * time.Millisecond, wantErr: true},
+		{name: "running", timeout: 10 * time.Millisecond, wantErr: "still running"},
+		{name: "canceled", canceled: true, timeout: 5 * time.Second, wantErr: "context canceled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, p := startFakeSandbox(t)
@@ -94,12 +97,17 @@ func TestSandboxWaitExited(t *testing.T) {
 				_ = cmd.Process.Kill()
 			}
 			if tc.reap {
-				go func() { _, _ = cmd.Process.Wait() }()
+				_, _ = cmd.Process.Wait()
 			}
-			err := p.waitExited(tc.timeout)
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "still running") {
-					t.Fatalf("waitExited = %v, want a still running error", err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			err := p.waitExited(ctx, tc.timeout)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("waitExited = %v, want an error containing %q", err, tc.wantErr)
 				}
 			} else if err != nil {
 				t.Fatalf("waitExited = %v, want nil", err)
@@ -126,8 +134,7 @@ func TestSandboxExited(t *testing.T) {
 		t.Fatal("not closed after the sandbox exited")
 	}
 	// the watch uses its own copy, so the sandbox's pidfd still works
-	go func() { _, _ = cmd.Process.Wait() }()
-	if err := p.waitExited(5 * time.Second); err != nil {
+	if err := p.waitExited(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("waitExited after the watch = %v", err)
 	}
 }
