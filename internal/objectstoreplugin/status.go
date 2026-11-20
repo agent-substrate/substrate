@@ -64,6 +64,9 @@ func internalErrorAttrs(err error) []any {
 		if desc.Message != "" {
 			attrs = append(attrs, slog.String("message", desc.Message))
 		}
+		if desc.RequestID != "" {
+			attrs = append(attrs, slog.String("request_id", desc.RequestID))
+		}
 	}
 	for next := errors.Unwrap(err); next != nil; next = errors.Unwrap(err) {
 		err = next

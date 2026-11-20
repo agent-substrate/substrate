@@ -48,15 +48,20 @@ type ServiceError struct {
 	// Message is the service's own description, if the backend reports one
 	// it knows names no caller, resource or credential.
 	Message string
+	// RequestID is the ID the service gave the request, if the backend
+	// reports one, so the service's operator can find it.
+	RequestID string
 }
 
 // DescribeServiceError describes the storage service response that err
 // carries, if any. Each backend decides what of its errors is safe to
 // describe; an error in err's chain from any other source with an
-// HTTPStatusCode() int method, as the S3 SDK's response errors have, is
-// described by its status alone.
+// HTTPStatusCode() int method is described by its status alone.
 func DescribeServiceError(err error) (ServiceError, bool) {
 	if desc, ok := describeGCSError(err); ok {
+		return desc, true
+	}
+	if desc, ok := describeS3Error(err); ok {
 		return desc, true
 	}
 	var withStatus interface{ HTTPStatusCode() int }
