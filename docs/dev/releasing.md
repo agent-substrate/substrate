@@ -43,6 +43,8 @@ To preview the notes before tagging, run the dry run with the tag you plan to pu
 
 A release publishes `ate-idp-server`, `ateapi`, `atecontroller`, `atelet`, `atenet`, `ateworker-gvisor`, `ateworker-microvm`, `kubernetes-secrets` (the Kubernetes Secrets credential provider), `objectstore-plugin`, and `podcertcontroller` (`images.ReleaseComponents` in [`cmd/ate-setup/internal/images`](../../cmd/ate-setup/internal/images/images.go)), plus `envoy-dataplane` from [`cmd/dataplane/envoy`](../../cmd/dataplane/envoy), as `ghcr.io/agent-substrate/substrate/<image>:<tag>`. The object storage plugin ships with releases until it moves out of this repository.
 
+The `kubectl-ate` plugin CLI ships as an image too, although no manifest deploys it: a Helm bootstrap Job runs its `admin make-ca-pool` and `admin make-jwt-pool` subcommands to provision the CA pools before the control plane starts, which otherwise means downloading the release binary from GitHub at install time — an egress that air-gapped clusters cannot make. It ships with the release images under the same tag.
+
 Both lists are allowlists in `images.go`: `released` for the ko images and `releasedDockerfiles` for the images built from a Dockerfile. A new image is not published until a pull request adds it there, so publishing an image is always an explicit, reviewed change.
 
 It leaves out the demos and the benchmarking fakes, which an install deploys only when asked to. An install that needs them has to take them from another registry, or build them from source. `ate-setup --image-repo` looks those images up like any other; if one is missing, the error says releases do not publish it.

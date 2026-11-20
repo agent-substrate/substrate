@@ -131,6 +131,7 @@ func TestReleaseImageRefs(t *testing.T) {
 	for _, want := range []string{
 		"example.com/substrate/ateapi:v1",
 		"example.com/substrate/envoy-dataplane:v1",
+		"example.com/substrate/kubectl-ate:v1",
 		"example.com/substrate/kubernetes-secrets:v1",
 		"example.com/substrate/objectstore-plugin:v1",
 	} {
