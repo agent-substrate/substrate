@@ -54,8 +54,9 @@ E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh ./internal/e2e/suites/networking 
 ```
 
 The HTTPS protocol test checks a verified HTTP/1.1 request to a local TLS
-origin on port 8443. The WebSocket tests check that both `ws` and `wss`
-upgrades are denied with HTTP 403 before the origin receives any messages.
+origin on port 8443. The WebSocket tests open `ws` and `wss` connections to a
+local echo origin and check the echoes. On the agentgateway dataplane they
+check that the handshake is refused with HTTP 403 instead.
 The delayed-restore test issues a fresh origin certificate after the Actor is
 suspended, then checks that the restored microVM can complete the TLS request.
 

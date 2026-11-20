@@ -24,6 +24,7 @@ import (
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"golang.org/x/net/http/httpguts"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
@@ -31,8 +32,8 @@ import (
 )
 
 const (
-	websocketDeniedBody = "WebSocket egress is not supported"
-	connectDeniedBody   = "CONNECT egress is not supported"
+	upgradeDeniedBody = "Only WebSocket upgrades are supported"
+	connectDeniedBody = "CONNECT egress is not supported"
 )
 
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
@@ -44,15 +45,22 @@ const (
 // where the connection's SNI must fall under an https rule too. An allowed
 // request is dialed by the name it was decided on, on the port the actor
 // dialed.
+//
+// A WebSocket handshake is decided like any other request. Policy and
+// credentials apply to the handshake only: the gateway does not read the
+// frames that follow.
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
-	if isWebSocketUpgrade(md) {
-		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
-	}
 	// We don't support Actor making a CONNECT (inside the tunnel).
 	if strings.EqualFold(md.Method, http.MethodConnect) {
 		slog.WarnContext(ctx, "egress denied: CONNECT inside the egress tunnel is not supported", slog.String("leg", leg), slog.String("authority", md.Host))
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, connectDeniedBody)
+	}
+	// Envoy forwards any upgrade this handler allows, whatever protocol it
+	// names, so only a WebSocket handshake goes on to the policy.
+	if isUpgrade(md) && !isWebSocketHandshake(md) {
+		slog.WarnContext(ctx, "egress denied: only WebSocket upgrades are supported",
+			slog.String("leg", leg), slog.String("host", md.Host), slog.String("method", md.Method), slog.String("upgrade", md.Header("upgrade")))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, upgradeDeniedBody)
 	}
 
 	ref, err := actorFromFilterState(md)
@@ -138,17 +146,24 @@ func dialHost(dest egresspolicy.Destination) string {
 	}
 }
 
-func isWebSocketUpgrade(md *extproc.RequestMetadata) bool {
-	return md.Method == "GET" && hasHTTPToken(md.Header("connection"), "upgrade") && hasHTTPToken(md.Header("upgrade"), "websocket")
+// isUpgrade reports whether md asks to switch protocols. Envoy removes the
+// Upgrade header from every request it will not forward as an upgrade, so the
+// header being present is the whole test.
+func isUpgrade(md *extproc.RequestMetadata) bool {
+	_, ok := md.Headers["upgrade"]
+	return ok
 }
 
-func hasHTTPToken(value, want string) bool {
-	for _, token := range strings.Split(value, ",") {
-		if strings.EqualFold(strings.TrimSpace(token), want) {
-			return true
-		}
-	}
-	return false
+// isWebSocketHandshake reports whether md opens a WebSocket: a GET whose
+// Upgrade is exactly "websocket" and whose Connection lists "upgrade". Envoy
+// compares these in ASCII, so this does too. A looser match would allow a
+// request here that Envoy forwards as some other upgrade.
+func isWebSocketHandshake(md *extproc.RequestMetadata) bool {
+	upgrade := md.Header("upgrade")
+	return md.Method == http.MethodGet &&
+		!strings.Contains(upgrade, ",") &&
+		httpguts.HeaderValuesContainsToken([]string{upgrade}, "websocket") &&
+		httpguts.HeaderValuesContainsToken([]string{md.Header("connection")}, "upgrade")
 }
 
 // connectionDestination is the SNI a decrypted connection presented, on the

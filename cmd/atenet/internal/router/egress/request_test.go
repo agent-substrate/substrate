@@ -328,17 +328,50 @@ func TestRequestLegPicksRulesByLeg(t *testing.T) {
 	}
 }
 
-func TestRequestLegDeniesHTTP1WebSocketUpgrade(t *testing.T) {
-	h := policyHandler(allowAllPolicy())
-	for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
-		t.Run(leg, func(t *testing.T) {
-			md := innerMetadata(leg, "GET", "api.example.com", nil)
-			md.Headers["connection"] = "keep-alive, UpGrAdE"
-			md.Headers["upgrade"] = "WebSocket"
-			_, err := h.HandleRequestHeaders(context.Background(), md)
+// A WebSocket handshake is decided by the leg's rules like any other request.
+// Every other upgrade is refused, whatever the policy allows.
+func TestRequestLegDecidesUpgrades(t *testing.T) {
+	const (
+		cleartext = extproc.EgressCleartextFilterChainName
+		mitm      = extproc.EgressTLSMITMFilterChainName
+	)
+	all := allowAllPolicy()
+	websocket := map[string]string{"connection": "Upgrade", "upgrade": "websocket"}
+	for _, tc := range []struct {
+		name     string
+		leg      string
+		policy   *ateapi.EgressPolicy
+		method   string
+		headers  map[string]string
+		wantBody string // "" means allowed; otherwise the body of the 403
+	}{
+		{name: "ordinary GET", leg: mitm, policy: all, method: "GET"},
+		{name: "websocket over cleartext", leg: cleartext, policy: all, method: "GET", headers: websocket},
+		{name: "websocket over TLS", leg: mitm, policy: all, method: "GET", headers: websocket},
+		{name: "websocket in mixed case", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "keep-alive, UpGrAdE", "upgrade": "WebSocket"}},
+		{name: "websocket to a host under no rule", leg: cleartext, policy: httpPolicy("other.example"), method: "GET", headers: websocket, wantBody: deniedBody},
+		{name: "websocket over TLS under an http rule", leg: mitm, policy: httpPolicy("api.example.com"), method: "GET", headers: websocket, wantBody: deniedBody},
+		{name: "other protocol", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "Upgrade", "upgrade": "foo"}, wantBody: upgradeDeniedBody},
+		{name: "not a GET", leg: mitm, policy: all, method: "POST", headers: websocket, wantBody: upgradeDeniedBody},
+		{name: "websocket in a list", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "Upgrade", "upgrade": "websocket, foo"}, wantBody: upgradeDeniedBody},
+		// Envoy joins a repeated header with a comma.
+		{name: "repeated upgrade header", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "Upgrade", "upgrade": "websocket,websocket"}, wantBody: upgradeDeniedBody},
+		// Unicode case folding reads U+017F as s; Envoy compares in ASCII.
+		{name: "non-ASCII spelling", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "Upgrade", "upgrade": "webſocket"}, wantBody: upgradeDeniedBody},
+		{name: "connection without the upgrade token", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "keep-alive", "upgrade": "websocket"}, wantBody: upgradeDeniedBody},
+		{name: "empty upgrade", leg: mitm, policy: all, method: "GET", headers: map[string]string{"connection": "Upgrade", "upgrade": ""}, wantBody: upgradeDeniedBody},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			md := innerMetadata(tc.leg, tc.method, "api.example.com", nil)
+			maps.Copy(md.Headers, tc.headers)
+			res, err := policyHandler(tc.policy).HandleRequestHeaders(context.Background(), md)
+			if tc.wantBody == "" {
+				wantDial(t, res, err, extproc.EgressDialName)
+				return
+			}
 			wantStatus(t, err, envoy_type.StatusCode_Forbidden)
-			if err.Error() != websocketDeniedBody {
-				t.Errorf("denial body = %q, want %q", err, websocketDeniedBody)
+			if err.Error() != tc.wantBody {
+				t.Errorf("denial body = %q, want %q", err, tc.wantBody)
 			}
 		})
 	}
@@ -362,29 +395,6 @@ func TestRequestLegDeniesConnect(t *testing.T) {
 				})
 			}
 		}
-	}
-}
-
-func TestRequestLegAllowsOrdinaryHTTPSRequest(t *testing.T) {
-	h := policyHandler(allowAllPolicy())
-	for _, tc := range []struct {
-		name       string
-		method     string
-		connection string
-		upgrade    string
-	}{
-		{name: "ordinary GET", method: "GET"},
-		{name: "other upgrade", method: "GET", connection: "Upgrade", upgrade: "h2c"},
-		{name: "upgrade without connection token", method: "GET", connection: "keep-alive", upgrade: "websocket"},
-		{name: "non-GET", method: "POST", connection: "Upgrade", upgrade: "websocket"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			md := innerMetadata(extproc.EgressTLSMITMFilterChainName, tc.method, "api.example.com", nil)
-			md.Headers["connection"] = tc.connection
-			md.Headers["upgrade"] = tc.upgrade
-			res, err := h.HandleRequestHeaders(context.Background(), md)
-			wantDial(t, res, err, extproc.EgressDialName)
-		})
 	}
 }
 

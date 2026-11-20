@@ -409,12 +409,10 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_http
-              # The egress request filter returns the explanatory 403. Keep
-              # the HCM default disabled as a defense if a request ever gets
-              # past that decision.
+              # WebSocket is the only upgrade supported. The egress request
+              # filter is the only gate: it refuses any other.
               upgrade_configs:
               - upgrade_type: websocket
-                enabled: false
               # Disable stream_idle_timeout as there is already an overall timeout in the outer tunnel in the HCM.
               stream_idle_timeout: 0s
               # Tells a denied address (resolved_address_filter below) apart
@@ -490,14 +488,31 @@ data:
                   domains: ["*"]
                   routes:
                   # There is no default route: the initial route lookup cannot
-                  # match before ext_proc supplies dev.ate.egress:dial. This
-                  # lets the request filter return the unsupported-upgrade
-                  # response before route-level upgrade rejection. Each route
-                  # also needs the answered name (dev.ate.egress:host); without
-                  # it the forward proxy would dial the Host's port.
+                  # match before ext_proc supplies dev.ate.egress:dial. Each
+                  # route also needs the answered name (dev.ate.egress:host);
+                  # without it the forward proxy would dial the Host's port.
+                  #
+                  # WebSocket uses HTTP/1.1 only between the gateway and the
+                  # origin.
+                  - match:
+                      prefix: "/"
+                      headers:
+                      - name: upgrade
+                        string_match:
+                          exact: websocket
+                          ignore_case: true
+                      dynamic_metadata:
+                      - filter: dev.ate.egress
+                        path: [{ key: dial }]
+                        value: { string_match: { exact: name } }
+                      - filter: dev.ate.egress
+                        path: [{ key: host }]
+                        value: { present_match: true }
+                    route:
+                      cluster: egress_forward_proxy_websocket
+                      timeout: 0s
                   # Native gRPC uses upstream ALPN to negotiate h2 and carry
-                  # status in trailers. Other requests stay on HTTP/1.1; the
-                  # content-type match keeps those protocol choices separate.
+                  # status in trailers.
                   - match:
                       prefix: "/"
                       headers:
@@ -513,9 +528,6 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_grpc
-                      upgrade_configs:
-                      - upgrade_type: websocket
-                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -528,9 +540,6 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy
-                      upgrade_configs:
-                      - upgrade_type: websocket
-                        enabled: false
                       # The route timeout runs until the response completes, which
                       # for SSE or long-poll is never, so 0.
                       timeout: 0s
@@ -684,12 +693,10 @@ data:
               # answers it 426 before any filter runs.
               http_protocol_options:
                 accept_http_10: true
-              # The egress request filter returns the explanatory 403. Keep
-              # the HCM default disabled as a defense if a request ever gets
-              # past that decision.
+              # WebSocket is the only upgrade supported. The egress request
+              # filter is the only gate: it refuses any other.
               upgrade_configs:
               - upgrade_type: websocket
-                enabled: false
               stream_idle_timeout: 0s
               local_reply_config: *address_denied_reply
               access_log:
@@ -750,6 +757,10 @@ data:
                   # no route. The route also needs the answered name
                   # (dev.ate.egress:host); without it the forward proxy would
                   # dial the Host's port.
+                  #
+                  # A WebSocket handshake needs no route of its own here: the
+                  # cluster speaks the protocol the actor did, and a handshake
+                  # arrives over HTTP/1.1.
                   routes:
                   - match:
                       prefix: "/"
@@ -762,9 +773,6 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_cleartext
-                      upgrade_configs:
-                      - upgrade_type: websocket
-                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -1119,6 +1127,49 @@ data:
             auto_config:
               http_protocol_options: {}
               http2_protocol_options: {}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              validation_context:
+                trusted_ca:
+                  filename: /etc/ssl/certs/ca-certificates.crt
+
+      # The MITM leg's forward proxy for WebSocket handshakes. It is
+      # egress_forward_proxy limited to HTTP/1.1, so ALPN cannot select h2.
+      - name: egress_forward_proxy_websocket
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 5s
+        # Sized like egress_forward_proxy. An open WebSocket holds its
+        # connection for as long as it lasts.
+        circuit_breakers:
+          thresholds:
+          - priority: DEFAULT
+            max_connections: 65536
+            max_pending_requests: 65536
+            max_requests: 65536
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - description: TCP_NOTSENT_LOWAT
+            level: 6   # IPPROTO_TCP
+            name: 25   # TCP_NOTSENT_LOWAT
+            int_value: 16384
+            state: STATE_PREBIND
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config: *egress_dns_cache
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            upstream_http_protocol_options:
+              auto_sni: true
+              auto_san_validation: true
+            explicit_http_config:
+              http_protocol_options: {}
         transport_socket:
           name: envoy.transport_sockets.tls
           typed_config:

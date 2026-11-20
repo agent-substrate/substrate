@@ -8,7 +8,7 @@ description: >
 
 # Network Egress Contract
 
-Last updated: 11/16/2026
+Last updated: 11/18/2026
 
 ## Overview
 
@@ -26,15 +26,26 @@ The PEP connects on the actor's behalf, so it MUST NOT connect to a loopback, li
 
 The [supported traffic table](egress-traffic.md) defines the permitted protocols.
 For cleartext HTTP requests and HTTP requests on an authorized intercepted TLS
-connection, a request denied by policy MUST receive HTTP 403. WebSocket upgrades,
-other HTTP upgrades, and actor-originated CONNECT requests inside the tunnel MUST
-also receive HTTP 403, regardless of whether the destination is otherwise allowed.
-This applies to cleartext HTTP and intercepted HTTPS, including mixed-case HTTP
-upgrade tokens, and does not affect atunnel's outer CONNECT. The PEP MUST NOT open an upstream connection
-or apply credential effects for these refused requests. Response bodies are
+connection, a request denied by policy MUST receive HTTP 403.
+
+A WebSocket opening handshake is an HTTP/1 `GET` whose `Upgrade` header is
+`websocket` and whose `Connection` header lists `upgrade`, both compared
+case-insensitively. A PEP MAY carry it. A PEP that does MUST authorize the
+handshake under the same `http` and `https` rules as any other request, and
+apply the deciding rule's credential effects to it. Once the origin accepts
+the upgrade, the PEP relays the connection without inspecting it. A PEP that
+does not carry WebSocket MUST answer the handshake with HTTP 403.
+
+Other HTTP upgrades and actor-originated CONNECT requests inside the tunnel MUST
+receive HTTP 403, regardless of whether the destination is otherwise allowed.
+This applies to cleartext HTTP and intercepted HTTPS, and does not affect
+atunnel's outer CONNECT. A PEP MAY instead ignore an `h2c` upgrade offer and
+serve the request over HTTP/1.1. The PEP MUST NOT open an upstream connection
+or apply credential effects for a refused request. Response bodies are
 implementation-specific.
 
-A TLS passthrough authorization lasts for that connection. A policy update MUST
+A TLS passthrough authorization lasts for that connection, and so does a
+WebSocket authorization. A policy update MUST
 apply to new connections after cached policy decisions expire; it need not
 terminate an already authorized connection. If a new ClientHello no longer
 matches a passthrough rule, the PEP MUST NOT pass the TLS connection through.
