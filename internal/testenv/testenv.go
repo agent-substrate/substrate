@@ -40,7 +40,10 @@ const kubeVersion = "1.36.x"
 //
 // Under -short it exits the test binary with success instead: a cold binary
 // cache needs a download, so `go test -short ./...` always works offline.
-func Start() (*rest.Config, func()) {
+//
+// Each option changes the environment before it starts, for example to add
+// kube-apiserver flags.
+func Start(options ...func(*envtest.Environment)) (*rest.Config, func()) {
 	if !flag.Parsed() {
 		flag.Parse()
 	}
@@ -61,6 +64,9 @@ func Start() (*rest.Config, func()) {
 	env := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join(root, "manifests", "ate-install", "generated")},
 		BinaryAssetsDirectory: binDir,
+	}
+	for _, option := range options {
+		option(env)
 	}
 	cfg, err := env.Start()
 	if err != nil {

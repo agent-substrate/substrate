@@ -1,0 +1,1432 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# The differences between the ate-setup install and the chart install of this
+# scenario, by object and field path, with the value from each install.
+# cmd/ate-setup/internal/chartcompare fails when the installs differ in any
+# other way. Run it with -update-differences to rewrite this file.
+ClusterRole//ate-api-server: only ate-setup
+ClusterRole//ate-api-server-role: only charts
+ClusterRole//atelet: only ate-setup
+ClusterRole//atelet-role: only charts
+ClusterRoleBinding//ate-api-server: only ate-setup
+ClusterRoleBinding//ate-api-server-binding: only charts
+ClusterRoleBinding//atelet: only ate-setup
+ClusterRoleBinding//atelet-binding: only charts
+ConfigMap/ate-system/ate-otel-config: only ate-setup
+ConfigMap/ate-system/atenet-egress: only ate-setup
+ConfigMap/ate-system/atenet-egress-agentgateway-config: only charts
+ConfigMap/ate-system/atenet-egress-agentgateway-substrate-config: only ate-setup
+ConfigMap/ate-system/atenet-router-agentgateway-config:
+  data.config.yaml:
+    ate-setup: |
+      # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+      config:
+        statsAddr: 0.0.0.0:15020
+        backend:
+          # See the ingress-only loopback rationale in ../agentgateway/configmap.yaml.
+          allowDynamicLoopback: true
+
+      frontendPolicies:
+        networkAuthorization:
+          rules:
+          - allow: >-
+              source.spiffeId in []
+        tracing:
+          host: $AGENTGATEWAY_OTLP_ADDRESS
+          protocol: grpc
+          randomSampling: 0.01
+
+      gateways:
+        https:
+          port: 8443
+          protocol: HTTPS
+          tls: &ingress-tls
+            cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+            key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+            root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
+
+      backends:
+      - name: dynamic
+        dynamic: {}
+        policies:
+          http:
+            version: HTTP/1.1
+          backendTunnel:
+            proxy:
+              backend: /dynamic
+            mode: connect
+            policies:
+              backendTLS:
+                cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
+                insecureHost: true
+
+      routes:
+      - name: substrate-actors
+        gateways:
+        - https
+        matches:
+        - path:
+            pathPrefix: /
+        policies: &substrate-ingress
+          substrateIngress:
+            host: api.ate-system.svc:443
+            connectTargetPort: 8443
+            policies:
+              backendTLS:
+                cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                root: /run/servicedns-ca/trust-bundle.pem
+        backends:
+        - backend: /dynamic
+      - name: substrate-actors-grpc
+        gateways:
+        - https
+        matches: &grpc-matches
+        - method: POST
+          headers:
+          - name: content-type
+            value:
+              regex: '(?i)^application/grpc([+;].*)?$'
+        policies: *substrate-ingress
+        backends: &grpc-backends
+        - backend: /dynamic
+          policies:
+            http:
+              version: HTTP/2.0
+
+      binds:
+      - port: 8444
+        tunnelProtocol: connect
+        listeners:
+        - protocol: HTTPS
+          tls: *ingress-tls
+          routes: []
+      - mode: internal
+        listeners:
+        - protocol: HTTP
+          routes:
+          - name: substrate-actors-tunneled
+            matches:
+            - path:
+                pathPrefix: /
+            policies: *substrate-ingress
+            backends:
+            - backend: /dynamic
+          - name: substrate-actors-tunneled-grpc
+            matches: *grpc-matches
+            policies: *substrate-ingress
+            backends: *grpc-backends
+    charts: |
+      # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+      config:
+        statsAddr: 0.0.0.0:15020
+        # Actor sandboxes behind a worker IP are replaced between requests. Do
+        # not retain an idle connection that may belong to the previous actor.
+        backend:
+          poolMaxSize: 0
+          # Actor CONNECT authorities resolve through the worker atunnel.
+          allowDynamicLoopback: true
+      frontendPolicies:
+        networkAuthorization:
+          rules:
+          - allow: >-
+              source.spiffeId in []
+
+      backends:
+      - name: dynamic
+        dynamic: {}
+        policies:
+          http:
+            version: HTTP/1.1
+          backendTunnel:
+            proxy:
+              backend: /dynamic
+            mode: connect
+            policies:
+              backendTLS:
+                cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
+                insecureHost: true
+
+      gateways:
+        https:
+          port: 8443
+          protocol: HTTPS
+          tls:
+            cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+            key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+            root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
+
+      routes:
+      - name: substrate-actors
+        gateways:
+        - https
+        matches:
+        - path:
+            pathPrefix: /
+        policies: &substrate-ingress
+          # Reject duplicates in both CONNECT and inner request headers, even
+          # when actor selection uses only one of those header maps.
+          directResponse:
+            conditional:
+            - condition: >-
+                ('ate-target-actor' in source.connectHeaders &&
+                 size(source.connectHeaders.raw()['ate-target-actor']) != 1) ||
+                ('ate-target-actor' in request.headers &&
+                 size(request.headers.raw()['ate-target-actor']) != 1)
+              status: 404
+              body: Invalid ate-target-actor header
+          substrateIngress:
+            host: api.ate-system.svc:443
+            requestParking:
+              budget: "60s"
+            # AgentGateway only uses atunnel's CONNECT listener.
+            connectTargetPort: 8443
+            policies:
+              http:
+                requestTimeout: "60s"
+              backendTLS:
+                cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                root: /run/servicedns-ca/trust-bundle.pem
+        backends:
+        - backend: /dynamic
+      - name: substrate-actors-grpc
+        gateways:
+        - https
+        matches: &grpc-matches
+        - method: POST
+          headers:
+          - name: content-type
+            value:
+              regex: '(?i)^application/grpc([+;].*)?$'
+        policies: *substrate-ingress
+        backends: &grpc-backends
+        - backend: /dynamic
+          policies:
+            http:
+              version: HTTP/2.0
+
+      # Terminate client CONNECT before internal HTTP routing.
+      binds:
+      - port: 8444
+        tunnelProtocol: connect
+        listeners:
+        - protocol: HTTPS
+          tls:
+            cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+            key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+            root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
+          routes: []
+      - mode: internal
+        listeners:
+        - protocol: HTTP
+          routes:
+          - name: substrate-actors-tunneled
+            matches:
+            - path:
+                pathPrefix: /
+            policies: *substrate-ingress
+            backends:
+            - backend: /dynamic
+          - name: substrate-actors-tunneled-grpc
+            matches: *grpc-matches
+            policies: *substrate-ingress
+            backends: *grpc-backends
+DaemonSet/ate-system/atelet:
+  spec.template.spec.containers[0].args:
+    ate-setup:
+    - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+    - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+    - --localhost-registry-replacement=kind-registry:5000
+    - --log-level=debug
+    - --preview=
+    charts:
+    - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+    - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+    - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+    - --herder-allowed-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-api-server
+    - --localhost-registry-replacement=kind-registry:5000
+    - --log-level=debug
+    - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
+    - --preview=
+  spec.template.spec.containers[0].env:
+    ate-setup:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.uid
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
+    charts:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.uid
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
+    - name: OTEL_TRACES_EXPORTER
+      value: none
+    - name: OTEL_METRICS_EXPORTER
+      value: prometheus
+    - name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[0].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[0].resources.requests.memory:
+    ate-setup: 128Mi
+    charts: 256Mi
+  spec.template.spec.containers[0].volumeMounts[0].mountPath:
+    ate-setup: /var/lib/ate
+    charts: /run/objectstore-plugin
+  spec.template.spec.containers[0].volumeMounts[0].mountPropagation:
+    ate-setup: HostToContainer
+    charts: null
+  spec.template.spec.containers[0].volumeMounts[0].name:
+    ate-setup: ate-base
+    charts: objectstore-plugin
+  spec.template.spec.containers[0].volumeMounts[1].mountPath:
+    ate-setup: /run/objectstore-plugin
+    charts: /var/lib/ate
+  spec.template.spec.containers[0].volumeMounts[1].mountPropagation:
+    ate-setup: null
+    charts: HostToContainer
+  spec.template.spec.containers[0].volumeMounts[1].name:
+    ate-setup: objectstore-plugin
+    charts: ate-base
+  spec.template.spec.containers[0].volumeMounts[2].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.initContainers[0].args:
+    ate-setup:
+    - node
+    - --socket=/run/objectstore-plugin/node.sock
+    - --root=/var/lib/ate
+    - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+    - --asset-staging-capacity=8Gi
+    - --preview=
+    charts:
+    - node
+    - --socket=/run/objectstore-plugin/node.sock
+    - --root=/var/lib/ate
+    - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+    - --asset-staging-capacity=8Gi
+    - --exchange-address=api.ate-system.svc:8445
+    - --exchange-server-name=api.ate-system.svc
+  spec.template.spec.initContainers[0].env:
+    ate-setup:
+    - name: ATE_STORAGE_BACKEND
+      value: s3
+    - name: AWS_REGION
+      value: us-east-1
+    - name: AWS_ENDPOINT_URL
+      value: http://rustfs.ate-system.svc:9000
+    - name: AWS_S3_USE_PATH_STYLE
+      value: "true"
+    - name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    - name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    charts:
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: ATE_STORAGE_BACKEND
+      value: s3
+    - name: AWS_REGION
+      value: us-east-1
+    - name: AWS_ENDPOINT_URL
+      value: http://rustfs.ate-system.svc:9000
+    - name: AWS_S3_USE_PATH_STYLE
+      value: "true"
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom:
+        secretKeyRef:
+          key: AWS_ACCESS_KEY_ID
+          name: rustfs-credentials
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom:
+        secretKeyRef:
+          key: AWS_SECRET_ACCESS_KEY
+          name: rustfs-credentials
+    - name: OTEL_TRACES_EXPORTER
+      value: none
+    - name: OTEL_METRICS_EXPORTER
+      value: prometheus
+    - name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.initContainers[0].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.initContainers[0].volumeMounts[2].mountPath:
+    ate-setup: /run/servicedns.podcert.ate.dev
+    charts: /var/lib/objectstore-plugin/asset-staging
+  spec.template.spec.initContainers[0].volumeMounts[2].name:
+    ate-setup: servicedns-ca
+    charts: asset-staging
+  spec.template.spec.initContainers[0].volumeMounts[2].readOnly:
+    ate-setup: true
+    charts: null
+  spec.template.spec.initContainers[0].volumeMounts[3].mountPath:
+    ate-setup: /var/lib/objectstore-plugin/asset-staging
+    charts: /run/servicedns.podcert.ate.dev
+  spec.template.spec.initContainers[0].volumeMounts[3].name:
+    ate-setup: asset-staging
+    charts: servicedns-ca
+  spec.template.spec.initContainers[0].volumeMounts[3].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.terminationGracePeriodSeconds:
+    ate-setup: 330
+    charts: 30
+Deployment/ate-system/ate-api-server:
+  spec.template.spec.containers[0].args:
+    ate-setup:
+    - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
+    - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+    - --actor-jwt-issuer=@env
+    - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+    - --authentication-config=/etc/ateapi/authentication/authentication.yaml
+    - --authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client
+    - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+    - --default-egress-gateway-address=atenet-egress.ate-system.svc:443
+    - --drain-delay=13s
+    - --drain-timeout=15s
+    - --grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+    - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
+    - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+    - --postgres-owner-connection-string=@env
+    - --postgres-owner-role=@env
+    - --postgres-read-write-connection-string=@env
+    - --postgres-read-write-role=@env
+    - --postgres-schema=@env
+    - --preview=
+    - --snapshot-location=@env
+    charts:
+    - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
+    - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+    - --actor-jwt-issuer=@env
+    - --api-server-sidecar-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-api-server
+    - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+    - --atelet-service-account=atelet
+    - --authentication-config=/etc/ateapi/authentication/authentication.yaml
+    - --authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client
+    - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+    - --controller-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-controller
+    - --default-egress-gateway-address=atenet-egress.ate-system.svc:443
+    - --drain-delay=13s
+    - --drain-timeout=15s
+    - --egress-gateway-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/atenet-egress
+    - --grpc-listen-addr=0.0.0.0:443
+    - --grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+    - --ingress-router-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/atenet-router
+    - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
+    - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+    - --postgres-owner-connection-string=@env
+    - --postgres-owner-role=substrate_owner
+    - --postgres-read-write-connection-string=@env
+    - --postgres-read-write-role=substrate_readwrite
+    - --postgres-schema=@env
+    - --preview=
+    - --snapshot-location=@env
+  spec.template.spec.containers[0].env:
+    ate-setup:
+    - name: OTEL_TRACES_SAMPLER
+      value: parentbased_always_on
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.uid
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+    charts:
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.uid
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+    - name: ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING
+      valueFrom:
+        secretKeyRef:
+          key: readWriteConnectionString
+          name: substrate-postgres-readwrite
+    - name: ATE_API_POSTGRES_OWNER_CONNECTION_STRING
+      valueFrom:
+        secretKeyRef:
+          key: ownerConnectionString
+          name: substrate-postgres-owner
+    - name: OTEL_TRACES_EXPORTER
+      value: none
+    - name: OTEL_METRICS_EXPORTER
+      value: prometheus
+    - name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[0].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    - configMapRef:
+        name: ate-api-server-envvars
+        optional: true
+    - secretRef:
+        name: ate-api-server-secret-envvars
+        optional: true
+    charts:
+    - configMapRef:
+        name: ate-api-server-envvars
+        optional: true
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[0].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 100m
+      memory: 256Mi
+  spec.template.spec.containers[0].volumeMounts:
+    ate-setup:
+    - mountPath: /run/objectstore-plugin
+      name: objectstore-plugin
+    - mountPath: /run/servicedns.podcert.ate.dev
+      name: servicedns
+    - mountPath: /run/podidentity.podcert.ate.dev
+      name: podidentity
+    - mountPath: /run/postgres.podcert.ate.dev
+      name: postgres
+      readOnly: true
+    - mountPath: /run/actor-id-jwt-pool
+      name: actor-id-jwt-pool
+    - mountPath: /run/actor-id-ca-pool
+      name: actor-id-ca-pool
+      readOnly: true
+    - mountPath: /run/apiconfig.ate.dev
+      name: api-config
+      readOnly: true
+    - mountPath: /etc/ateapi/authentication
+      name: authentication-config
+      readOnly: true
+    - mountPath: /run/postgres-server-ca
+      name: postgres-server-ca
+      readOnly: true
+    charts:
+    - mountPath: /run/objectstore-plugin
+      name: objectstore-plugin
+    - mountPath: /run/servicedns.podcert.ate.dev
+      name: servicedns
+    - mountPath: /run/actor-id-jwt-pool
+      name: actor-id-jwt-pool
+    - mountPath: /run/actor-id-ca-pool
+      name: actor-id-ca-pool
+      readOnly: true
+    - mountPath: /run/podidentity.podcert.ate.dev
+      name: podidentity
+      readOnly: true
+    - mountPath: /run/postgres.podcert.ate.dev
+      name: postgres
+      readOnly: true
+    - mountPath: /run/apiconfig.ate.dev
+      name: api-config
+      readOnly: true
+    - mountPath: /etc/ateapi/authentication
+      name: authentication-config
+      readOnly: true
+  spec.template.spec.initContainers[0].args[5]:
+    ate-setup: --preview=
+    charts: --ateapi-server-name=api.ate-system.svc
+  spec.template.spec.initContainers[0].env:
+    ate-setup:
+    - name: ATE_STORAGE_BACKEND
+      value: s3
+    - name: AWS_REGION
+      value: us-east-1
+    - name: AWS_ENDPOINT_URL
+      value: http://rustfs.ate-system.svc:9000
+    - name: AWS_S3_USE_PATH_STYLE
+      value: "true"
+    - name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    - name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
+    - name: ATE_API_ACTOR_JWT_ISSUER
+      valueFrom:
+        configMapKeyRef:
+          key: ATE_API_ACTOR_JWT_ISSUER
+          name: ate-api-server-envvars
+    - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+      valueFrom:
+        configMapKeyRef:
+          key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          name: ate-api-server-envvars
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    charts:
+    - name: ATE_API_ACTOR_JWT_ISSUER
+      valueFrom:
+        configMapKeyRef:
+          key: ATE_API_ACTOR_JWT_ISSUER
+          name: ate-api-server-envvars
+    - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+      valueFrom:
+        configMapKeyRef:
+          key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          name: ate-api-server-envvars
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: ATE_STORAGE_BACKEND
+      value: s3
+    - name: AWS_REGION
+      value: us-east-1
+    - name: AWS_ENDPOINT_URL
+      value: http://rustfs.ate-system.svc:9000
+    - name: AWS_S3_USE_PATH_STYLE
+      value: "true"
+    - name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    - name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
+    - name: OTEL_TRACES_EXPORTER
+      value: none
+    - name: OTEL_METRICS_EXPORTER
+      value: prometheus
+    - name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.initContainers[0].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.volumes:
+    ate-setup:
+    - emptyDir: {}
+      name: objectstore-plugin
+    - name: servicedns
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: servicedns.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: podidentity
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: podidentity.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: podidentity.podcert.ate.dev/identity
+    - name: postgres
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: substrate_owner_user.pem
+            keyType: ECDSAP256
+            signerName: postgres.podcert.ate.dev/identity
+            userAnnotations:
+              postgres.podcert.ate.dev/username: substrate_owner_user
+        - podCertificate:
+            credentialBundlePath: substrate_readwrite_user.pem
+            keyType: ECDSAP256
+            signerName: postgres.podcert.ate.dev/identity
+            userAnnotations:
+              postgres.podcert.ate.dev/username: substrate_readwrite_user
+    - name: actor-id-jwt-pool
+      projected:
+        defaultMode: 420
+        sources:
+        - secret:
+            items:
+            - key: pool
+              path: pool.json
+            name: actor-id-jwt-pool
+    - name: actor-id-ca-pool
+      projected:
+        defaultMode: 420
+        sources:
+        - secret:
+            items:
+            - key: pool
+              path: pool.json
+            name: actor-id-ca-pool
+    - configMap:
+        defaultMode: 420
+        name: ate-api-config
+      name: api-config
+    - configMap:
+        defaultMode: 420
+        name: ate-api-authentication
+      name: authentication-config
+    - name: postgres-server-ca
+      secret:
+        defaultMode: 420
+        optional: true
+        secretName: postgres-server-ca
+    charts:
+    - emptyDir: {}
+      name: objectstore-plugin
+    - name: servicedns
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: servicedns.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: actor-id-jwt-pool
+      projected:
+        defaultMode: 420
+        sources:
+        - secret:
+            items:
+            - key: pool
+              path: pool.json
+            name: actor-id-jwt-pool
+    - name: actor-id-ca-pool
+      projected:
+        defaultMode: 420
+        sources:
+        - secret:
+            items:
+            - key: pool
+              path: pool.json
+            name: actor-id-ca-pool
+    - configMap:
+        defaultMode: 420
+        name: ate-api-config
+      name: api-config
+    - configMap:
+        defaultMode: 420
+        name: ate-api-authentication
+      name: authentication-config
+    - name: podidentity
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: podidentity.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: podidentity.podcert.ate.dev/identity
+    - name: postgres
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: substrate_owner_user.pem
+            keyType: ECDSAP256
+            signerName: postgres.podcert.ate.dev/identity
+            userAnnotations:
+              postgres.podcert.ate.dev/username: substrate_owner_user
+        - podCertificate:
+            credentialBundlePath: substrate_readwrite_user.pem
+            keyType: ECDSAP256
+            signerName: postgres.podcert.ate.dev/identity
+            userAnnotations:
+              postgres.podcert.ate.dev/username: substrate_readwrite_user
+Deployment/ate-system/ate-controller:
+  spec.template.spec.containers[0].args:
+    ate-setup:
+    - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
+    - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+    - --dns-egress-policy=enforce-in-atunnel
+    - --preview=
+    charts:
+    - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
+    - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+    - --ateapi-conn-spec=dns:///api.ate-system.svc:443
+    - --atelet-service-account=atelet
+    - --dns-egress-policy=enforce-in-atunnel
+    - --preview=
+    - --router-service-account=atenet-router
+  spec.template.spec.containers[0].env:
+    ate-setup:
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.uid
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+    charts:
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: ATE_WORKER_OTEL_LOGS_EXPORTER
+      value: none
+    - name: ATE_WORKER_OTEL_TRACES_EXPORTER
+      value: none
+    - name: ATE_WORKER_OTEL_METRICS_EXPORTER
+      value: none
+    - name: OTEL_TRACES_EXPORTER
+      value: none
+    - name: OTEL_METRICS_EXPORTER
+      value: prometheus
+    - name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[0].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "1"
+      memory: 512Mi
+  spec.template.spec.containers[0].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 50m
+      memory: 128Mi
+  spec.template.spec.containers[0].volumeMounts[0].mountPath:
+    ate-setup: /run/podidentity.podcert.ate.dev
+    charts: /run/servicedns-ca
+  spec.template.spec.containers[0].volumeMounts[0].name:
+    ate-setup: podidentity
+    charts: servicedns-ca
+  spec.template.spec.containers[0].volumeMounts[0].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.containers[0].volumeMounts[1].mountPath:
+    ate-setup: /run/servicedns-ca
+    charts: /run/podidentity.podcert.ate.dev
+  spec.template.spec.containers[0].volumeMounts[1].name:
+    ate-setup: servicedns-ca
+    charts: podidentity
+  spec.template.spec.containers[0].volumeMounts[1].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.volumes[0].name:
+    ate-setup: podidentity
+    charts: servicedns-ca
+  spec.template.spec.volumes[0].projected.sources[0].clusterTrustBundle:
+    ate-setup: null
+    charts:
+      labelSelector:
+        matchLabels:
+          podcert.ate.dev/canarying: live
+      path: trust-bundle.pem
+      signerName: servicedns.podcert.ate.dev/identity
+  spec.template.spec.volumes[0].projected.sources[0].podCertificate:
+    ate-setup:
+      credentialBundlePath: credential-bundle.pem
+      keyType: ECDSAP256
+      signerName: podidentity.podcert.ate.dev/identity
+    charts: null
+  spec.template.spec.volumes[1].name:
+    ate-setup: servicedns-ca
+    charts: podidentity
+  spec.template.spec.volumes[1].projected.sources[0].clusterTrustBundle:
+    ate-setup:
+      labelSelector:
+        matchLabels:
+          podcert.ate.dev/canarying: live
+      path: trust-bundle.pem
+      signerName: servicedns.podcert.ate.dev/identity
+    charts: null
+  spec.template.spec.volumes[1].projected.sources[0].podCertificate:
+    ate-setup: null
+    charts:
+      credentialBundlePath: credential-bundle.pem
+      keyType: ECDSAP256
+      signerName: podidentity.podcert.ate.dev/identity
+Deployment/ate-system/ate-idp-server:
+  spec.template.spec.containers[0].args:
+    ate-setup:
+    - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+    - --issuer=https://idp.ate-system.svc
+    - --preview=
+    - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+    charts:
+    - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+    - --issuer=https://idp.ate-system.svc
+    - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+Deployment/ate-system/atenet-egress:
+  spec.template.spec.containers[0].env[0].name:
+    ate-setup: RUST_LOG
+    charts: POD_IP
+  spec.template.spec.containers[0].env[0].value:
+    ate-setup: debug
+    charts: null
+  spec.template.spec.containers[0].env[0].valueFrom:
+    ate-setup: null
+    charts:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: status.podIP
+  spec.template.spec.containers[0].env[1].name:
+    ate-setup: POD_IP
+    charts: RUST_LOG
+  spec.template.spec.containers[0].env[1].value:
+    ate-setup: null
+    charts: info
+  spec.template.spec.containers[0].env[1].valueFrom:
+    ate-setup:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: status.podIP
+    charts: null
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[0].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 50m
+      memory: 128Mi
+  spec.template.spec.containers[0].volumeMounts:
+    ate-setup:
+    - mountPath: /etc/agentgateway
+      name: config
+      readOnly: true
+    - mountPath: /run/servicedns.podcert.ate.dev
+      name: servicedns
+      readOnly: true
+    - mountPath: /run/actor-id-ca-certs
+      name: actor-id-ca-certs
+      readOnly: true
+    - mountPath: /run/podidentity.podcert.ate.dev
+      name: podidentity
+      readOnly: true
+    - mountPath: /run/servicedns-ca
+      name: servicedns-ca
+      readOnly: true
+    - mountPath: /run/egress-mitm
+      name: egress-mitm
+      readOnly: true
+    charts:
+    - mountPath: /run/egress-mitm
+      name: egress-mitm
+      readOnly: true
+    - mountPath: /etc/agentgateway
+      name: config
+      readOnly: true
+    - mountPath: /run/servicedns.podcert.ate.dev
+      name: servicedns
+      readOnly: true
+    - mountPath: /run/podidentity.podcert.ate.dev
+      name: podidentity
+      readOnly: true
+    - mountPath: /run/actor-id-ca-certs
+      name: actor-id-ca-certs
+      readOnly: true
+  spec.template.spec.volumes:
+    ate-setup:
+    - configMap:
+        defaultMode: 420
+        name: atenet-egress-agentgateway-substrate-config
+      name: config
+    - emptyDir: {}
+      name: drain-signal
+    - name: servicedns
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: servicedns.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: podidentity
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: podidentity.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: podidentity.podcert.ate.dev/identity
+    - name: actor-id-ca-certs
+      secret:
+        defaultMode: 420
+        secretName: actor-id-ca-certs
+    - name: servicedns-ca
+      projected:
+        defaultMode: 420
+        sources:
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: egress-mitm
+      secret:
+        defaultMode: 420
+        items:
+        - key: tls.crt
+          path: tls.crt
+        - key: tls.key
+          path: tls.key
+        secretName: egress-mitm-ca-pool
+    charts:
+    - name: egress-mitm
+      secret:
+        defaultMode: 420
+        items:
+        - key: tls.crt
+          path: tls.crt
+        - key: tls.key
+          path: tls.key
+        secretName: egress-mitm-ca-pool
+    - configMap:
+        defaultMode: 420
+        name: atenet-egress-agentgateway-config
+      name: config
+    - name: servicedns
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: servicedns.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: podidentity
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: podidentity.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: podidentity.podcert.ate.dev/identity
+    - name: actor-id-ca-certs
+      secret:
+        defaultMode: 420
+        secretName: actor-id-ca-certs
+Deployment/ate-system/atenet-router:
+  spec.template.spec.containers[0].env:
+    ate-setup:
+    - name: AGENTGATEWAY_OTLP_ADDRESS
+      value: opentelemetry-collector.otel-system.svc:4317
+    charts: null
+  spec.template.spec.containers[0].ports[5].name:
+    ate-setup: stats
+    charts: gw-metrics
+  spec.template.spec.containers[0].readinessProbe:
+    ate-setup: null
+    charts:
+      failureThreshold: 3
+      httpGet:
+        path: /healthz/ready
+        port: readiness
+        scheme: HTTP
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 1
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[0].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 100m
+      memory: 128Mi
+  spec.template.spec.containers[0].volumeMounts[0].name:
+    ate-setup: envoy-config
+    charts: agentgateway-config
+  spec.template.spec.containers[0].volumeMounts[2].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.containers[0].volumeMounts[3].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.terminationGracePeriodSeconds:
+    ate-setup: 60
+    charts: 30
+  spec.template.spec.volumes:
+    ate-setup:
+    - configMap:
+        defaultMode: 420
+        name: atenet-router-agentgateway-config
+      name: envoy-config
+    - emptyDir: {}
+      name: drain-signal
+    - name: servicedns
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: podidentity
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            credentialBundlePath: credential-bundle.pem
+            keyType: ECDSAP256
+            signerName: podidentity.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: podidentity.podcert.ate.dev/identity
+    - name: servicedns-ca
+      projected:
+        defaultMode: 420
+        sources:
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    charts:
+    - configMap:
+        defaultMode: 420
+        name: atenet-router-agentgateway-config
+      name: agentgateway-config
+    - name: servicedns
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            certificateChainPath: cert.pem
+            credentialBundlePath: credential-bundle.pem
+            keyPath: key.pem
+            keyType: ECDSAP256
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: servicedns-ca
+      projected:
+        defaultMode: 420
+        sources:
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    - name: podidentity
+      projected:
+        defaultMode: 420
+        sources:
+        - podCertificate:
+            certificateChainPath: cert.pem
+            credentialBundlePath: credential-bundle.pem
+            keyPath: key.pem
+            keyType: ECDSAP256
+            signerName: podidentity.podcert.ate.dev/identity
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: podidentity.podcert.ate.dev/identity
+Deployment/ate-system/k8s-credential-provider:
+  spec.template.spec.containers[0].args[2]:
+    ate-setup: --listen-address=:50051
+    charts: --injector-identity=spiffe://cluster.local/ns/ate-system/sa/atenet-egress
+  spec.template.spec.containers[0].args[3]:
+    ate-setup: --log-level=info
+    charts: --listen-address=:50051
+  spec.template.spec.containers[0].args[4]:
+    ate-setup: --metrics-address=:9090
+    charts: --log-level=info
+  spec.template.spec.containers[0].args[5]:
+    ate-setup: --namespace-policy-file=/etc/k8s-credential-provider/namespace-policy.yaml
+    charts: --metrics-address=:9090
+  spec.template.spec.containers[0].args[6]:
+    ate-setup: --preview=
+    charts: --namespace-policy-file=/etc/k8s-credential-provider/namespace-policy.yaml
+  spec.template.spec.containers[0].env:
+    ate-setup:
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.uid
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+    charts:
+    - name: OTEL_TRACES_EXPORTER
+      value: none
+    - name: OTEL_METRICS_EXPORTER
+      value: prometheus
+    - name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[0].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: 500m
+      memory: 256Mi
+  spec.template.spec.containers[0].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 10m
+      memory: 64Mi
+  spec.template.spec.securityContext.runAsGroup:
+    ate-setup: 65532
+    charts: null
+  spec.template.spec.securityContext.runAsUser:
+    ate-setup: 65532
+    charts: null
+Deployment/podcertificate-controller-system/podcertificate-controller:
+  spec.template.spec.containers[0].args[4]:
+    ate-setup: --preview=
+    charts: --postgres-client-service-account=ate-api-server
+  spec.template.spec.containers[0].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: 500m
+      memory: 256Mi
+  spec.template.spec.containers[0].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 10m
+      memory: 64Mi
+NetworkPolicy/ate-system/ate-api-server:
+  spec.ingress[1].ports[0].port:
+    ate-setup: 8445
+    charts: exchange
+NetworkPolicy/ate-system/ate-system-observability:
+  spec.ingress[0].ports[2].port:
+    ate-setup: envoy-metrics
+    charts: gw-metrics
+NetworkPolicy/ate-system/atenet-router:
+  spec.ingress[0].ports[0].port:
+    ate-setup: https
+    charts: http
+  spec.ingress[0].ports[1].port:
+    ate-setup: connect-tls
+    charts: https
+  spec.ingress[0].ports[2].port:
+    ate-setup: http
+    charts: connect
+  spec.ingress[0].ports[3].port:
+    ate-setup: connect
+    charts: connect-tls
+Role/ate-system/atenet-router-endpointslices: only ate-setup
+RoleBinding/ate-system/atenet-router-endpointslices: only ate-setup
+Service/ate-system/api:
+  spec.ipFamilyPolicy:
+    ate-setup: PreferDualStack
+    charts: SingleStack
+  spec.ports[1].targetPort:
+    ate-setup: 8445
+    charts: exchange
+Service/ate-system/atenet-router:
+  spec.ports[0].name:
+    ate-setup: https
+    charts: http
+  spec.ports[0].port:
+    ate-setup: 443
+    charts: 80
+  spec.ports[0].targetPort:
+    ate-setup: 8443
+    charts: 8080
+  spec.ports[1].name:
+    ate-setup: connect-tls
+    charts: https
+  spec.ports[1].port:
+    ate-setup: 8444
+    charts: 443
+  spec.ports[1].targetPort:
+    ate-setup: 8444
+    charts: 8443
+  spec.ports[2].name:
+    ate-setup: stats
+    charts: connect
+  spec.ports[2].port:
+    ate-setup: 15020
+    charts: 8081
+  spec.ports[2].targetPort:
+    ate-setup: stats
+    charts: 8081
+  spec.ports[3].name:
+    ate-setup: http
+    charts: connect-tls
+  spec.ports[3].port:
+    ate-setup: 80
+    charts: 8444
+  spec.ports[3].targetPort:
+    ate-setup: 8080
+    charts: 8444
+  spec.ports[4].name:
+    ate-setup: connect
+    charts: stats
+  spec.ports[4].port:
+    ate-setup: 8081
+    charts: 15020
+  spec.ports[4].targetPort:
+    ate-setup: 8081
+    charts: gw-metrics
+ServiceAccount/podcertificate-controller-system/podcertificate-controller:
+  metadata.labels:
+    ate-setup: null
+    charts:
+      app: podcertificate-controller
