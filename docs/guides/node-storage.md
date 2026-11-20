@@ -26,3 +26,11 @@ restore. To avoid that, you can mount a dedicated disk there:
   atelet checks this at startup.
 - The shared snapshot cache stays on the boot disk, so gVisor restores from a
   shared snapshot copy the cached files instead of hard-linking them.
+
+## Nodes That Enforce SELinux
+
+Worker pods mount `/var/lib/ate` from the node. On nodes that enforce SELinux,
+that directory is labeled `container_var_lib_t`, which the container runtime's
+default type, `container_t`, can neither read nor write. Worker containers
+therefore run as the SELinux type `spc_t`. Nodes without SELinux ignore the
+setting.
