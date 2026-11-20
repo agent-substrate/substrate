@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,13 +19,12 @@ import "testing"
 // kubeAPIClients are the ate-system workloads that call the Kubernetes API, and
 // so may get a ServiceAccount token. No other workload may.
 var kubeAPIClients = map[string]bool{
-	"Deployment/ate-api-server":            true,
-	"Deployment/ate-controller":            true,
-	"DaemonSet/atelet":                     true,
-	"Deployment/atenet-router":             true,
-	"Deployment/podcertificate-controller": true,
-	"Deployment/k8s-credential-provider":   true,
-	"Deployment/fake-workersync":           true,
+	"Deployment/ate-api-server":          true,
+	"Deployment/ate-controller":          true,
+	"DaemonSet/atelet":                   true,
+	"Deployment/atenet-router":           true,
+	"Deployment/k8s-credential-provider": true,
+	"Deployment/fake-workersync":         true,
 }
 
 // automountsToken reports whether the kubelet mounts a ServiceAccount token
@@ -45,14 +44,21 @@ func (in systemInstall) automountsToken(pod systemPod) bool {
 }
 
 func TestSystemPodsMountTokenOnlyForKubeAPIClients(t *testing.T) {
+	seen := map[string]bool{}
 	for _, cfg := range installConfigs() {
 		t.Run(installName(cfg), func(t *testing.T) {
 			install := loadSystemInstall(t, cfg)
 			for _, pod := range install.pods {
+				seen[pod.workload] = true
 				if install.automountsToken(pod) && !kubeAPIClients[pod.workload] {
 					t.Errorf("%s automounts a ServiceAccount token but does not call the Kubernetes API; set automountServiceAccountToken: false", pod.workload)
 				}
 			}
 		})
+	}
+	for workload := range kubeAPIClients {
+		if !seen[workload] {
+			t.Errorf("kubeAPIClients lists %s, which no install config deploys in ate-system; remove it", workload)
+		}
 	}
 }

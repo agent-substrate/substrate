@@ -32,8 +32,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 )
 
-// systemPod is one ate-system workload's pod template, as the NetworkPolicies
-// see it.
+// systemPod is one ate-system workload's pod template.
 type systemPod struct {
 	workload string // kind/name, for messages
 	labels   map[string]string

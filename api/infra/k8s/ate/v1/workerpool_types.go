@@ -78,7 +78,8 @@ type WorkerPoolPodTemplate struct {
 
 	// serviceAccountName for the worker pods. The ServiceAccount must exist
 	// in the WorkerPool's namespace. When omitted, the pods run as the
-	// "ateworker" ServiceAccount, which the controller creates.
+	// "ateworker" ServiceAccount, which the controller creates. Worker pods
+	// never get a ServiceAccount token, whichever ServiceAccount they use.
 	//
 	// +optional
 	// +kubebuilder:validation:MinLength=1
