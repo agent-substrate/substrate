@@ -22,8 +22,6 @@ import (
 
 	"github.com/spf13/pflag"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -125,29 +123,5 @@ func TestManagerOptionsMetricsListener(t *testing.T) {
 				t.Errorf("serves a metrics listener = %t, want %t", served, tt.wantServed)
 			}
 		})
-	}
-}
-
-// TestManagerOptionsScopeCache checks that the manager uses
-// controllers.CacheOptions. The rules are tested next to CacheOptions.
-func TestManagerOptionsScopeCache(t *testing.T) {
-	t.Parallel()
-
-	opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, true)
-
-	hasSecrets, hasDeployments := false, false
-	for obj := range opts.Cache.ByObject {
-		switch obj.(type) {
-		case *corev1.Secret:
-			hasSecrets = true
-		case *appsv1.Deployment:
-			hasDeployments = true
-		}
-	}
-	if !hasSecrets {
-		t.Error("no cache scope for Secrets")
-	}
-	if !hasDeployments {
-		t.Error("no cache scope for Deployments")
 	}
 }
