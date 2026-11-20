@@ -80,6 +80,34 @@ func TestDocFormat(t *testing.T) {
 			comment: "Summary.\n\n+k8s:optional\n\nMore prose.",
 			want:    []lint.Finding{{Subject: "test.Widget.name", Message: `doc comment has text after its directives: "More prose."`}},
 		},
+		{
+			name:    "empty preview directive",
+			comment: "Summary.\n\n+ate:preview=",
+			want:    []lint.Finding{{Subject: "test.Widget.name", Message: `invalid +ate: directive "+ate:preview="; want "+ate:preview=<UpperCamelCaseGate>"`}},
+		},
+		{
+			name:    "quoted preview directive",
+			comment: "Summary.\n\n+ate:preview=\"ExternalVolumes\"",
+			want:    []lint.Finding{{Subject: "test.Widget.name", Message: `invalid +ate: directive "+ate:preview=\"ExternalVolumes\""; want "+ate:preview=<UpperCamelCaseGate>"`}},
+		},
+		{
+			name:    "ifDisabled without matching preview tag",
+			comment: "Summary.\n\n+k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden",
+			want:    []lint.Finding{{Subject: "test.Widget.name", Message: "field has +k8s:ifDisabled(ExternalVolumes) without matching +ate:preview=ExternalVolumes"}},
+		},
+		{
+			name:    "multiple ifDisabled lines checked",
+			comment: "Summary.\n\n+ate:preview=ExternalVolumes\n+k8s:ifDisabled(OtherGate)=+k8s:forbidden\n+k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden",
+			want:    []lint.Finding{{Subject: "test.Widget.name", Message: "field has +k8s:ifDisabled(OtherGate) without matching +ate:preview=OtherGate"}},
+		},
+		{
+			name:    "directive text inside internal note ignored",
+			comment: "Summary.\n\n(--\n+ate:preview=Fake\n--)\n\n+k8s:optional",
+		},
+		{
+			name:    "ifDisabled with matching preview tag",
+			comment: "Summary.\n\n+ate:preview=ExternalVolumes\n+k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

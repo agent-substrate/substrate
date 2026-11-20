@@ -661,3 +661,39 @@ func TestSummary(t *testing.T) {
 		})
 	}
 }
+
+func TestBuild_PreviewGate(t *testing.T) {
+	const proto = `
+syntax = "proto3";
+package test;
+
+message Widget {
+  // Plain field.
+  string plain = 1;
+
+  // Gated field.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  string gated = 2;
+
+  // Gated field with a directive note.
+  //
+  // +ate:preview=GoldenEgressPolicy # server and client opt-in
+  string gated_with_note = 3;
+}
+`
+	api, err := model.Build(t.Context(), proto)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(api.Messages) != 1 || len(api.Messages[0].Fields) != 3 {
+		t.Fatalf("unexpected messages: %+v", api.Messages)
+	}
+	fields := api.Messages[0].Fields
+	for i, want := range []string{"", "ExternalVolumes", "GoldenEgressPolicy"} {
+		if fields[i].PreviewGate != want {
+			t.Errorf("fields[%d] (%s).PreviewGate = %q, want %q", i, fields[i].Name, fields[i].PreviewGate, want)
+		}
+	}
+}

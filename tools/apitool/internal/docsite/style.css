@@ -16,7 +16,8 @@
 
 /* The site sets the colors and fonts on .apiref: --apiref-bg,
    --apiref-bg-raised, --apiref-bg-sunken, --apiref-fg, --apiref-fg-muted,
-   --apiref-border, --apiref-accent, --apiref-mono, and the code colors
+   --apiref-border, --apiref-accent, --apiref-mono, --apiref-preview-bg,
+   --apiref-preview-fg, --apiref-preview-border, and the code colors
    --apiref-code-type, -string, -number, -keyword and -punct. */
 
 .apiref {
@@ -30,10 +31,38 @@
 
 .apiref .mono { font-family: var(--apiref-mono); font-size: 0.92em; }
 
+.apiref .apiref-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+}
+
 .apiref .search-wrap {
   position: relative;
+  flex: 1 1 18rem;
   max-width: 36rem;
 }
+
+.apiref .preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--apiref-fg-muted);
+  font-size: 0.9em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.apiref .preview-toggle:hover { color: var(--apiref-fg); }
+
+.apiref .preview-toggle input {
+  accent-color: var(--apiref-accent);
+  cursor: pointer;
+}
+
+.apiref.hide-preview .preview-field { display: none; }
 
 .apiref #apiref-search {
   width: 100%;
@@ -416,6 +445,12 @@
   border: 1px solid var(--apiref-border);
   border-radius: 4px;
   padding: 0 0.35em;
+}
+
+.apiref .tag-preview {
+  color: var(--apiref-preview-fg, var(--apiref-accent));
+  background: var(--apiref-preview-bg, var(--apiref-bg));
+  border-color: var(--apiref-preview-border, var(--apiref-border));
 }
 
 /* The site's docs layout leaves the reference too narrow for two columns

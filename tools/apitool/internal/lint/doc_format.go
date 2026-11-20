@@ -15,6 +15,7 @@
 package lint
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -25,37 +26,86 @@ import (
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
+var (
+	ifDisabledDirective = regexp.MustCompile(`^\+k8s:ifDisabled\(([^)]+)\)=`)
+	gateNamePattern     = regexp.MustCompile(`^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*$`)
+	internalNoteSpan    = regexp.MustCompile(`(?s)\(--.*?--\)`)
+)
+
 var DocFormat = Rule{
 	Name:        "doc-format",
-	Description: "Every doc comment closes each \"(--\" internal note with \"--)\", ends with its +k8s: and +ate: directives, with nothing after them, and has no raw HTML.",
+	Description: "Every doc comment closes each \"(--\" internal note with \"--)\", ends with its +k8s: and +ate: directives, with nothing after them, uses valid +ate:preview directives, and has no raw HTML.",
 	Check: allOf(
-		forEachMessage(func(m model.Message) []Finding { return checkDocFormat(m.FullName, m.Comment) }),
+		forEachMessage(func(m model.Message) []Finding { return checkDocFormat(m.FullName, m.Comment, false) }),
 		forEachField(func(m model.Message, f model.Field) []Finding {
-			return checkDocFormat(m.FullName.Append(f.Name), f.Comment)
+			return checkDocFormat(m.FullName.Append(f.Name), f.Comment, true)
 		}),
 		forEachEnum(checkEnumDocFormat),
-		forEachMethod(func(rpc model.Method) []Finding { return checkDocFormat(subjectOf(rpc), rpc.Comment) }),
+		forEachMethod(func(rpc model.Method) []Finding { return checkDocFormat(subjectOf(rpc), rpc.Comment, false) }),
 	),
 }
 
 func checkEnumDocFormat(e model.Enum) []Finding {
-	findings := checkDocFormat(e.FullName, e.Comment)
+	findings := checkDocFormat(e.FullName, e.Comment, false)
 	for _, v := range e.Values {
-		findings = append(findings, checkDocFormat(e.FullName.Append(v.Name), v.Comment)...)
+		findings = append(findings, checkDocFormat(e.FullName.Append(v.Name), v.Comment, false)...)
 	}
 	return findings
 }
 
-func checkDocFormat(subject protoreflect.FullName, comment string) []Finding {
+func checkDocFormat(subject protoreflect.FullName, comment string, allowPreview bool) []Finding {
 	var findings []Finding
+	stripped := comment
 	if !internalNotesBalanced(comment) {
 		findings = append(findings, findingf(subject, `doc comment has an internal note that isn't opened with "(--" and closed with "--)"`))
+	} else {
+		stripped = internalNoteSpan.ReplaceAllString(comment, "")
 	}
-	if line, ok := textAfterDirectives(comment); ok {
+	if line, ok := textAfterDirectives(stripped); ok {
 		findings = append(findings, findingf(subject, "doc comment has text after its directives: %q", line))
 	}
+	findings = append(findings, checkPreviewDirectives(subject, stripped, allowPreview)...)
 	if html, ok := rawHTML(model.PublicDoc(comment)); ok {
 		findings = append(findings, findingf(subject, "doc comment has raw HTML, which shows as literal text; put a placeholder in a code span: %q", html))
+	}
+	return findings
+}
+
+func checkPreviewDirectives(subject protoreflect.FullName, comment string, allowPreview bool) []Finding {
+	var findings []Finding
+	var previewGate string
+	var ifDisabledGates []string
+	for line := range strings.SplitSeq(comment, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if i := strings.IndexByte(trimmed, '#'); i >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:i])
+		}
+		if strings.HasPrefix(trimmed, "+ate:") {
+			if !allowPreview {
+				findings = append(findings, findingf(subject, "+ate: directive is only supported on fields: %q", trimmed))
+				continue
+			}
+			gate, ok := strings.CutPrefix(trimmed, "+ate:preview=")
+			if !ok || !gateNamePattern.MatchString(gate) {
+				findings = append(findings, findingf(subject, `invalid +ate: directive %q; want "+ate:preview=<UpperCamelCaseGate>"`, trimmed))
+				continue
+			}
+			if previewGate != "" {
+				findings = append(findings, findingf(subject, "field has multiple +ate:preview directives"))
+				continue
+			}
+			previewGate = gate
+		}
+		if m := ifDisabledDirective.FindStringSubmatch(trimmed); m != nil {
+			ifDisabledGates = append(ifDisabledGates, strings.Trim(m[1], `"`))
+		}
+	}
+	if allowPreview {
+		for _, g := range ifDisabledGates {
+			if previewGate != g {
+				findings = append(findings, findingf(subject, "field has +k8s:ifDisabled(%s) without matching +ate:preview=%s", g, g))
+			}
+		}
 	}
 	return findings
 }

@@ -77,6 +77,8 @@
     });
   });
 
+  var apiref = document.querySelector(".apiref");
+  var previewToggle = document.getElementById("apiref-show-preview");
   var index = JSON.parse(document.getElementById("apitool-index").textContent);
   var input = document.getElementById("apiref-search");
   var results = document.getElementById("apiref-search-results");
@@ -94,7 +96,24 @@
 
   var activeIndex = -1;
 
+  function showPreview() {
+    return !previewToggle || previewToggle.checked;
+  }
+
+  if (previewToggle && apiref) {
+    apiref.classList.toggle("hide-preview", !previewToggle.checked);
+    previewToggle.addEventListener("change", function () {
+      apiref.classList.toggle("hide-preview", !previewToggle.checked);
+      if (input.value.trim()) {
+        render(search(input.value));
+      }
+    });
+  }
+
   function matches(entry, query) {
+    if (entry.preview && !showPreview()) {
+      return false;
+    }
     return entry.name.toLowerCase().indexOf(query) !== -1 ||
       entry.fullName.toLowerCase().indexOf(query) !== -1;
   }

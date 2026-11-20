@@ -2665,9 +2665,9 @@ footer {
   }
 
   &--preview {
-    background: #21162d;
-    border-color: #58397a;
-    color: #d2a8ff;
+    background: $substrate-preview-bg;
+    border-color: $substrate-preview-border;
+    color: $substrate-preview-fg;
   }
 
   &--experimental {
@@ -2707,8 +2707,8 @@ footer {
   vertical-align: middle;
 
   &--preview {
-    background: #21162d;
-    color: #d2a8ff;
+    background: $substrate-preview-bg;
+    color: $substrate-preview-fg;
   }
 
   &--experimental {
@@ -3981,4 +3981,7 @@ footer {
   --apiref-code-number: #{$substrate-yellow};
   --apiref-code-keyword: #{$substrate-blue};
   --apiref-code-punct: #{$substrate-muted};
+  --apiref-preview-bg: #{$substrate-preview-bg};
+  --apiref-preview-fg: #{$substrate-preview-fg};
+  --apiref-preview-border: #{$substrate-preview-border};
 }
