@@ -27,7 +27,10 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
-const requestsMetric = "ate.imagecache.requests"
+const (
+	requestsMetric = "ate.imagecache.requests"
+	sizeMetric     = "ate.imagecache.size"
+)
 
 // errTypeOther is the OTel registry's fallback, used for a failure that
 // carries no status of its own. It is spelled _OTHER, not the "unknown" of the
@@ -55,6 +58,29 @@ func newRequestsCounter(meter metric.Meter) (metric.Int64Counter, error) {
 		return nil, fmt.Errorf("create %s counter: %w", requestsMetric, err)
 	}
 	return counter, nil
+}
+
+// observeSize reports the layer pool's size as ate.imagecache.size on every
+// collection. Measuring reads one size file per layer, so it doesn't depend on
+// any eviction loop having run.
+func (s *Store) observeSize(meter metric.Meter) error {
+	_, err := meter.Int64ObservableUpDownCounter(
+		sizeMetric,
+		metric.WithUnit("By"),
+		metric.WithDescription("Bytes the layers of the node-local image cache hold."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			n, err := s.CacheSize()
+			if err != nil {
+				return err
+			}
+			o.Observe(n)
+			return nil
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("create %s up/down counter: %w", sizeMetric, err)
+	}
+	return nil
 }
 
 // recordRequest counts one EnsureImage lookup. A store with no meter records

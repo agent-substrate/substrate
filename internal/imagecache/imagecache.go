@@ -284,7 +284,8 @@ func WithPullTimeout(d time.Duration) Option {
 	return func(s *Store) { s.pullTimeout = d }
 }
 
-// WithMeter attaches the meter the store reports ate.imagecache.requests on.
+// WithMeter attaches the meter the store reports ate.imagecache.requests and
+// ate.imagecache.size on.
 // Without it the store records nothing, so a caller with no metrics pipeline
 // needs no meter provider.
 func WithMeter(m metric.Meter) Option {
@@ -327,6 +328,9 @@ func New(root string, opts ...Option) (*Store, error) {
 			return nil, err
 		}
 		s.requests = requests
+		if err := s.observeSize(s.meter); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, d := range []string{s.layersDir(), s.manifestsDir()} {
