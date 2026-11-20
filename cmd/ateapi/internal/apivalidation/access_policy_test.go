@@ -17,6 +17,7 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -146,6 +147,15 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 			p.Bindings[1].Members = []string{"user:*"}
 		})},
 		wantError: field.ErrorList{field.Invalid(policyBindings.Index(1).Child("members").Index(0), nil, "")},
+	}, {
+		// Raw member is 261 characters (within the generated maxLength=512,
+		// which counts characters), but percent-encoding expands each ':' to
+		// "%3A", pushing the OpenFGA TupleKey.User past its 512-byte limit.
+		name: "member whose encoded form exceeds the OpenFGA user limit",
+		req: &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
+			p.Bindings[0].Members = []string{"user:" + strings.Repeat("a:", 128)}
+		})},
+		wantError: field.ErrorList{field.Invalid(policyBindings.Index(0).Child("members").Index(0), nil, "")},
 	}, {
 		name: "members at the policy limit",
 		req: &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
