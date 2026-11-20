@@ -13,18 +13,32 @@ A Kubernetes-native CLI plugin for managing Substrate Actor and Worker lifecycle
 
 ## Running the CLI
 
-There are two ways to run the tool, depending on whether you are developing locally or installing it permanently.
+`kubectl` discovers any executable named `kubectl-ate` on `PATH` as `kubectl ate`.
 
-### 1. Install as a native `kubectl` Plugin
-You can use `go install` to compile the tool and place the binary directly into your Go bin directory (which should be in your `$PATH`). Because the source folder is named `kubectl-ate`, Kubernetes will automatically recognize the resulting binary!
+### 1. Install a release binary
+
+Releases on [GitHub](https://github.com/agent-substrate/substrate/releases) attach static `kubectl-ate` binaries for Linux and macOS on `amd64` and `arm64`, each with a `.sha256` checksum file. Download the binary for your platform and its `.sha256` file, verify the checksum, and place the binary on your `PATH` as `kubectl-ate`:
 
 ```bash
+shasum -a 256 -c kubectl-ate-linux-amd64.sha256
+install -m 0755 kubectl-ate-linux-amd64 ~/.local/bin/kubectl-ate
+```
+
+### 2. Install from source
+
+Clone the repository and run `go install` from its root:
+
+```bash
+git clone https://github.com/agent-substrate/substrate.git
+cd substrate
 go install ./cmd/kubectl-ate
 ```
-You can now run it seamlessly anywhere as a native Kubernetes command: `kubectl ate <command>`.
 
-### 2. Run directly from source (Development)
-If you are testing changes to the codebase, you can bypass compilation and run the CLI directly from the source tree:
+`go install` writes the binary to `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when `GOBIN` is unset. Make sure that directory is on your `PATH`.
+
+### 3. Run from source
+
+From the repository root, run the CLI directly without installing a binary:
 
 ```bash
 go run ./cmd/kubectl-ate <command>
