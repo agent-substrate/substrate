@@ -109,7 +109,7 @@ func TestSparseZstdRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer dst.Close()
-			size, err := readSparseZstd(dst, bytes.NewReader(buf.Bytes()[len(sparseMagic):]))
+			size, err := readSparseZstd(dst, bytes.NewReader(buf.Bytes()[len(sparseMagic):]), true)
 			if err != nil {
 				t.Fatalf("readSparseZstd: %v", err)
 			}
@@ -205,7 +205,7 @@ func TestReadSparseZstdRejectsMalformed(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer dst.Close()
-			_, err = readSparseZstd(dst, bytes.NewReader(tc.stream))
+			_, err = readSparseZstd(dst, bytes.NewReader(tc.stream), true)
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.want)
 			}
@@ -227,7 +227,7 @@ func TestReadSparseZstdTruncated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dst.Close()
-	if _, err := readSparseZstd(dst, bytes.NewReader(stream)); err == nil {
+	if _, err := readSparseZstd(dst, bytes.NewReader(stream), true); err == nil {
 		t.Fatal("expected an error for a stream missing its end sentinel, got nil")
 	}
 }
