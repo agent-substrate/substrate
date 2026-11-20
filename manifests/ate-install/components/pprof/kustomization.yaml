@@ -1,0 +1,167 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Enables Go runtime net/http/pprof listeners (:6060) across ate-system Go
+# workloads and propagates worker pprof settings via ate-controller for
+# benchmarking. Never install this on a cluster that serves real actors.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: ate-api-server
+      namespace: ate-system
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-api-server
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-api-server
+              env:
+              - name: ATE_PPROF_LISTEN_ADDR
+                value: ":6060"
+              - name: GRPC_GO_SERVER_GOROUTINE_LABELS
+                value: "grpc.method=true"
+              ports:
+              - name: pprof
+                containerPort: 6060
+                protocol: TCP
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: atelet
+      namespace: ate-system
+      labelSelector: ate.dev/fake-atelet notin (true)
+    patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: atelet
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: atelet
+              env:
+              - name: ATE_PPROF_LISTEN_ADDR
+                value: ":6060"
+              - name: GRPC_GO_SERVER_GOROUTINE_LABELS
+                value: "grpc.method=true"
+              ports:
+              - name: pprof
+                containerPort: 6060
+                protocol: TCP
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: ate-controller
+      namespace: ate-system
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-controller
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-controller
+              env:
+              - name: ATE_PPROF_LISTEN_ADDR
+                value: ":6060"
+              - name: ATE_WORKER_PPROF
+                value: "true"
+              ports:
+              - name: pprof
+                containerPort: 6060
+                protocol: TCP
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-router
+      namespace: ate-system
+      labelSelector: ate.dev/dataplane notin (agentgateway)
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: atenet-router
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: atenet-router
+              env:
+              - name: ATE_PPROF_LISTEN_ADDR
+                value: ":6060"
+              - name: GRPC_GO_SERVER_GOROUTINE_LABELS
+                value: "grpc.method=true"
+              ports:
+              - name: pprof
+                containerPort: 6060
+                protocol: TCP
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+      labelSelector: ate.dev/dataplane notin (agentgateway)
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: atenet-egress
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ext-proc
+              env:
+              - name: ATE_PPROF_LISTEN_ADDR
+                value: ":6060"
+              - name: GRPC_GO_SERVER_GOROUTINE_LABELS
+                value: "grpc.method=true"
+              ports:
+              - name: pprof
+                containerPort: 6060
+                protocol: TCP
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: ate-system-observability
+      namespace: ate-system
+    patch: |-
+      - op: add
+        path: /spec/ingress/0/ports/-
+        value:
+          port: pprof
+          protocol: TCP

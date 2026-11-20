@@ -38,6 +38,10 @@ patches:
       kind: DaemonSet
       labelSelector: app=atelet
     patch: |-
+      # Lets component patches skip fake-atelet.
+      - op: add
+        path: /metadata/labels/ate.dev~1fake-atelet
+        value: "true"
       - op: add
         path: /spec/template/metadata/labels/ate.dev~1fake-atelet
         value: "true"

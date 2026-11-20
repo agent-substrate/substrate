@@ -31,6 +31,9 @@ patches:
       metadata:
         name: atenet-egress
         namespace: ate-system
+        # Lets component patches skip the agentgateway dataplane.
+        labels:
+          ate.dev/dataplane: agentgateway
       spec:
         template:
           spec:
