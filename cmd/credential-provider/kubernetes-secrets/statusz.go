@@ -35,12 +35,13 @@ import (
 // statusContext is the /statusz payload; the JSON form is the contract tests
 // and tooling read, the HTML form renders the same data.
 type statusContext struct {
-	Version      string              `json:"version"`
-	ProviderName string              `json:"provider_name"`
-	Args         string              `json:"args"`
-	Flags        map[string]string   `json:"flags"`
-	InjectorSAN  string              `json:"injector_san"`
-	PolicyGrants map[string][]string `json:"policy_grants"`
+	Version            string                      `json:"version"`
+	ProviderName       string                      `json:"provider_name"`
+	Args               string                      `json:"args"`
+	Flags              map[string]string           `json:"flags"`
+	InjectorSAN        string                      `json:"injector_san"`
+	PolicyGrants       map[string][]string         `json:"policy_grants"`
+	PolicyGrantDetails map[string][]NamespaceGrant `json:"policy_grant_details"`
 }
 
 // newStatuszHandler serves /statusz over the provider's state.
@@ -50,12 +51,13 @@ func newStatuszHandler(srv *Server) http.HandlerFunc {
 		pflag.VisitAll(func(f *pflag.Flag) { flags[f.Name] = f.Value.String() })
 
 		data := statusContext{
-			Version:      version.String(),
-			ProviderName: ProviderName,
-			Args:         strings.Join(os.Args, " "),
-			Flags:        flags,
-			InjectorSAN:  *injectorIdentity,
-			PolicyGrants: srv.Grants(),
+			Version:            version.String(),
+			ProviderName:       ProviderName,
+			Args:               strings.Join(os.Args, " "),
+			Flags:              flags,
+			InjectorSAN:        *injectorIdentity,
+			PolicyGrants:       srv.Grants(),
+			PolicyGrantDetails: srv.GrantDetails(),
 		}
 
 		if strings.Contains(req.Header.Get("Accept"), "application/json") || req.URL.Query().Get("format") == "json" {
@@ -89,11 +91,13 @@ required caller SAN: {{.InjectorSAN}}<br>
 args: {{.Args}}</p>
 
 <h2>Namespace policy (as loaded at startup)</h2>
-{{if .PolicyGrants}}
+{{if .PolicyGrantDetails}}
 <table>
-<tr><th>atespace</th><th>allowed namespaces</th></tr>
-{{range $atespace, $namespaces := .PolicyGrants}}
-<tr><td>{{$atespace}}</td><td>{{range $namespaces}}{{.}} {{end}}</td></tr>
+<tr><th>atespace</th><th>namespace</th><th>secret selector</th></tr>
+{{range $atespace, $grants := .PolicyGrantDetails}}
+{{range $grants}}
+<tr><td>{{$atespace}}</td><td>{{.Namespace}}</td><td>{{if .MatchLabels}}{{range $k, $v := .MatchLabels}}{{$k}}={{$v}} {{end}}{{else}}*{{end}}</td></tr>
+{{end}}
 {{end}}
 </table>
 {{else}}
