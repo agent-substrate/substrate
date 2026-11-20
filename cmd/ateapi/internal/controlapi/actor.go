@@ -518,11 +518,10 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 	return &ateapi.SuspendActorResponse{Actor: actor}, nil
 }
 
-// SuspendActorRequestedByWorker takes the lease even if another suspend has
-// just released the worker. The caller authorizes the proposal.
+// SuspendActorRequestedByWorker runs a suspend proposal authorized by the caller.
 func (s *RPCService) SuspendActorRequestedByWorker(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
 	setSpanActorRefAttributes(ctx, actorRef)
-	actor, err := s.actorWorkflow.suspendActor(ctx, actorRef, suspendAsync, true)
+	actor, err := s.actorWorkflow.SuspendActorRequestedByWorker(ctx, actorRef)
 	return suspendActorResult(ctx, actorRef, actor, err)
 }
 

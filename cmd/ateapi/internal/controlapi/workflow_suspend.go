@@ -75,11 +75,18 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 // fast-forwards past the steps a previous attempt completed, deriving
 // progress from the persisted actor alone.
 func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (*ateapi.Actor, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	return w.suspendActor(ctx, actorRef, mode, false)
 }
 
-func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, requireLease bool) (_ *ateapi.Actor, err error) {
+// SuspendActorRequestedByWorker requires the lease even after another suspend
+// has released the worker.
+func (w *ActorWorkflow) SuspendActorRequestedByWorker(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
+	return w.suspendActor(ctx, actorRef, suspendAsync, true)
+}
+
+func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, requireLease bool) (_ *ateapi.Actor, err error) {
 	start := time.Now()
 	var actor *ateapi.Actor
 	var actorTemplate *ateapi.ActorTemplate
