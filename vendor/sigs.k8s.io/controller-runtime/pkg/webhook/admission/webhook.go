@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-   http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -89,8 +89,7 @@ func (r *Response) Complete(req Request) error {
 	if err != nil {
 		return err
 	}
-	patchType := admissionv1.PatchTypeJSONPatch
-	r.PatchType = &patchType
+	r.PatchType = new(admissionv1.PatchTypeJSONPatch)
 
 	return nil
 }
@@ -156,7 +155,7 @@ func (wh *Webhook) WithRecoverPanic(recoverPanic bool) *Webhook {
 func (wh *Webhook) Handle(ctx context.Context, req Request) (response Response) {
 	defer func() {
 		if r := recover(); r != nil {
-			admissionmetrics.WebhookPanics.WithLabelValues().Inc()
+			admissionmetrics.WebhookPanics.Inc()
 
 			if wh.RecoverPanic == nil || *wh.RecoverPanic {
 				for _, fn := range utilruntime.PanicHandlers {
