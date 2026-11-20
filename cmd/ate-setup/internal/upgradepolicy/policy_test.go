@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ func TestCheckUpgrade(t *testing.T) {
 		{name: "skipped patches", from: "v1.2.1", to: "v1.2.9"},
 		{name: "next minor", from: "v1.2.4", to: "v1.3.0"},
 		{name: "next minor later patch", from: "v1.2.4", to: "v1.3.7"},
+		{name: "same release", from: "v1.2.3", to: "v1.2.3"},
 		{name: "maximum minor patch", from: "v1." + maxMinor + ".0", to: "v1." + maxMinor + ".1"},
 		{name: "empty source", to: "v1.2.3", wantError: "source release is empty"},
 		{name: "empty target", from: "v1.2.3", wantError: "target release is empty"},
@@ -39,7 +40,6 @@ func TestCheckUpgrade(t *testing.T) {
 		{name: "build metadata", from: "v1.2.3", to: "v1.2.4+build.1", wantError: "final release"},
 		{name: "image digest", from: "v1.2.3", to: "v1.2.4@sha256:1234", wantError: "vMAJOR.MINOR.PATCH"},
 		{name: "before GA", from: "v0.9.1", to: "v1.0.0", wantError: "applies from v1.0.0"},
-		{name: "same release", from: "v1.2.3", to: "v1.2.3", wantError: "must be newer"},
 		{name: "older patch", from: "v1.2.3", to: "v1.2.2", wantError: "must be newer"},
 		{name: "older minor", from: "v1.2.3", to: "v1.1.9", wantError: "must be newer"},
 		{name: "skipped minor", from: "v1.2.3", to: "v1.4.0", wantError: "skips a minor release"},
