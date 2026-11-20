@@ -230,6 +230,11 @@ type Field struct {
 	// a secret. For example, true for EnvVar.value
 	// (`string value = 2 [ debug_redact = true ];`).
 	Redacted bool
+
+	// PreviewGate is the preview gate the field's +ate:preview=<Gate>
+	// directive names, or "" when the field is not gated. For example,
+	// "ExternalVolumes" for Volume.external.
+	PreviewGate string
 }
 
 // Enum is one enum declared in the file, top-level or nested.
@@ -527,13 +532,15 @@ func resourceAnnotation(md protoreflect.MessageDescriptor) (*ResourceAnnotation,
 }
 
 func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescriptor) Field {
+	c := comment(fd, field)
 	f := Field{
-		Name:     field.Name(),
-		Number:   int32(field.Number()),
-		Comment:  comment(fd, field),
-		Repeated: field.IsList(),
-		Kind:     field.Kind(),
-		Redacted: field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
+		Name:        field.Name(),
+		Number:      int32(field.Number()),
+		Comment:     c,
+		Repeated:    field.IsList(),
+		Kind:        field.Kind(),
+		Redacted:    field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
+		PreviewGate: previewGate(c),
 	}
 
 	switch {
@@ -658,6 +665,22 @@ func Summary(comment string) string {
 func isDirective(line string) bool {
 	line = strings.TrimSpace(line)
 	return strings.HasPrefix(line, "+k8s:") || strings.HasPrefix(line, "+ate:")
+}
+
+// previewGate returns the gate name from comment's +ate:preview=<Gate>
+// directive, or "" when comment has none.
+func previewGate(comment string) string {
+	const prefix = "+ate:preview="
+	for line := range strings.SplitSeq(internalNote.ReplaceAllString(comment, ""), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			if i := strings.IndexByte(rest, '#'); i >= 0 {
+				rest = rest[:i]
+			}
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
 
 // collapseBlankRuns replaces each run of consecutive blank lines with one.

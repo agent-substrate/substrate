@@ -54,6 +54,7 @@ type indexEntry struct {
 	Name     string `json:"name"`
 	FullName string `json:"fullName"`
 	Anchor   string `json:"anchor"`
+	Preview  bool   `json:"preview,omitempty"`
 }
 
 type pageData struct {
@@ -269,6 +270,9 @@ type attrNode struct {
 	// TypeAnchor is the anchor Type links to, or "" if it links nowhere.
 	TypeAnchor string
 	Doc        string
+	// PreviewGate is the preview gate the field requires, or "" when it is
+	// not gated.
+	PreviewGate string
 	// Tags label the row, such as "optional" or a Kubernetes field's
 	// "required".
 	Tags     []string
@@ -289,10 +293,11 @@ func (b viewBuilder) attrNodes(fields []model.Field, ancestors map[protoreflect.
 	nodes := make([]attrNode, len(fields))
 	for i, f := range fields {
 		nodes[i] = attrNode{
-			Name:       string(f.Name),
-			Type:       f.TypeDisplay,
-			TypeAnchor: b.anchors.fieldAnchor(f),
-			Doc:        f.Comment,
+			Name:        string(f.Name),
+			Type:        f.TypeDisplay,
+			TypeAnchor:  b.anchors.fieldAnchor(f),
+			Doc:         f.Comment,
+			PreviewGate: f.PreviewGate,
 		}
 		if f.OneofName != "" {
 			nodes[i].Tags = append(nodes[i].Tags, "oneof "+string(f.OneofName))
@@ -495,7 +500,13 @@ func messageEntries(msg model.Message) []indexEntry {
 func fieldEntries(fields []model.Field, parentFullName protoreflect.FullName, anchor string) []indexEntry {
 	var entries []indexEntry
 	for _, f := range fields {
-		entries = append(entries, indexEntry{Kind: "field", Name: string(f.Name), FullName: string(parentFullName.Append(f.Name)), Anchor: anchor})
+		entries = append(entries, indexEntry{
+			Kind:     "field",
+			Name:     string(f.Name),
+			FullName: string(parentFullName.Append(f.Name)),
+			Anchor:   anchor,
+			Preview:  f.PreviewGate != "",
+		})
 	}
 	return entries
 }

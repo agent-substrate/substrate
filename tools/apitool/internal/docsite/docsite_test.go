@@ -76,13 +76,13 @@ func fixtureAPI(t *testing.T) *model.API {
 				Name:     "Foo",
 				Comment:  `Dangerous: <script>alert(1)</script> & "quotes"`,
 				Fields: []model.Field{
-					{Name: "scalar_field", TypeDisplay: "string", Kind: protoreflect.StringKind},
+					{Name: "scalar_field", TypeDisplay: "string", Kind: protoreflect.StringKind, PreviewGate: "MyGate"},
 					{Name: "message_field", TypeDisplay: "DoRequest", Kind: protoreflect.MessageKind, TypeFullName: "test.DoRequest"},
 					{Name: "enum_field", TypeDisplay: "Color", Kind: protoreflect.EnumKind, TypeFullName: "test.Color"},
 				},
 			},
 			{FullName: "test.DoRequest", Name: "DoRequest", Fields: []model.Field{
-				{Name: "token", Number: 1, TypeDisplay: "string", Kind: protoreflect.StringKind, Redacted: true},
+				{Name: "token", Number: 1, TypeDisplay: "string", Kind: protoreflect.StringKind, Redacted: true, PreviewGate: "TokenGate"},
 			}},
 			{FullName: "test.DoResponse", Name: "DoResponse"},
 			{FullName: "test.Widget", Name: "Widget", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Widgets"}},
@@ -157,6 +157,12 @@ func TestRender_ResourceLinks(t *testing.T) {
 		{"field links its message type", `<a href="#msg-test.DoRequest">DoRequest</a>`},
 		{"field links its enum type", `<a href="#enum-test.Color">Color</a>`},
 		{"scalar field type is not a link", `<td class="mono">string</td>`},
+		{"preview toggle is rendered checked by default", `<input id="apiref-show-preview" type="checkbox" checked>`},
+		{"attr row marks preview field for toggling", `<div class="attr-row preview-field">`},
+		{"attr row shows preview gate badge", `<span class="attr-name">token <span class="tag tag-preview">preview: TokenGate</span></span>`},
+		{"message table row marks preview field for toggling", `<tr class="preview-field">`},
+		{"message table shows preview gate badge", `<td class="mono">scalar_field <span class="tag tag-preview">preview: MyGate</span></td>`},
+		{"proto source line marks preview field for toggling", `<span class="line preview-field" style="--indent: 2">`},
 		{"Kubernetes page is marked", `<section id="resource-test.dev.v1.Sprocket" class="group resource-page k8s-page" hidden>`},
 		{"gRPC page is not marked", `<section id="resource-test.Widget" class="group resource-page" hidden>`},
 		{"Kubernetes resource shows its apiVersion", `<span class="tag mono">test.dev/v1</span>`},
@@ -297,6 +303,7 @@ func TestRender_SearchIndexRoundTrips(t *testing.T) {
 		Name     string `json:"name"`
 		FullName string `json:"fullName"`
 		Anchor   string `json:"anchor"`
+		Preview  bool   `json:"preview"`
 	}
 	if err := json.Unmarshal([]byte(rest[:end]), &entries); err != nil {
 		t.Fatalf("json.Unmarshal(search index) error = %v", err)
@@ -310,19 +317,21 @@ func TestRender_SearchIndexRoundTrips(t *testing.T) {
 
 	want := []struct {
 		Kind, Name, FullName, Anchor string
+		Preview                      bool
 	}{
-		{"message", "Foo", "test.Foo", "msg-test.Foo"},
-		{"field", "scalar_field", "test.Foo.scalar_field", "msg-test.Foo"},
-		{"enum value", "RED", "test.Color.RED", "enum-test.Color"},
-		{"resource", "Gadget", "test.Global.Gadget", "resource-test.Global.Gadget"},
-		{"method", "GetWidgetGadget", "test.Svc.GetWidgetGadget", "method-test.Svc.GetWidgetGadget"},
-		{"resource", "Sprocket", "test.dev.v1.Sprocket", "resource-test.dev.v1.Sprocket"},
-		{"field", "teeth", "test.dev.v1.Sprocket.spec.teeth", "resource-test.dev.v1.Sprocket"},
+		{"message", "Foo", "test.Foo", "msg-test.Foo", false},
+		{"field", "scalar_field", "test.Foo.scalar_field", "msg-test.Foo", true},
+		{"field", "message_field", "test.Foo.message_field", "msg-test.Foo", false},
+		{"enum value", "RED", "test.Color.RED", "enum-test.Color", false},
+		{"resource", "Gadget", "test.Global.Gadget", "resource-test.Global.Gadget", false},
+		{"method", "GetWidgetGadget", "test.Svc.GetWidgetGadget", "method-test.Svc.GetWidgetGadget", false},
+		{"resource", "Sprocket", "test.dev.v1.Sprocket", "resource-test.dev.v1.Sprocket", false},
+		{"field", "teeth", "test.dev.v1.Sprocket.spec.teeth", "resource-test.dev.v1.Sprocket", false},
 	}
 	for _, w := range want {
 		found := false
 		for _, e := range entries {
-			if e.Kind == w.Kind && e.Name == w.Name && e.FullName == w.FullName && e.Anchor == w.Anchor {
+			if e.Kind == w.Kind && e.Name == w.Name && e.FullName == w.FullName && e.Anchor == w.Anchor && e.Preview == w.Preview {
 				found = true
 				break
 			}
@@ -360,7 +369,13 @@ func TestRender_RealAPISmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	for _, want := range []string{"substrate.ateapi.v1.Actor", `id="resource-ate.dev.v1.WorkerPool"`} {
+	for _, want := range []string{
+		"substrate.ateapi.v1.Actor",
+		`id="resource-ate.dev.v1.WorkerPool"`,
+		`<span class="tag tag-preview">preview: ExternalVolumes</span>`,
+		`<span class="tag tag-preview">preview: GoldenEgressPolicy</span>`,
+		`<span class="tag tag-preview">preview: PerTemplateSnapshotLocation</span>`,
+	} {
 		if !strings.Contains(string(out.Body), want) {
 			t.Errorf("output does not mention %s", want)
 		}
