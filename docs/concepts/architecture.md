@@ -542,6 +542,8 @@ A snapshot captures up to three cumulative layers of actor state, controlled by 
 
 `MEMORY` and `ROOTFS` state is tied to the `ActorTemplate` (`actorTemplateUid`). `MEMORY` state is also tied to the `sandboxRuntime` version it was captured under. Changing an actor's template while suspended keeps its `VOLUMES` data, and its next resume cold-boots the containers. Resume falls back to `ROOTFS` and cold-boots under the default runtime if no worker that offers the snapshot's runtime version has room.
 
+Unix sockets come with a caveat of their own. A socket file cannot travel inside a snapshot tar, so the checkpoint records the sockets it finds in a container's rootfs overlay upper or in a `DurableDir` volume in a small sidecar manifest that travels with the snapshot. A `MEMORY` restore recreates them as unbound socket files: a daemon that comes back with the memory image still finds its bind path, clients get the ordinary `connection refused` of a stale socket instead of `no such file or directory`, and daemons that re-bind when signaled (tmux, on `SIGUSR1`) recover on their own. A `ROOTFS` or `VOLUMES` restore cold-boots the containers, so their workload simply re-creates its sockets on start, as it would after any fresh boot.
+
 Snapshots are stored durably in object storage (GCS or S3) through `objectstore-plugin`. This allows worker capacity in the `WorkerPool` to be reclaimed while an actor is suspended.
 
 ## Security & Isolation

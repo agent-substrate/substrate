@@ -44,7 +44,9 @@ package main
 // restore, so nothing in the snapshot decides a path ateworker later mounts or
 // wipes. A ROOTFS restore puts the upper back and cold-boots on it; a VOLUMES
 // snapshot deliberately excludes rootfs state, so the workload cold-starts on a
-// pristine upper.
+// pristine upper. Sockets cannot ride a tar at all (tarutil skips them), so the
+// checkpoint records them in a sidecar manifest and a MEMORY restore recreates
+// their inodes (see snapshotsockets.go).
 
 import (
 	"context"
@@ -82,14 +84,15 @@ func containerNames(containers []*ateworkerpb.Container) []string {
 
 // stageRootfsUpper prepares the host upper dir for a cold boot: pristine when
 // snapshotDir is empty, otherwise re-materialized from the per-container tars
-// a ROOTFS or MEMORY snapshot left in snapshotDir. Either way any previous
-// activation's contents are gone first. Must run after CleanupSandboxState
-// has dropped the overlay mounts that used the dir.
+// a ROOTFS snapshot left in snapshotDir. Either way any previous activation's
+// contents are gone first. Sockets are not restored: a cold boot starts no
+// processes, so the workload re-creates its own. Must run after
+// CleanupSandboxState has dropped the overlay mounts that used the dir.
 func stageRootfsUpper(actorDirs *ateworkerpb.ActorDirs, snapshotDir string, containers []string) error {
 	if snapshotDir == "" {
 		return resetRootfsUpperDir(actorDirs)
 	}
-	return untarRootfsUpper(rootfsUpperDir(actorDirs), snapshotDir, containers)
+	return untarRootfsUpper(rootfsUpperDir(actorDirs), snapshotDir, containers, false)
 }
 
 // resetRootfsUpperDir gives a cold boot a pristine upper directory: a cold
@@ -109,10 +112,11 @@ func resetRootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) error {
 }
 
 // tarRootfsUpper archives each container's rootfs upperdir under dir into the
-// checkpoint directory, one tar per container. The caller must have paused the
-// guest first: virtiofsd is write-through, so a completed guest write has
-// reached the host overlay's upper by then, but a running guest could still
-// add more after the walk.
+// checkpoint directory, one tar per container, plus a socket sidecar manifest
+// next to each tar that dropped sockets (see snapshotsockets.go). The caller
+// must have paused the guest first: virtiofsd is write-through, so a completed
+// guest write has reached the host overlay's upper by then, but a running
+// guest could still add more after the walk.
 func (s *AteWorkerService) tarRootfsUpper(ctx context.Context, dir, checkpointDir string, containers []string) error {
 	for _, cid := range containers {
 		name, err := rootfsUpperTarFile(cid)
@@ -122,6 +126,9 @@ func (s *AteWorkerService) tarRootfsUpper(ctx context.Context, dir, checkpointDi
 		upper, _ := kata.UpperWorkDirs(dir, cid)
 		if err := s.archiveDir(ctx, filepath.Join(checkpointDir, name), upper); err != nil {
 			return fmt.Errorf("while archiving rootfs upper %q: %w", upper, err)
+		}
+		if _, err := captureSocketManifest(ctx, filepath.Join(checkpointDir, socketsManifestFile(name)), upper); err != nil {
+			return fmt.Errorf("while recording sockets of rootfs upper %q: %w", upper, err)
 		}
 	}
 	return nil
@@ -133,7 +140,12 @@ func (s *AteWorkerService) tarRootfsUpper(ctx context.Context, dir, checkpointDi
 // scratch: nothing else owns it, and stale contents from a previous activation
 // would corrupt the overlay state the guest's find-paths re-opens. Every
 // directory above the upperdirs is created here, never taken from the tar.
-func untarRootfsUpper(dir, snapshotDir string, containers []string) error {
+//
+// restoreSockets recreates the socket inodes the tar dropped, from the sidecar
+// manifest: pass true for a MEMORY restore, whose guest comes back with the
+// daemons still listening on those paths, false for a cold boot, whose
+// workload re-creates whatever sockets it needs on start.
+func untarRootfsUpper(dir, snapshotDir string, containers []string, restoreSockets bool) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("while clearing rootfs upper dir %q: %w", dir, err)
 	}
@@ -151,6 +163,11 @@ func untarRootfsUpper(dir, snapshotDir string, containers []string) error {
 		}
 		if err := tarutil.Extract(filepath.Join(snapshotDir, name), upper); err != nil {
 			return fmt.Errorf("while restoring rootfs upper %q: %w", upper, err)
+		}
+		if restoreSockets {
+			if err := restoreSocketManifest(filepath.Join(snapshotDir, socketsManifestFile(name)), upper); err != nil {
+				return fmt.Errorf("while restoring sockets of rootfs upper %q: %w", upper, err)
+			}
 		}
 	}
 	return nil

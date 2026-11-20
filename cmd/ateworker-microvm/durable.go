@@ -101,13 +101,18 @@ func (s *AteWorkerService) stageDurableVolumes(ctx context.Context, actorUID, sr
 }
 
 // tarDurableVolumes archives each durable-dir volume under dir into the
-// checkpoint directory, one tar per volume, and returns the file names. The
-// caller must have paused the guest first: virtiofsd is write-through, so a
-// completed guest write is on the host by then, but a running guest could still
-// add more after the walk.
+// checkpoint directory, one tar per volume plus a socket sidecar manifest next
+// to each tar that dropped sockets (see snapshotsockets.go), and returns the
+// file names — data files, both kinds, since a manifest restores the volume
+// like its tar does. The caller must have paused the guest first: virtiofsd is
+// write-through, so a completed guest write is on the host by then, but a
+// running guest could still add more after the walk.
 //
-// Sockets the workload left behind are skipped rather than archived (tarutil
-// logs them); they hold no data and the workload recreates them on start.
+// Sockets the workload left behind are skipped by the tar itself (tarutil
+// logs them): they hold no data, and under the cold-boot fidelities the
+// workload recreates them on start. A MEMORY restore does not — the daemons
+// come back still listening on those paths — which is what the manifests are
+// for.
 func (s *AteWorkerService) tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
 	var files []string
 	for _, vol := range volumes {
@@ -115,10 +120,22 @@ func (s *AteWorkerService) tarDurableVolumes(ctx context.Context, dir, checkpoin
 		if err != nil {
 			return nil, err
 		}
-		if err := s.archiveDir(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol)); err != nil {
+		volDir := filepath.Join(dir, vol)
+		if err := s.archiveDir(ctx, filepath.Join(checkpointDir, name), volDir); err != nil {
 			return nil, fmt.Errorf("while archiving durable-dir volume %q: %w", vol, err)
 		}
 		files = append(files, name)
+		manifest := socketsManifestFile(name)
+		written, err := captureSocketManifest(ctx, filepath.Join(checkpointDir, manifest), volDir)
+		if err != nil {
+			return nil, fmt.Errorf("while recording sockets of durable-dir volume %q: %w", vol, err)
+		}
+		if written {
+			// The manifest is a data file like its tar: on VOLUMES the whole
+			// snapshot is data files, and a file left out of the list would
+			// never ship.
+			files = append(files, manifest)
+		}
 	}
 	return files, nil
 }
@@ -128,7 +145,12 @@ func (s *AteWorkerService) tarDurableVolumes(ctx context.Context, dir, checkpoin
 // with no tar in the snapshot (added to the template since) stays empty. It
 // must run before the durable share's virtiofsd starts, so the guest never
 // observes the directory mid-restore.
-func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
+//
+// restoreSockets recreates the socket inodes the tars dropped, from the sidecar
+// manifests: pass true for a MEMORY restore, whose daemons come back still
+// listening on those paths, false for a cold boot, whose workload re-creates
+// its sockets on start.
+func untarDurableVolumes(dir, snapshotDir string, volumes []string, restoreSockets bool) error {
 	for _, vol := range volumes {
 		name, err := durableTarFile(vol)
 		if err != nil {
@@ -144,6 +166,11 @@ func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
 		}
 		if err := tarutil.Extract(tarPath, volDir); err != nil {
 			return fmt.Errorf("while restoring durable-dir volume %q: %w", vol, err)
+		}
+		if restoreSockets {
+			if err := restoreSocketManifest(filepath.Join(snapshotDir, socketsManifestFile(name)), volDir); err != nil {
+				return fmt.Errorf("while restoring sockets of durable-dir volume %q: %w", vol, err)
+			}
 		}
 	}
 	return nil

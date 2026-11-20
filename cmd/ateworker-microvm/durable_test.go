@@ -108,7 +108,7 @@ func TestDurableVolumesRoundTrip(t *testing.T) {
 	// Restore: onto the empty directory atelet re-creates for the actor.
 	dst := t.TempDir()
 	mkVolumeDirs(t, dst, "data", "cache")
-	if err := untarDurableVolumes(dst, checkpointDir, []string{"cache", "data"}); err != nil {
+	if err := untarDurableVolumes(dst, checkpointDir, []string{"cache", "data"}, true); err != nil {
 		t.Fatalf("untarDurableVolumes: %v", err)
 	}
 	// Both volumes come back, each under its own name: the names are what the
@@ -144,7 +144,7 @@ func TestUntarDurableVolumesCannotPlantVolumeDir(t *testing.T) {
 
 	dst := t.TempDir()
 	mkVolumeDirs(t, dst, "data")
-	if err := untarDurableVolumes(dst, snapshotDir, []string{"data"}); err != nil {
+	if err := untarDurableVolumes(dst, snapshotDir, []string{"data"}, false); err != nil {
 		t.Fatalf("untarDurableVolumes: %v", err)
 	}
 	if fi, err := os.Lstat(filepath.Join(dst, "data")); err != nil || !fi.IsDir() {
@@ -161,7 +161,7 @@ func TestUntarDurableVolumesCannotPlantVolumeDir(t *testing.T) {
 func TestUntarDurableVolumesMissingTarIsEmpty(t *testing.T) {
 	dst := t.TempDir()
 	mkVolumeDirs(t, dst, "new")
-	if err := untarDurableVolumes(dst, t.TempDir(), []string{"new"}); err != nil {
+	if err := untarDurableVolumes(dst, t.TempDir(), []string{"new"}, false); err != nil {
 		t.Fatalf("untarDurableVolumes: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(dst, "new"))
