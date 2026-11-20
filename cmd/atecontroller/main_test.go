@@ -112,10 +112,7 @@ func TestManagerOptionsMetricsListener(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			opts, err := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, tt.servePull)
-			if err != nil {
-				t.Fatalf("managerOptions: %v", err)
-			}
+			opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, tt.servePull)
 
 			if opts.Metrics.BindAddress != tt.wantAddr {
 				t.Errorf("metrics address = %q, want %q", opts.Metrics.BindAddress, tt.wantAddr)
@@ -136,10 +133,7 @@ func TestManagerOptionsMetricsListener(t *testing.T) {
 func TestManagerOptionsScopeCache(t *testing.T) {
 	t.Parallel()
 
-	opts, err := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, true)
-	if err != nil {
-		t.Fatalf("managerOptions: %v", err)
-	}
+	opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, true)
 
 	hasSecrets, hasDeployments := false, false
 	for obj := range opts.Cache.ByObject {

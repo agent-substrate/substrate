@@ -39,10 +39,7 @@ func TestCacheOptionsScope(t *testing.T) {
 	t.Parallel()
 
 	ref := types.NamespacedName{Namespace: "ate-system", Name: "pool"}
-	opts, err := CacheOptions(ref)
-	if err != nil {
-		t.Fatalf("CacheOptions: %v", err)
-	}
+	opts := CacheOptions(ref)
 
 	var secrets, deployments cache.ByObject
 	hasSecrets, hasDeployments := false, false

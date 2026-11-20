@@ -70,16 +70,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	cacheOptions, err := CacheOptions(EgressMITMCAPoolRef(installdefaults.SystemNamespace))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cache options failed: %v\n", err)
-		os.Exit(1)
-	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
-		Cache:                  cacheOptions,
+		Cache:                  CacheOptions(EgressMITMCAPoolRef(installdefaults.SystemNamespace)),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "manager creation failed: %v\n", err)
