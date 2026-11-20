@@ -52,7 +52,7 @@ upstream_semconv_version: 1.40.0
 # call of metrics.Registry.MustRegister in the module, and check which of those
 # packages `go list -deps ./cmd/atecontroller` links.
 # -----------------------------------------------------------------------------
-controller_runtime_version: v0.24.1
+controller_runtime_version: v0.25.1-0.20261119155835-be0153ca8953
 
 bridged_metric_families:
   - prefix: controller_runtime_reconcile_

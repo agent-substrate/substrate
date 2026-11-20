@@ -55,12 +55,12 @@ func TestResolveTargetPort(t *testing.T) {
 		want    int32
 		wantErr bool
 	}{
-		{"int target port", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromInt(8080)}), pod, 8080, false},
+		{"int target port", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromInt32(8080)}), pod, 8080, false},
 		{"named target port", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromString("http")}), pod, 8080, false},
 		{"named target not found", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromString("nope")}), pod, 0, true},
 		{"named target resolves to zero", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromString("http")}), zeroPortPod, 0, true},
 		{"unset target port defaults to port", svc(corev1.ServicePort{Port: 80}), pod, 80, false},
-		{"no matching service port", svc(corev1.ServicePort{Port: 443, TargetPort: intstr.FromInt(8443)}), pod, 0, true},
+		{"no matching service port", svc(corev1.ServicePort{Port: 443, TargetPort: intstr.FromInt32(8443)}), pod, 0, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
