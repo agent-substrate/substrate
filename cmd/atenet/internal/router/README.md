@@ -119,7 +119,9 @@ tunnel can write any of this; a callout without an identity is refused.
 Policies are read through a per-actor cache (`--egress-policy-cache-ttl`, 10s
 by default; 0 disables it). The TTL is exactly how stale a decision can be: a
 create, update or delete is visible to new requests within one TTL, and a
-deleted policy becomes a deny. Every policy denial answers a fixed
+deleted policy becomes a deny. Entries are keyed by atespace and actor name,
+so an actor recreated under the same name is decided with its predecessor's
+policy until the entry expires. Every policy denial answers a fixed
 `egress denied` body; the reason is in the sidecar's log.
 
 Credential injection (`replace_headers`) runs on both request legs: a header
