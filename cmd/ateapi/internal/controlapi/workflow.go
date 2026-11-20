@@ -116,6 +116,12 @@ type ActorWorkflow struct {
 	pluginRegistry          VolumePluginRegistry
 	objectStorePlugin       objectstore.ControlProviderClient
 	clusterSnapshotLocation string
+	gcNotifier              actorGCNotifier
+}
+
+// actorGCNotifier receives actors that need deletion cleanup retried.
+type actorGCNotifier interface {
+	Enqueue(ref resources.ActorRef)
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
