@@ -119,6 +119,61 @@ class SummarizeTest(unittest.TestCase):
         self.assertEqual(got["pg_walwrite_wait_conns"], 42.0)
         self.assertEqual(got["pg_lock_wait_conns"], 3.0)
 
+    def test_pause_and_create_server_windows(self):
+        seen_calls = []
+
+        def fake_get_json(url):
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            q = params["query"][0]
+            t = int(params["time"][0])
+            seen_calls.append((q, t))
+            if 'name="SuspendActorAsync"' in q and "locust_server_duration_milliseconds" in q:
+                return {"status": "success", "data": {"result": value(12.0)}}
+            if 'name="CreateActor"' in q and "locust_server_duration_milliseconds" in q:
+                return {"status": "success", "data": {"result": value(25.0)}}
+            return {"status": "success", "data": {"result": []}}
+
+        with mock.patch.object(ladder_steps, "_get_json", fake_get_json):
+            got = ladder_steps.summarize("http://prom", self.STEP)
+
+        want_t = T0 + 175
+        steady_pause_qs = [
+            (q, t) for q, t in seen_calls
+            if 'name="SuspendActorAsync"' in q and "locust_server_duration_milliseconds" in q
+        ]
+        self.assertEqual(len(steady_pause_qs), 5)
+        for q, t in steady_pause_qs:
+            self.assertIn("[145s]", q)
+            self.assertEqual(t, want_t)
+
+        create_qs = [
+            (q, t) for q, t in seen_calls
+            if 'name="CreateActor"' in q and "locust_server_duration_milliseconds" in q
+        ]
+        self.assertEqual(len(create_qs), 5)
+        for q, t in create_qs:
+            self.assertIn(f"@ {T0}", q)
+            self.assertEqual(t, want_t)
+
+        for stat in ("p50", "p90", "p95", "p99", "mean"):
+            self.assertEqual(got[f"pause_server_{stat}_ms"], 12.0)
+            self.assertEqual(got[f"create_server_{stat}_ms"], 25.0)
+
+        nan_setup = self.summarize([('name="CreateActor"', value("NaN"))])
+        for stat in ("p50", "p90", "p95", "p99", "mean"):
+            self.assertIsNone(nan_setup[f"create_server_{stat}_ms"])
+
+    def test_openfga_db_queries_per_s(self):
+        got = self.summarize([
+            ('sum(increase(openfga_datastore_query_count_sum{job="ate-api-server"}[145s]))/145', value(2.0)),
+        ])
+        self.assertEqual(got["openfga_db_queries_per_s"], 2.0)
+
+        missing = self.summarize([])
+        self.assertIsNone(missing["openfga_db_queries_per_s"])
+        self.assertIsNone(missing["create_server_mean_ms"])
+        self.assertIsNone(missing["pause_server_p99_ms"])
+
     def test_query_trims_the_url_and_times_out(self):
         opened = []
 
@@ -156,6 +211,25 @@ class StatsRecordTest(unittest.TestCase):
         summary = {"step": 1, "window": [10, 20], "failures": {}, "ateapi_cores_per_replica": []}
         m = ladder_steps.stats_record(summary, "ts", "c", "t")["measurements"]
         self.assertIsNone(m["ateapi_cores_busiest_replica"])
+
+    def test_openfga_and_create_fields_survive_flattening(self):
+        with mock.patch.object(ladder_steps, "_get_json", prometheus([
+            ('name="CreateActor"', value(25.0)),
+            ('name="SuspendActorAsync"', value(12.0)),
+            ('openfga_datastore_query_count_sum', value(3.0)),
+        ])):
+            summary = ladder_steps.summarize("http://prom", SummarizeTest.STEP)
+        m = ladder_steps.stats_record(summary, "ts", "c", "t")["measurements"]
+        for key in (
+            "pause_server_p50_ms", "pause_server_p90_ms", "pause_server_p95_ms", "pause_server_p99_ms",
+            "create_server_p50_ms", "create_server_p90_ms", "create_server_p95_ms",
+            "create_server_p99_ms", "create_server_mean_ms",
+            "openfga_db_queries_per_s",
+        ):
+            self.assertIn(key, m)
+        self.assertEqual(m["create_server_p99_ms"], 25.0)
+        self.assertEqual(m["pause_server_p99_ms"], 12.0)
+        self.assertEqual(m["openfga_db_queries_per_s"], 3.0)
 
 
 class AppendLadderStepsTest(unittest.TestCase):
@@ -202,8 +276,8 @@ class AppendLadderStepsTest(unittest.TestCase):
 
         def get_json(url):
             calls.append(url)
-            # Step 1 takes some 35 queries, so this fails within step 2.
-            if len(calls) > 40:
+            # Step 1 takes 44 queries, so this fails within step 2.
+            if len(calls) > 50:
                 return {"status": "error"}
             return {"status": "success", "data": {"result": []}}
 
@@ -215,7 +289,7 @@ class AppendLadderStepsTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     ladder_steps.append_ladder_steps(
                         jsonl_path, log_path, "http://prom", "ts", "c", "t", io.StringIO())
-            self.assertGreater(len(calls), 40)
+            self.assertGreater(len(calls), 50)
             self.assertEqual(jsonl_path.read_text(), '{"metric": "locust"}\n')
 
 
