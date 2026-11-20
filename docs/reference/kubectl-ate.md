@@ -47,7 +47,7 @@ The kind overlay installed by `ate-setup --kind deploy ate-system` already provi
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
 kubectl port-forward -n otel-system svc/jaeger 16686:16686 &
-kubectl ate get actor my-counter-1 --trace
+kubectl ate get actor my-counter-1 -a ate-demo-counter --trace
 # open http://localhost:16686 and search for the most recent trace
 ```
 
@@ -115,6 +115,7 @@ kubectl ate top workers
 | `WORKER POD` | The worker pod (`<namespace>/<name>`) currently hosting the actor, or `<none>` while suspended. |
 | `WORKER IPS` | Comma-separated pod IPs of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
+| `ERROR` | Flags whether the actor has crashed (`ERROR`). The full crash reason is available via `-o yaml` or `-o json`. |
 | `AGE` | Time elapsed since the actor was created. |
 
 #### `kubectl ate get worker` output columns

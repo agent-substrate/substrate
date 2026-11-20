@@ -326,6 +326,7 @@ func TestGetWorkersRunner_GetByName_RejectsFilters(t *testing.T) {
 func TestTopWorkersRunner_Success(t *testing.T) {
 	workers := []*ateapi.Worker{
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-1"},
 			WorkerNamespace: "ate-demo-counter",
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-x123",
@@ -337,6 +338,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			},
 		},
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-2"},
 			WorkerNamespace: "ate-demo-counter",
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-y456",
@@ -392,9 +394,9 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME                             POOL      CLASS     STATUS          CPU(CORES)   MEMORY(bytes)
-counter-worker-pool-7b9f8-x123   counter   gvisor    ASSIGNED(1/1)   342m         412Mi
-counter-worker-pool-7b9f8-y456   counter   microvm   FREE            2m           64Mi
+	expected := `NAME           POOL      CLASS     STATUS          CPU(MILLICORES)   MEMORY(bytes)
+worker-uid-1   counter   gvisor    ASSIGNED(1/1)   342m              412Mi
+worker-uid-2   counter   microvm   FREE            2m                64Mi
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -404,6 +406,7 @@ counter-worker-pool-7b9f8-y456   counter   microvm   FREE            2m         
 func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
 	workers := []*ateapi.Worker{
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
@@ -412,6 +415,7 @@ func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
 			},
 		},
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-2"},
 			WorkerNamespace: "ns-2",
 			WorkerPool:      "pool-2",
 			WorkerPod:       "pod-2",
@@ -431,8 +435,8 @@ func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL     CLASS    STATUS   CPU(CORES)            MEMORY(bytes)
-pod-1   pool-1   gvisor   FREE     metrics unavailable   metrics unavailable
+	expected := `NAME           POOL     CLASS    STATUS   CPU(MILLICORES)       MEMORY(bytes)
+worker-uid-1   pool-1   gvisor   FREE     metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -478,8 +482,8 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL     CLASS     STATUS          CPU(CORES)            MEMORY(bytes)
-pod-1   pool-1   microvm   ASSIGNED(1/1)   metrics unavailable   metrics unavailable
+	expected := `NAME       POOL     CLASS     STATUS          CPU(MILLICORES)       MEMORY(bytes)
+worker-1   pool-1   microvm   ASSIGNED(1/1)   metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -489,6 +493,7 @@ pod-1   pool-1   microvm   ASSIGNED(1/1)   metrics unavailable   metrics unavail
 func TestTopWorkersRunner_FilterSelector(t *testing.T) {
 	workers := []*ateapi.Worker{
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
@@ -498,6 +503,7 @@ func TestTopWorkersRunner_FilterSelector(t *testing.T) {
 			},
 		},
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-2"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "other",
 			WorkerPod:       "pod-2",
@@ -518,8 +524,8 @@ func TestTopWorkersRunner_FilterSelector(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL      CLASS    STATUS   CPU(CORES)            MEMORY(bytes)
-pod-1   counter   gvisor   FREE     metrics unavailable   metrics unavailable
+	expected := `NAME           POOL      CLASS    STATUS   CPU(MILLICORES)       MEMORY(bytes)
+worker-uid-1   counter   gvisor   FREE     metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -529,6 +535,7 @@ pod-1   counter   gvisor   FREE     metrics unavailable   metrics unavailable
 func TestTopWorkersRunner_MetricsUnavailable(t *testing.T) {
 	workers := []*ateapi.Worker{
 		{
+			Metadata:        &ateapi.ResourceMetadata{Name: "worker-uid-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
@@ -547,8 +554,8 @@ func TestTopWorkersRunner_MetricsUnavailable(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL     CLASS   STATUS   CPU(CORES)            MEMORY(bytes)
-pod-1   pool-1           FREE     metrics unavailable   metrics unavailable
+	expected := `NAME           POOL     CLASS   STATUS   CPU(MILLICORES)       MEMORY(bytes)
+worker-uid-1   pool-1           FREE     metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
