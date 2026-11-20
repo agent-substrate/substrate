@@ -56,6 +56,23 @@ func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 	return cmd, p
 }
 
+func TestWaitSandboxGoneReturnsFalseWhenReapUnconfirmed(t *testing.T) {
+	tests := []struct {
+		name    string
+		sandbox *sandboxProcess
+	}{
+		{name: "missing sandbox"},
+		{name: "invalid pidfd", sandbox: &sandboxProcess{pidfd: -1}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if waitSandboxGone(t.Context(), tc.sandbox) {
+				t.Fatal("waitSandboxGone = true, want false")
+			}
+		})
+	}
+}
+
 func TestSandboxWaitGoneAfterReap(t *testing.T) {
 	cmd, p := startFakeSandbox(t)
 	_ = cmd.Process.Kill()
