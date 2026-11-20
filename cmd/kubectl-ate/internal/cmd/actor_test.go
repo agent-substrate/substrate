@@ -1138,6 +1138,12 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 
 	var streamCalls int
 	var streamMu sync.Mutex
+	var pod1SinceTime *metav1.Time
+	var pod1SinceSeconds *int64
+	var pod2FirstSinceTime *metav1.Time
+	var pod2FirstSinceSeconds *int64
+	var pod2SecondSinceTime *metav1.Time
+	var pod2SecondSinceSeconds *int64
 
 	mockStreamer := &mockPodLogsStreamer{
 		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
@@ -1149,12 +1155,14 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				if name != "pod-1" {
 					return nil, fmt.Errorf("expected pod-1, got %s", name)
 				}
+				pod1SinceTime = opts.SinceTime
+				pod1SinceSeconds = opts.SinceSeconds
 				// Return a read closer that blocks or keeps stream open
 				// So the migration checking ticker gets triggered.
 				pr, pw := io.Pipe()
 				go func() {
 					// write one line and then keep it open
-					fmt.Fprintln(pw, `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"line 1 from pod-1","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}`)
+					fmt.Fprintln(pw, `2026-05-16T01:03:38.500000000Z {"time":"2026-05-16T01:03:38Z","level":"info","msg":"line 1 from pod-1","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}`)
 					close(lineRead) // guaranteed to have been read because io.Pipe is unbuffered!
 					// wait until context is cancelled
 					<-streamCtx.Done()
@@ -1163,15 +1171,49 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				return pr, nil
 			}
 
-			// Reconnection to pod-2!
-			if name != "pod-2" {
-				return nil, fmt.Errorf("expected pod-2, got %s", name)
+			if streamCalls == 2 {
+				// Reconnection to pod-2!
+				if name != "pod-2" {
+					return nil, fmt.Errorf("expected pod-2, got %s", name)
+				}
+				pod2FirstSinceTime = opts.SinceTime
+				pod2FirstSinceSeconds = opts.SinceSeconds
+
+				// pod-2's node clock is behind pod-1's; if SinceTime was carried over
+				// from pod-1, the kubelet on pod-2 filters this line out.
+
+				// Simulate kubelet filtering based on SinceSeconds for the stale line
+				lines := ""
+				if opts.SinceSeconds == nil || *opts.SinceSeconds > 3600 {
+					lines += `2026-05-16T00:03:37.500000000Z {"time":"2026-05-16T00:03:37Z","level":"info","msg":"stale line from an hour ago on pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n"
+				}
+
+				pod2Stamp := time.Date(2026, 5, 16, 1, 3, 37, 500000000, time.UTC)
+				if opts.SinceTime == nil || !pod2Stamp.Before(opts.SinceTime.Time) {
+					lines += `2026-05-16T01:03:37.500000000Z {"time":"2026-05-16T01:03:37Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n"
+				}
+				return io.NopCloser(strings.NewReader(lines)), nil
 			}
 
-			// Now we can cancel the main context to exit the follow loop
-			cancel()
+			if streamCalls == 3 {
+				// Reconnection to pod-2 after stream 2 ended
+				if name != "pod-2" {
+					return nil, fmt.Errorf("expected pod-2, got %s", name)
+				}
+				pod2SecondSinceTime = opts.SinceTime
+				pod2SecondSinceSeconds = opts.SinceSeconds
 
-			return io.NopCloser(strings.NewReader(`{"time":"2026-05-16T01:03:39Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n")), nil
+				cancel()
+
+				pod2Stamp := time.Date(2026, 5, 16, 1, 3, 37, 500000000, time.UTC)
+				lines := ""
+				if opts.SinceTime == nil || !pod2Stamp.Before(opts.SinceTime.Time) {
+					lines += `2026-05-16T01:03:37.500000000Z {"time":"2026-05-16T01:03:37Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n"
+				}
+				return io.NopCloser(strings.NewReader(lines)), nil
+			}
+
+			return io.NopCloser(strings.NewReader("")), nil
 		},
 	}
 
@@ -1194,6 +1236,33 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	streamMu.Lock()
+	gPod1ST := pod1SinceTime
+	gPod1SS := pod1SinceSeconds
+	gPod2FirstST := pod2FirstSinceTime
+	gPod2FirstSS := pod2FirstSinceSeconds
+	gPod2SecondST := pod2SecondSinceTime
+	gPod2SecondSS := pod2SecondSinceSeconds
+	streamMu.Unlock()
+
+	if gPod1ST != nil || gPod1SS != nil {
+		t.Errorf("pod-1 StreamLogs SinceTime/SinceSeconds = %v/%v, want nil/nil for cold start", gPod1ST, gPod1SS)
+	}
+
+	if gPod2FirstST != nil {
+		t.Errorf("pod-2 first StreamLogs SinceTime = %v, want nil after migrating to a new pod", gPod2FirstST.Time)
+	}
+	if gPod2FirstSS == nil || *gPod2FirstSS < 11 {
+		t.Errorf("pod-2 first StreamLogs SinceSeconds = %v, want >= 11 for migration", gPod2FirstSS)
+	}
+
+	if gPod2SecondST == nil || !gPod2SecondST.Time.Equal(time.Date(2026, 5, 16, 1, 3, 37, 500000000, time.UTC)) {
+		t.Errorf("pod-2 second StreamLogs SinceTime = %v, want 2026-05-16T01:03:37.5Z for same-pod reconnect", gPod2SecondST)
+	}
+	if gPod2SecondSS != nil {
+		t.Errorf("pod-2 second StreamLogs SinceSeconds = %v, want nil for same-pod reconnect", gPod2SecondSS)
+	}
+
 	stdoutStr := stdout.String()
 	if !strings.Contains(stdoutStr, "line 1 from pod-1") {
 		t.Errorf("expected output to contain log from pod-1, got %q", stdoutStr)
@@ -1201,8 +1270,61 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	if !strings.Contains(stdoutStr, "line 1 from pod-2") {
 		t.Errorf("expected output to contain log from pod-2, got %q", stdoutStr)
 	}
+	if strings.Contains(stdoutStr, "stale line from an hour ago on pod-2") {
+		t.Errorf("expected output to omit stale line from pod-2 due to SinceSeconds bound, got %q", stdoutStr)
+	}
+	if strings.Count(stdoutStr, "line 1 from pod-2") > 1 {
+		t.Errorf("expected output to not duplicate line 1 from pod-2 on reconnect, got %q", stdoutStr)
+	}
 }
 
+func TestMigrationSinceSeconds(t *testing.T) {
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name           string
+		prevClose      time.Time
+		tickerInterval time.Duration
+		want           int64
+	}{
+		{
+			name:           "immediate pod switch with fractional ticker rounding up",
+			prevClose:      now.Add(-500 * time.Millisecond),
+			tickerInterval: 2 * time.Second,
+			// age = 0.5s + 2s + 10s = 12.5s -> round up to 13
+			want: 13,
+		},
+		{
+			name:           "elapsed suspend duration plus ticker interval",
+			prevClose:      now.Add(-5 * time.Minute),
+			tickerInterval: 2 * time.Second,
+			// age = 300s + 2s + 10s = 312s
+			want: 312,
+		},
+		{
+			name:           "zero or sub-second floor",
+			prevClose:      now,
+			tickerInterval: 0,
+			// age = 0 + 0 + 10s = 10s -> 10
+			want: 10,
+		},
+		{
+			name:           "negative clock delta clamping",
+			prevClose:      now.Add(1 * time.Hour),
+			tickerInterval: 2 * time.Second,
+			// age = max(now - (now+1h), 0) + 2s + 10s = 0 + 2s + 10s = 12
+			want: 12,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := migrationSinceSeconds(now, test.prevClose, test.tickerInterval)
+			if got != test.want {
+				t.Errorf("migrationSinceSeconds() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	actorName := "act-suspended-mid"
 
@@ -1357,8 +1479,10 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 	foreignLine := `2026-05-16T01:03:39.200000000Z {"time":"2026-05-16T01:03:39Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
 	counterLine := `2026-05-16T01:03:40.300000000Z {"time":"2099-01-01T00:00:00Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
 	// After the reconnect the kubelet re-sends the cursor's second: the
-	// counter line again, then a new lifecycle event in the same second.
-	laterLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	// counter line again, then two new lifecycle events sharing a timestamp in
+	// the same second.
+	checkpointingLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	checkpointedLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointed","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 	wantSince := time.Date(2026, 5, 16, 1, 3, 40, 300000000, time.UTC)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1381,7 +1505,7 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 			case 2:
 				reconnectSince = opts.SinceTime
 				reconnectTimestamps = opts.Timestamps
-				return io.NopCloser(strings.NewReader(counterLine + "\n" + laterLine + "\n")), nil
+				return io.NopCloser(strings.NewReader(counterLine + "\n" + checkpointingLine + "\n" + checkpointedLine + "\n")), nil
 			case 3:
 				close(thirdCall)
 			}
@@ -1432,7 +1556,8 @@ func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *te
 		t.Errorf("reconnect SinceTime = %v, want %v: the kubelet's timestamp on the last line read, not the last line displayed and not the line's own time", reconnectSince.Time, wantSince)
 	}
 	want := "{\"time\":\"2026-05-16T01:03:38Z\",\"message\":\"Actor started\"}\n" +
-		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointing\"}\n"
+		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointing\"}\n" +
+		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointed\"}\n"
 	if got := stdout.String(); got != want {
 		t.Errorf("output =\n%s\nwant\n%s", got, want)
 	}
