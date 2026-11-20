@@ -176,19 +176,15 @@ jobs:
         # "off" is the default install, and proves the suites pass without
         # preview features; "on" enables every one of them.
         preview: ['off', 'on']
-        # IPv4 remains the presubmit gate. IPv6-only and dual-stack run with
-        # Envoy and default features after merge and on the weekly schedule.
+        # IPv4 and IPv6-only run presubmit. Dual-stack joins them after merge
+        # and on the weekly schedule.
         ip_family: >-
           ${{ fromJSON(
             (github.event_name != 'pull_request' && github.event_name != 'merge_group')
             && '["ipv4", "ipv6", "dual"]'
-            || '["ipv4"]'
+            || '["ipv4", "ipv6"]'
           ) }}
         exclude:
-        - dataplane: agentgateway
-          ip_family: ipv6
-        - dataplane: agentgateway
-          ip_family: dual
         - preview: 'on'
           ip_family: ipv6
         - preview: 'on'
