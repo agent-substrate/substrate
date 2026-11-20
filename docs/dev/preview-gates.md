@@ -44,7 +44,8 @@ var realKnownGates = []Gate{
 }
 ```
 
-Gate should always be named in UpperCamelCase.
+Gate should always be named in UpperCamelCase. Document every gate in
+[`docs/reference/preview-gates.md`](../reference/preview-gates.md).
 
 ## Gating API fields
 
@@ -143,7 +144,7 @@ When the feature goes GA, or is removed, keep the gate name in
 `realKnownGates` for a while so existing `--preview` values still parse, but
 make the feature always on (GA) or always off (removed). Then delete the
 `ifDisabled` tags, `IsEnabled`/`IsEnabledFor` checks, and `RequirePreview`
-calls.
+calls, and update [`docs/reference/preview-gates.md`](../reference/preview-gates.md).
 
 <!-- TODO: how do we gate a new RPC method or service? -->
 <!-- TODO: how do we gate a new feature in the CLI? -->

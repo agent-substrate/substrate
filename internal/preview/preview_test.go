@@ -15,7 +15,9 @@
 package preview
 
 import (
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,6 +105,30 @@ func TestRealGatesArePascalCase(t *testing.T) {
 	for _, g := range realKnownGates {
 		if !pascalCase.MatchString(string(g)) {
 			t.Errorf("gate %q is not PascalCase", g)
+		}
+	}
+}
+
+func TestRealGatesAreDocumented(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/reference/preview-gates.md")
+	if err != nil {
+		t.Fatalf("reading preview-gates.md: %v", err)
+	}
+	lines := strings.Split(string(doc), "\n")
+	for _, g := range realKnownGates {
+		heading := "### `" + string(g) + "`"
+		if !slices.Contains(lines, heading) {
+			t.Errorf("docs/reference/preview-gates.md is missing heading line %q for gate %q", heading, g)
+		}
+	}
+
+	protoSrc, err := os.ReadFile("../../api/ateapi/v1/ateapi.proto")
+	if err != nil {
+		t.Fatalf("reading ateapi.proto: %v", err)
+	}
+	for _, m := range regexp.MustCompile(`(?m)^\s*//\s*\+ate:preview=([^\s#]+)`).FindAllStringSubmatch(string(protoSrc), -1) {
+		if err := doVerify(realKnownGates, m[1]); err != nil {
+			t.Errorf("ateapi.proto references unknown preview gate %q: %v", m[1], err)
 		}
 	}
 }
