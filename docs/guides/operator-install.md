@@ -361,8 +361,8 @@ through OpenID Connect discovery. The default issuer is the install's
 ate-idp-server. A custom issuer must route to that ate-idp-server, which
 serves the keys the install signs actor JWTs with. It must also be reachable
 from the ate-api-server pod and serve a certificate that the install's
-service DNS CA trusts. For an issuer whose host does not end in `.svc`, a
-certificate the system roots trust works too.
+service DNS CA trusts. For an issuer whose host ends in neither `.svc` nor
+`.svc.cluster.local`, a certificate the system roots trust works too.
 The exchange fetches the keys once at start, and exits if the issuer's
 certificate does not verify. Then ate-api-server does not start either.
 

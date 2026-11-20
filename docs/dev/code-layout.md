@@ -35,6 +35,12 @@ within this module but are not part of any external API. The Go toolchain
 enforces that nothing outside `go.ate.dev/substrate` can import
 these.
 
+A `pkg/` package may import `internal/` packages and export a narrow API over
+them, so external code runs the same implementation without importing
+`internal/`. `pkg/objectstore/actorauthz` does this. Go allows it because the
+internal rule checks the importer's path. `hack/verify/pkg-external-import.sh`
+builds each such package from a module outside this one.
+
 > **Use `pkg/` sparingly.** Once the project reaches GA, any exported type,
 > function, or field in `pkg/` becomes subject to a compatibility guarantee —
 > removing or renaming it is a breaking change for external consumers. Prefer
