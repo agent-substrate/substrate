@@ -44,10 +44,7 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 		INSERT INTO global_access_policy (id, uid, version, proto)
 		VALUES (true, $1, $2, $3)`, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		return nil, fmt.Errorf("inserting global access policy: %w", err)
+		return nil, mapToStoreError(err, "inserting global access policy")
 	}
 	if err := p.policyManager.ReconcileGlobalBindings(ctx, tx, dbPolicy.GetBindings()); err != nil {
 		return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
@@ -127,13 +124,7 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 		INSERT INTO atespace_access_policies (atespace_name, uid, version, proto)
 		VALUES ($1, $2, $3, $4)`, name, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		if isForeignKeyViolation(err) {
-			return nil, store.ErrFailedPrecondition
-		}
-		return nil, fmt.Errorf("inserting access policy for %s: %w", name, err)
+		return nil, mapToStoreError(err, "inserting access policy for %s", name)
 	}
 	if err := p.policyManager.ReconcileAtespaceBindings(ctx, tx, name, dbPolicy.GetBindings()); err != nil {
 		return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
@@ -237,10 +228,7 @@ func getAccessPolicyRow(ctx context.Context, q querier, query string, args ...an
 	var version int64
 	var protoBytes []byte
 	if err := q.QueryRow(ctx, query, args...).Scan(&uid, &version, &protoBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting access policy: %w", err)
+		return nil, mapToStoreError(err, "getting access policy")
 	}
 	return unmarshalAccessPolicy(uid, version, protoBytes)
 }

@@ -42,10 +42,7 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapi.Atesp
 		VALUES ($1, $2, $3, $4)`,
 		name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		return nil, fmt.Errorf("inserting atespace %q: %w", name, err)
+		return nil, mapToStoreError(err, "inserting atespace %q", name)
 	}
 	return dbAtespace, nil
 }
@@ -54,10 +51,7 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapi.Ate
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting atespace %q: %w", name, err)
+		return nil, mapToStoreError(err, "getting atespace %q", name)
 	}
 	out := &ateapi.Atespace{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
