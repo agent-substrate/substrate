@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -35,8 +36,15 @@ func clearAll(t *testing.T, p *Persistence) {
 
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
+	return newTestPersistence(t, requirePool(t))
+}
+
+// newTestPersistence returns an empty Persistence on pool with an OpenFGA
+// PolicyManager.
+func newTestPersistence(t *testing.T, pool *pgxpool.Pool) *Persistence {
+	t.Helper()
 	ctx := context.Background()
-	p, err := NewPersistence(ctx, requirePool(t))
+	p, err := NewPersistence(ctx, pool)
 	if err != nil {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
