@@ -21,7 +21,7 @@ import (
 	"slices"
 	"sort"
 
-	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 
 	"sigs.k8s.io/yaml"
 )
@@ -109,10 +109,10 @@ func newNamespaceAuthorizer(file namespacePolicyFile) (*NamespaceAuthorizer, err
 		// nothing and look like the policy was simply ignored. Fail loading
 		// instead.
 		for k, v := range p.SecretSelector.labels() {
-			if len(validation.IsQualifiedName(k)) != 0 {
+			if len(content.IsLabelKey(k)) != 0 {
 				return nil, fmt.Errorf("namespace policy %d: invalid label key %q", i, k)
 			}
-			if len(validation.IsValidLabelValue(v)) != 0 {
+			if len(content.IsLabelValue(v)) != 0 {
 				return nil, fmt.Errorf("namespace policy %d: invalid label value %q for key %q", i, v, k)
 			}
 		}
