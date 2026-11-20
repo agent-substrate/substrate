@@ -151,3 +151,9 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 	}
 	return errs
 }
+
+// ValidateCustom_Container_SecurityContext rejects capabilities next to
+// privileged, as ateapi does.
+func ValidateCustom_Container_SecurityContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.SecurityContext) field.ErrorList {
+	return resources.ValidatePrivilegedSecurityContext(fldPath, value.GetPrivileged(), value.GetCapabilities().GetAdd(), value.GetCapabilities().GetDrop())
+}

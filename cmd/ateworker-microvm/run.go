@@ -48,6 +48,8 @@ import (
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/wakeupprobe"
 	"golang.org/x/sys/unix"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // runningActor holds the live state for one actor's micro-VM. ateworker owns the
@@ -650,8 +652,12 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
+		privileged := c.GetContainerSpec().GetPrivileged()
+		if privileged && !s.allowPrivilegedActors {
+			return nil, status.Errorf(codes.FailedPrecondition, "container %q is privileged, but this worker does not allow privileged actors (WorkerPool sandboxClasses[].allowPrivilegedActors)", cn)
+		}
 		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
-		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn}); err != nil {
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn, Privileged: privileged}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an

@@ -2278,7 +2278,8 @@ func (s *Atelet) prepareOCIBundles(
 			containerSpecs[i] = &ateworkerpb.ContainerSpec{
 				Args:         args,
 				Env:          resolveActorEnv(&img.Config, envs),
-				Capabilities: resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
+				Capabilities: resolveContainerCapabilities(ctr.GetSecurityContext()),
+				Privileged:   ctr.GetSecurityContext().GetPrivileged(),
 				Resources:    toAteworkerResources(ctr.GetResources()),
 				User:         user,
 				Cwd:          cwd,

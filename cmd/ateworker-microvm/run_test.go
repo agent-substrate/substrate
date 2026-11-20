@@ -31,6 +31,8 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -213,6 +215,30 @@ func TestWorkloadIDs(t *testing.T) {
 	got := workloadIDs(ctrs)
 	if want := []string{"c_counter", "c_w"}; !slices.Equal(got, want) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
+	}
+}
+
+// A privileged container runs only on a worker started with
+// --allow-privileged-actors; any other worker fails the actor rather than run
+// it unprivileged.
+func TestBuildActorContainersPrivileged(t *testing.T) {
+	dirs := &ateworkerpb.ActorDirs{OciBundleDir: t.TempDir()}
+	if err := os.MkdirAll(filepath.Join(ociBundlePath(dirs, "main"), "rootfs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	containers := []*ateworkerpb.Container{{Name: "main", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, Privileged: true}}}
+
+	_, err := (&AteWorkerService{}).buildActorContainers("uid", dirs, containers)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("buildActorContainers() without allowPrivilegedActors = %v, want FailedPrecondition", err)
+	}
+
+	ctrs, err := (&AteWorkerService{allowPrivilegedActors: true}).buildActorContainers("uid", dirs, containers)
+	if err != nil {
+		t.Fatalf("buildActorContainers() with allowPrivilegedActors = %v", err)
+	}
+	if ctrs[0].spec.Linux.MaskedPaths != nil {
+		t.Errorf("privileged spec MaskedPaths = %v, want none", ctrs[0].spec.Linux.MaskedPaths)
 	}
 }
 

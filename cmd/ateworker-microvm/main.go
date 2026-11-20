@@ -66,13 +66,15 @@ import (
 )
 
 var (
-	podUID       = pflag.String("pod-uid", "", "The UID of the current pod")
-	podIPs       = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
-	chBinary     = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	guestDebug   = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
-	showVersion  = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
-	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
+	podUID     = pflag.String("pod-uid", "", "The UID of the current pod")
+	podIPs     = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
+	chBinary   = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	guestDebug = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
+	// Set by the WorkerPool controller from sandboxClasses[].allowPrivilegedActors.
+	allowPrivilegedActors = pflag.Bool("allow-privileged-actors", false, "Run containers whose template sets securityContext.privileged. Without it the worker fails such actors.")
+	showVersion           = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag          = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags          = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
@@ -362,6 +364,10 @@ const (
 type AteWorkerService struct {
 	ateworkerpb.UnimplementedWorkerServer
 
+	// allowPrivilegedActors is --allow-privileged-actors: whether containers
+	// with securityContext.privileged may run here.
+	allowPrivilegedActors bool
+
 	// Serializes lifecycle RPCs per actor.
 	locks *actorlock.Locks
 	// Tracks lifecycle RPCs so shutdown can wait for them.
@@ -422,18 +428,19 @@ var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 // NewService creates a new AteWorkerService.
 func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
-		locks:          actorlock.New(),
-		inFlight:       actorlock.NewInFlight(),
-		actors:         map[string]*hostedActor{},
-		guestSlots:     make(chan struct{}, statsFanOut),
-		maxActors:      maxActors,
-		podUID:         podUID,
-		chBinary:       chBinary,
-		guestDebug:     guestDebug,
-		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
-		tunnel:         tunnel,
-		actorLogger:    actorLogger,
-		bootID:         bootID,
+		allowPrivilegedActors: *allowPrivilegedActors,
+		locks:                 actorlock.New(),
+		inFlight:              actorlock.NewInFlight(),
+		actors:                map[string]*hostedActor{},
+		guestSlots:            make(chan struct{}, statsFanOut),
+		maxActors:             maxActors,
+		podUID:                podUID,
+		chBinary:              chBinary,
+		guestDebug:            guestDebug,
+		snapshotWrites:        make(chan struct{}, snapshotWriteSlots),
+		tunnel:                tunnel,
+		actorLogger:           actorLogger,
+		bootID:                bootID,
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s

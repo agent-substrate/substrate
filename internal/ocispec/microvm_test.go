@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -303,5 +304,50 @@ func TestShapeMicroVM_SystemMounts(t *testing.T) {
 		if got := mountFor(t, spec, want.Destination); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s after ShapeMicroVM =\n%+v\nwant\n%+v", want.Destination, got, want)
 		}
+	}
+}
+
+func TestShapeMicroVM_Privileged(t *testing.T) {
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, Privileged: true}}})
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app", Privileged: true}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	if len(spec.Linux.MaskedPaths) != 0 || len(spec.Linux.ReadonlyPaths) != 0 {
+		t.Errorf("masked = %v, readonly = %v; want none for a privileged container", spec.Linux.MaskedPaths, spec.Linux.ReadonlyPaths)
+	}
+	for _, m := range spec.Mounts {
+		if m.Type == "tmpfs" && slices.Contains(m.Options, "nr_inodes=1") {
+			t.Errorf("masking tmpfs at %s; want none for a privileged container", m.Destination)
+		}
+		if m.Destination == "/sys" && slices.Contains(m.Options, "ro") {
+			t.Errorf("/sys options = %v, want read-write", m.Options)
+		}
+	}
+	i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/sys/fs/cgroup" })
+	if i < 0 || spec.Mounts[i].Type != "cgroup2" || !slices.Contains(spec.Mounts[i].Options, "rw") {
+		t.Errorf("want a read-write cgroup2 mount at /sys/fs/cgroup, mounts = %v", spec.Mounts)
+	}
+	want := []specs.LinuxDeviceCgroup{{Allow: true, Access: "rwm"}}
+	if diff := cmp.Diff(want, spec.Linux.Resources.Devices); diff != "" {
+		t.Errorf("devices mismatch (-want +got):\n%s", diff)
+	}
+	if spec.Linux.Resources.CPU == nil || spec.Linux.Resources.CPU.Shares == nil {
+		t.Errorf("kata's default CPU shares are missing: %+v", spec.Linux.Resources.CPU)
+	}
+}
+
+func TestShapeMicroVM_UnprivilegedKeepsHardening(t *testing.T) {
+	spec := Build(parityOptions)
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Linux.MaskedPaths) == 0 || len(spec.Linux.ReadonlyPaths) == 0 {
+		t.Errorf("unprivileged container lost its masked or read-only paths")
+	}
+	if slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/sys/fs/cgroup" }) {
+		t.Errorf("unprivileged container got a cgroup mount")
+	}
+	if slices.ContainsFunc(spec.Linux.Resources.Devices, func(d specs.LinuxDeviceCgroup) bool { return d.Allow && d.Major == nil && d.Type == "" }) {
+		t.Errorf("unprivileged container may use every device: %v", spec.Linux.Resources.Devices)
 	}
 }

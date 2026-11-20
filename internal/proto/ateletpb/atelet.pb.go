@@ -2945,6 +2945,7 @@ type Container struct {
 	// +k8s:customValidation # mounts must not nest
 	VolumeMounts []*VolumeMount `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// +k8s:optional
+	// +k8s:customValidation # capabilities must be unset when privileged
 	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources are the cgroup limits for this container, from the
 	// ActorTemplate. Unset means no limits.
@@ -3052,7 +3053,11 @@ func (x *Container) GetResources() *ResourceRequirements {
 type SecurityContext struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:optional
-	Capabilities  *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Capabilities *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// privileged mirrors ateapi.SecurityContext.privileged.
+	//
+	// +k8s:optional
+	Privileged    bool `protobuf:"varint,2,opt,name=privileged,proto3" json:"privileged,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3092,6 +3097,13 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *SecurityContext) GetPrivileged() bool {
+	if x != nil {
+		return x.Privileged
+	}
+	return false
 }
 
 // Capabilities adjusts a container's Linux capabilities relative to the default
@@ -4592,9 +4604,12 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\fwakeup_probe\x18\x05 \x01(\v2\x13.atelet.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\x06 \x03(\v2\x13.atelet.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.atelet.SecurityContextR\x0fsecurityContext\x12:\n" +
-	"\tresources\x18\t \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\"K\n" +
+	"\tresources\x18\t \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\"k\n" +
 	"\x0fSecurityContext\x128\n" +
-	"\fcapabilities\x18\x01 \x01(\v2\x14.atelet.CapabilitiesR\fcapabilities\"4\n" +
+	"\fcapabilities\x18\x01 \x01(\v2\x14.atelet.CapabilitiesR\fcapabilities\x12\x1e\n" +
+	"\n" +
+	"privileged\x18\x02 \x01(\bR\n" +
+	"privileged\"4\n" +
 	"\fCapabilities\x12\x10\n" +
 	"\x03add\x18\x01 \x03(\tR\x03add\x12\x12\n" +
 	"\x04drop\x18\x02 \x03(\tR\x04drop\"7\n" +

@@ -55,6 +55,12 @@ type MicroVMOptions struct {
 	// staged into the share.
 	ActorDirs     *ateworkerpb.ActorDirs
 	ContainerName string
+	// Privileged skips the in-guest hardening below (masked and read-only
+	// paths, read-only /sys, the device allowlist) and gives the container a
+	// writable cgroup2 hierarchy, so it can run a container engine. The guest
+	// kernel stays the boundary: the actor owns its whole VM. The caller must
+	// check that the worker allows privileged actors.
+	Privileged bool
 }
 
 // ShapeMicroVM repoints volume bind mounts to guest share paths, applies
@@ -80,6 +86,10 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 				m.Options[j] = "rbind"
 			}
 		}
+	}
+	if o.Privileged {
+		shapePrivileged(spec)
+		return nil
 	}
 	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
 	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350
@@ -110,6 +120,36 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	// sets CgroupsPath.
 	spec.Linux.Resources = mergeKataResources(spec.Linux.Resources)
 	return nil
+}
+
+// shapePrivileged finishes the spec of a privileged guest container, the
+// equivalent of a privileged container under containerd inside the VM: no
+// masked or read-only paths, read-write /sys, a read-write cgroup2 mount, and
+// every guest device. Capabilities already hold the full set (atelet sets them
+// with Privileged). The sysctls ShapeMicroVM sets for unprivileged containers
+// are left out: a privileged container can set them itself, and a container
+// engine inside expects the kernel defaults.
+func shapePrivileged(spec *specs.Spec) {
+	for i := range spec.Mounts {
+		m := &spec.Mounts[i]
+		if m.Destination == "/sys" && m.Type == "sysfs" {
+			m.Options = slices.DeleteFunc(slices.Clone(m.Options), func(o string) bool { return o == "ro" })
+			m.Options = append(m.Options, "rw")
+		}
+	}
+	spec.Mounts = append(spec.Mounts, specs.Mount{
+		Destination: "/sys/fs/cgroup",
+		Type:        "cgroup2",
+		Source:      "cgroup2",
+		Options:     []string{"nosuid", "noexec", "nodev", "rw"},
+	})
+	spec.Linux.MaskedPaths = nil
+	spec.Linux.ReadonlyPaths = nil
+	resources := mergeKataResources(spec.Linux.Resources)
+	// A container engine creates device nodes for its own containers
+	// (/dev/null, /dev/net/tun, ...), so allow every guest device.
+	resources.Devices = []specs.LinuxDeviceCgroup{{Allow: true, Access: "rwm"}}
+	spec.Linux.Resources = resources
 }
 
 // mergeKataResources fills in the kata defaults that the caller's spec leaves

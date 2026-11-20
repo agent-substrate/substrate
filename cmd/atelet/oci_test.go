@@ -300,3 +300,18 @@ func TestResolveCapabilities(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveContainerCapabilities(t *testing.T) {
+	if got := resolveContainerCapabilities(nil); !slices.Equal(got, wantDefaultCapabilities) {
+		t.Errorf("unset securityContext = %v, want the default set %v", got, wantDefaultCapabilities)
+	}
+	got := resolveContainerCapabilities(&ateletpb.SecurityContext{Privileged: true})
+	for _, c := range []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_MKNOD", "CAP_CHECKPOINT_RESTORE"} {
+		if !slices.Contains(got, c) {
+			t.Errorf("privileged capabilities %v lack %s", got, c)
+		}
+	}
+	if !slices.IsSorted(got) {
+		t.Errorf("privileged capabilities are not sorted: %v", got)
+	}
+}

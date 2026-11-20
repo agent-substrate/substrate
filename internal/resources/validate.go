@@ -658,3 +658,19 @@ func ValidateHostPort(fldPath *field.Path, value string) field.ErrorList {
 	}
 	return errs
 }
+
+// ValidatePrivilegedSecurityContext rejects capability adjustments next to
+// privileged: a privileged container always gets the full set, so add or drop
+// would be silently ignored.
+func ValidatePrivilegedSecurityContext(fldPath *field.Path, privileged bool, add, drop []string) field.ErrorList {
+	if privileged && (len(add) > 0 || len(drop) > 0) {
+		return field.ErrorList{field.Invalid(fldPath.Child("capabilities"), "", "must be unset when privileged is true; a privileged container gets every capability")}
+	}
+	return nil
+}
+
+// AllLinuxCapabilities returns every Linux capability name, sorted, without
+// the "CAP_" prefix: the set a privileged container runs with.
+func AllLinuxCapabilities() []string {
+	return sets.List(linuxCapabilities)
+}
