@@ -1,0 +1,322 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+// Package substrate.storekv.v1 is the wire protocol between ateapi's `kv`
+// store backend (cmd/ateapi/internal/store/storekv) and a KVStore server.
+//
+// This is not a user-facing API. Its only client is ateapi, and its only
+// purpose is to let store.Interface be served by storage engines other than
+// the in-process PostgreSQL backend without re-implementing Substrate's
+// resource model in each one. The domain model (actors, workers, tags, ...)
+// stays in ateapi; a KVStore server sees opaque payloads under
+// (collection, namespace, name) keys.
+//
+// The reference implementation is pkg/storekv/memserver, a purely in-memory
+// server. Its observable behavior is the specification: a conforming server
+// passes storecontract.RunContractTests through the storekv client and agrees
+// with memserver on every sequence in the pkg/storekv/conformance suite.
+//
+// See docs/dev/pluggable-store-backends.md for the design.
+package substrate.storekv.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "go.ate.dev/substrate/api/storekv/v1;storekv";
+
+// KVStore is a versioned key-value store with multi-key compare-and-swap
+// transactions, per-collection change watches, and TTL leases.
+//
+// Every request names the store it addresses in `store`. A server may serve
+// one store or many; the client never addresses data outside its store.
+service KVStore {
+  // Handshake is called once at ateapi startup, before it reports ready. It
+  // verifies that client and server agree on the protocol version and that
+  // the store's layout version is one the client can read and write.
+  //
+  // Errors:
+  //   FAILED_PRECONDITION: the client requires a protocol version the server
+  //     does not serve, or the store's layout version is newer than the
+  //     client's. The client must not serve traffic.
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+
+  // GetEntry reads one entry by key, by uid, or by secondary key.
+  //
+  // Errors:
+  //   NOT_FOUND: no entry matches.
+  rpc GetEntry(GetEntryRequest) returns (Entry);
+
+  // ListEntries pages through a collection in (namespace, name) order, either
+  // within one namespace or across all namespaces, or through the entries of
+  // a collection that carry a given secondary key.
+  //
+  // Errors:
+  //   INVALID_ARGUMENT: malformed page token, or a token issued for a
+  //     different (store, collection, namespace, secondary_key) scope.
+  rpc ListEntries(ListEntriesRequest) returns (ListEntriesResponse);
+
+  // PutEntry creates or replaces one entry under a precondition.
+  //
+  // Errors:
+  //   ALREADY_EXISTS: precondition.must_not_exist and the entry exists.
+  //   NOT_FOUND: precondition names a uid or version and no entry exists.
+  //   FAILED_PRECONDITION: the stored uid differs from expected_uid
+  //     (a new incarnation holds the name), or require_parent names a key
+  //     that does not exist.
+  //   ABORTED: the stored version differs from expected_version. The
+  //     response status carries the current Entry in its details so the
+  //     client can re-run its mutation without another read.
+  rpc PutEntry(PutEntryRequest) returns (Entry);
+
+  // DeleteEntry deletes one entry under a precondition, optionally refusing
+  // if a namespace still has children in given collections, and optionally
+  // cascading to dependent entries. Returns the deleted entry.
+  //
+  // Errors:
+  //   NOT_FOUND: no entry under the key.
+  //   FAILED_PRECONDITION: expected_uid mismatch, or a non-empty guard
+  //     collection.
+  //   ABORTED: expected_version mismatch (current Entry in details).
+  rpc DeleteEntry(DeleteEntryRequest) returns (Entry);
+
+  // Transact applies several puts and deletes atomically after checking
+  // their preconditions, and optionally appends change events. It is how
+  // the client keeps a Worker's allocation and its assignments consistent.
+  // A conflicting concurrent write on any key fails the whole transaction.
+  //
+  // Errors: as PutEntry and DeleteEntry, for the first failing operation,
+  // with every current Entry the transaction read attached in details.
+  rpc Transact(TransactRequest) returns (TransactResponse);
+
+  // Watch streams change events for one collection, in commit order, from
+  // the server's current position. It does not replay existing entries: the
+  // client lists after opening the watch, as workercache does today.
+  //
+  // The server sends response headers once the stream's position is fixed.
+  // Every event committed after the client receives the headers is
+  // delivered, so a client that waits for them before writing cannot miss
+  // its own write.
+  //
+  // The stream ends with ABORTED when the client's position has been
+  // trimmed (it fell behind the server's retention) or when the server is
+  // shutting down. The client re-opens the watch and relists.
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+
+  // ManageLease acquires, renews, or releases a named lease with a TTL.
+  // The server's clock decides expiry; the client renews at a fraction of
+  // the TTL and treats a failed renewal as loss of the lease.
+  //
+  // Errors:
+  //   FAILED_PRECONDITION: ACQUIRE while another holder's lease is live, or
+  //     RENEW/RELEASE with a token that does not hold the lease.
+  rpc ManageLease(ManageLeaseRequest) returns (ManageLeaseResponse);
+}
+
+// EntryKey addresses one entry. `namespace` is empty for global resources.
+message EntryKey {
+  string collection = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// Entry is a stored resource. `payload` is opaque to the server.
+message Entry {
+  EntryKey key = 1;
+  // Server-assigned on create; immutable for the life of the entry. A name
+  // that is deleted and recreated gets a new uid. The entry's uid and
+  // version are authoritative; a client that also keeps them inside its
+  // payload copies them from the entry on read.
+  string uid = 2;
+  // Starts at 1 on create and increases by exactly 1 on every write.
+  int64 version = 3;
+  // Optional client-chosen index key. Empty means "not indexed".
+  string secondary_key = 4;
+  bytes payload = 5;
+  google.protobuf.Timestamp create_time = 6;
+  google.protobuf.Timestamp update_time = 7;
+}
+
+// Precondition guards a write against the entry it expects to find.
+// An update sets both guards; a create sets must_not_exist; an unguarded
+// delete sets neither.
+message Precondition {
+  // The key must not exist (create semantics).
+  bool must_not_exist = 1;
+  // If set, the stored uid must equal this value.
+  string expected_uid = 2;
+  // If non-zero, the stored version must equal this value.
+  int64 expected_version = 3;
+}
+
+message HandshakeRequest {
+  string store = 1;
+  // Version string of the ateapi binary, for the server's logs and metrics.
+  string client_version = 2;
+  // Protocol capability the client requires. 1 is this file.
+  int64 required_protocol_version = 3;
+  // Layout version this client reads and writes (see the design doc).
+  int64 client_layout_version = 4;
+}
+
+message HandshakeResponse {
+  int64 server_protocol_version = 1;
+  // The store's current layout version, read from the reserved `_meta`
+  // collection where the client keeps it; a server needs no other knowledge
+  // of it. Equal to or below the client's on success; a client above it runs
+  // the layout migration before serving.
+  int64 current_layout_version = 2;
+  // Server-side retention of change events, so the client can size its
+  // watch buffers and resync policy.
+  google.protobuf.Duration watch_retention = 3;
+}
+
+message GetEntryRequest {
+  string store = 1;
+  oneof lookup {
+    EntryKey key = 2;
+    // Lookup by uid within a collection.
+    UidLookup uid = 3;
+    // Lookup by secondary key within a collection. NOT_FOUND if no entry
+    // carries it; FAILED_PRECONDITION if more than one does.
+    SecondaryKeyLookup secondary_key = 4;
+  }
+}
+
+message UidLookup {
+  string collection = 1;
+  string uid = 2;
+}
+
+message SecondaryKeyLookup {
+  string collection = 1;
+  string secondary_key = 2;
+}
+
+message ListEntriesRequest {
+  string store = 1;
+  string collection = 2;
+  // Scope of the listing. Exactly one must be set.
+  oneof scope {
+    // Entries of one namespace, in name order.
+    string namespace = 3;
+    // Entries of every namespace, in (namespace, name) order.
+    bool all_namespaces = 4;
+    // Entries carrying this secondary key, in (namespace, name) order.
+    string secondary_key = 5;
+  }
+  // Maximum entries to return. 0 means the server default. The server may
+  // return fewer than requested to stay under its response size budget.
+  int32 page_size = 6;
+  // Opaque token from a previous response, bound to the same scope.
+  string page_token = 7;
+}
+
+message ListEntriesResponse {
+  repeated Entry entries = 1;
+  // Empty when the listing is complete.
+  string next_page_token = 2;
+}
+
+message PutEntryRequest {
+  string store = 1;
+  EntryKey key = 2;
+  Precondition precondition = 3;
+  string secondary_key = 4;
+  bytes payload = 5;
+  // If set, the write fails with FAILED_PRECONDITION unless this key exists
+  // at commit. Used to refuse creating an actor in a missing atespace.
+  EntryKey require_parent = 6;
+  // If true, the server appends a change event for the key's collection.
+  bool emit_event = 7;
+}
+
+message DeleteEntryRequest {
+  string store = 1;
+  EntryKey key = 2;
+  Precondition precondition = 3;
+  // Refuse with FAILED_PRECONDITION if any of these collections has an
+  // entry whose namespace equals key.name (the key is the parent of scoped
+  // resources, e.g. an atespace).
+  repeated string reject_if_namespace_non_empty_in = 4;
+  // Delete these keys in the same transaction, without preconditions.
+  // Missing keys are ignored.
+  repeated EntryKey cascade_delete = 5;
+  // Delete every entry of these collections whose secondary key equals
+  // key.name, in the same transaction.
+  repeated string cascade_delete_by_secondary_key_in = 6;
+  bool emit_event = 7;
+}
+
+// Operation is one step of a Transact. Operations are applied in order
+// after every precondition has been checked against the committed state.
+message Operation {
+  oneof op {
+    PutEntryRequest put = 1;
+    DeleteEntryRequest delete = 2;
+  }
+}
+
+message TransactRequest {
+  string store = 1;
+  repeated Operation operations = 2;
+}
+
+message TransactResponse {
+  // Resulting entries, one per operation in request order. A delete yields
+  // the deleted entry, or an empty Entry when the key did not exist.
+  repeated Entry results = 1;
+  google.protobuf.Timestamp commit_time = 2;
+}
+
+message WatchRequest {
+  string store = 1;
+  string collection = 2;
+}
+
+message WatchEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    CREATED = 1;
+    UPDATED = 2;
+    DELETED = 3;
+  }
+  Type type = 1;
+  // The entry after the change, or the entry as deleted. Servers may omit
+  // `payload` for DELETED events; clients must not depend on it.
+  Entry entry = 2;
+  google.protobuf.Timestamp commit_time = 3;
+}
+
+message ManageLeaseRequest {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    ACQUIRE = 1;
+    RENEW = 2;
+    RELEASE = 3;
+  }
+  string store = 1;
+  string lease_key = 2;
+  Action action = 3;
+  // Required for ACQUIRE and RENEW.
+  google.protobuf.Duration ttl = 4;
+  // Required for RENEW and RELEASE: the token returned by ACQUIRE.
+  string holder_token = 5;
+}
+
+message ManageLeaseResponse {
+  string holder_token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
