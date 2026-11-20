@@ -42,17 +42,6 @@ ConfigMap/ate-system/atenet-egress-agentgateway-substrate-config:
     ate-setup: /run/servicedns-ca/trust-bundle.pem
     charts: /run/servicedns.podcert.ate.dev/trust-bundle.pem
 ConfigMap/ate-system/atenet-router-agentgateway-config:
-  data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled-grpc].policies.directResponse:
-    ate-setup: null
-    charts:
-      conditional:
-      - body: Invalid ate-target-actor header
-        condition: |-
-          ('ate-target-actor' in source.connectHeaders &&
-           size(source.connectHeaders.raw()['ate-target-actor']) != 1) ||
-          ('ate-target-actor' in request.headers &&
-           size(request.headers.raw()['ate-target-actor']) != 1)
-        status: 404
   data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled-grpc].policies.substrateIngress.policies.http:
     ate-setup: null
     charts:
@@ -61,17 +50,6 @@ ConfigMap/ate-system/atenet-router-agentgateway-config:
     ate-setup: null
     charts:
       budget: 60s
-  data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled].policies.directResponse:
-    ate-setup: null
-    charts:
-      conditional:
-      - body: Invalid ate-target-actor header
-        condition: |-
-          ('ate-target-actor' in source.connectHeaders &&
-           size(source.connectHeaders.raw()['ate-target-actor']) != 1) ||
-          ('ate-target-actor' in request.headers &&
-           size(request.headers.raw()['ate-target-actor']) != 1)
-        status: 404
   data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled].policies.substrateIngress.policies.http:
     ate-setup: null
     charts:
@@ -80,26 +58,12 @@ ConfigMap/ate-system/atenet-router-agentgateway-config:
     ate-setup: null
     charts:
       budget: 60s
-  data.config.yaml.config.backend.poolMaxSize:
-    ate-setup: null
-    charts: 0
   data.config.yaml.frontendPolicies.tracing:
     ate-setup:
       host: $AGENTGATEWAY_OTLP_ADDRESS
       protocol: grpc
       randomSampling: 0.01
     charts: null
-  data.config.yaml.routes[substrate-actors-grpc].policies.directResponse:
-    ate-setup: null
-    charts:
-      conditional:
-      - body: Invalid ate-target-actor header
-        condition: |-
-          ('ate-target-actor' in source.connectHeaders &&
-           size(source.connectHeaders.raw()['ate-target-actor']) != 1) ||
-          ('ate-target-actor' in request.headers &&
-           size(request.headers.raw()['ate-target-actor']) != 1)
-        status: 404
   data.config.yaml.routes[substrate-actors-grpc].policies.substrateIngress.policies.http:
     ate-setup: null
     charts:
@@ -108,17 +72,6 @@ ConfigMap/ate-system/atenet-router-agentgateway-config:
     ate-setup: null
     charts:
       budget: 60s
-  data.config.yaml.routes[substrate-actors].policies.directResponse:
-    ate-setup: null
-    charts:
-      conditional:
-      - body: Invalid ate-target-actor header
-        condition: |-
-          ('ate-target-actor' in source.connectHeaders &&
-           size(source.connectHeaders.raw()['ate-target-actor']) != 1) ||
-          ('ate-target-actor' in request.headers &&
-           size(request.headers.raw()['ate-target-actor']) != 1)
-        status: 404
   data.config.yaml.routes[substrate-actors].policies.substrateIngress.policies.http:
     ate-setup: null
     charts:

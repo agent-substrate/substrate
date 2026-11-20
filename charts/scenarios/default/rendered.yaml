@@ -1163,10 +1163,7 @@ data:
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
       statsAddr: 0.0.0.0:15020
-      # Actor sandboxes behind a worker IP are replaced between requests. Do
-      # not retain an idle connection that may belong to the previous actor.
       backend:
-        poolMaxSize: 0
         # Actor CONNECT authorities resolve through the worker atunnel.
         allowDynamicLoopback: true
     frontendPolicies:
@@ -1209,17 +1206,6 @@ data:
       - path:
           pathPrefix: /
       policies: &substrate-ingress
-        # Reject duplicates in both CONNECT and inner request headers, even
-        # when actor selection uses only one of those header maps.
-        directResponse:
-          conditional:
-          - condition: >-
-              ('ate-target-actor' in source.connectHeaders &&
-               size(source.connectHeaders.raw()['ate-target-actor']) != 1) ||
-              ('ate-target-actor' in request.headers &&
-               size(request.headers.raw()['ate-target-actor']) != 1)
-            status: 404
-            body: Invalid ate-target-actor header
         substrateIngress:
           host: api.ate-system.svc:443
           requestParking:
