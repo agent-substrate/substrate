@@ -39,12 +39,12 @@ import time
 import traceback
 
 from nighthawk_common.output import upload_files, write_artifacts
+from nighthawk_common.spec import spec_dict_to_textproto
 from spec import (
     DEFAULT_CONCURRENCY,
     DEFAULT_TAIL_LATENCY_SLO_MS,
     MODE_URIS,
     build_egress_session_spec,
-    spec_dict_to_textproto,
 )
 
 ADAPTIVE_CLIENT = "nighthawk_adaptive_load_client"
