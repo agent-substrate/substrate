@@ -752,6 +752,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
 
+	if err := hosted.network.Network.ActivateGateway(ctx); err != nil {
+		return nil, fmt.Errorf("while activating the sandbox gateway: %w", err)
+	}
+
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
 	// The bundle rootfs is composed here, as an overlay of the node's cached
@@ -1235,6 +1239,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		if err != nil {
 			return nil, fmt.Errorf("while restoring the sandbox: %w", err)
 		}
+	}
+
+	if err := hosted.network.Network.ActivateGateway(ctx); err != nil {
+		return nil, fmt.Errorf("while activating the sandbox gateway: %w", err)
 	}
 
 	// Create and restore each application container, each with its own log pipe so

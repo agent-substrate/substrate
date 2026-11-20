@@ -100,7 +100,7 @@ func TestHostsActorsWithTheWorkersCode(t *testing.T) {
 	}
 
 	// The ingress actor: a server inside the first actor's sandbox.
-	sandbox, err := netns.GetFromName(nodepath.ActorNetNSName(info.Sandboxes[0].UID))
+	sandbox, err := netns.GetFromName(guestNetNSName(info.Sandboxes[0].UID))
 	if err != nil {
 		t.Fatal(err)
 	}
