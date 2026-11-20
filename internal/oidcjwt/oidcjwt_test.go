@@ -48,9 +48,20 @@ func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 type testIssuer struct {
 	server            *httptest.Server
 	jwks              jwkSetT
+	advertisedJWKSURI string
 	discoveryRequests atomic.Int32
 	jwksRequests      atomic.Int32
 	jwksFailures      atomic.Int32
+}
+
+// jwksURI is the URI the discovery document advertises. advertisedJWKSURI
+// overrides it, e.g. to point discovery at a host the server is not
+// listening on.
+func (ti *testIssuer) jwksURI() string {
+	if ti.advertisedJWKSURI != "" {
+		return ti.advertisedJWKSURI
+	}
+	return ti.server.URL + "/jwks"
 }
 
 func newTestIssuer(t *testing.T) *testIssuer {
@@ -65,7 +76,7 @@ func (ti *testIssuer) handler(t *testing.T) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		ti.discoveryRequests.Add(1)
-		writeJSON(t, w, oidcConfigT{Issuer: ti.issuer(), JWKSURI: ti.server.URL + "/jwks"})
+		writeJSON(t, w, oidcConfigT{Issuer: ti.issuer(), JWKSURI: ti.jwksURI()})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
 		ti.jwksRequests.Add(1)
@@ -99,6 +110,67 @@ func TestVerifierRetriesInitialDiscoveryFailure(t *testing.T) {
 	}
 	if _, err := verifier.Verify(t.Context(), token, now.Add(jwksRefreshRetryInterval)); err != nil {
 		t.Fatalf("Verify() after retry cooldown error = %v", err)
+	}
+}
+
+func TestDiscoverKeysFallsBackToIssuerOrigin(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("key", &key.PublicKey)
+	// Advertise a JWKS URI on a closed port: the fetch fails fast with
+	// connection refused, as an unreachable API-server VIP would.
+	ti.advertisedJWKSURI = "http://127.0.0.1:1/jwks"
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
+	token := mintJWT(t, "RS256", "key", key, validClaims(ti.issuer()))
+
+	if _, err := verifier.Verify(t.Context(), token, time.Now()); err != nil {
+		t.Fatalf("Verify() error = %v, want nil via issuer-origin fallback", err)
+	}
+	if got := ti.jwksRequests.Load(); got != 1 {
+		t.Fatalf("JWKS requests served at the issuer origin = %d, want 1", got)
+	}
+}
+
+func TestSameOriginJWKSURI(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		issuer       string
+		jwksURI      string
+		want         string
+		wantFallback bool
+	}{
+		{
+			name:   "different host rewritten",
+			issuer: "https://kubernetes.default.svc",
+			jwksURI: "https://10.50.83.232:6443/openid/v1/jwks",
+			want:   "https://kubernetes.default.svc/openid/v1/jwks", wantFallback: true,
+		},
+		{
+			name:   "issuer port preserved",
+			issuer: "https://issuer.example:8443",
+			jwksURI: "https://10.0.0.1:6443/jwks",
+			want:   "https://issuer.example:8443/jwks", wantFallback: true,
+		},
+		{
+			name:   "same origin untouched",
+			issuer: "https://issuer.example", jwksURI: "https://issuer.example/jwks",
+			wantFallback: false,
+		},
+		{
+			name:   "unparseable jwks_uri",
+			issuer: "https://issuer.example", jwksURI: "://bad",
+			wantFallback: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := sameOriginJWKSURI(tc.issuer, tc.jwksURI)
+			if ok != tc.wantFallback {
+				t.Fatalf("sameOriginJWKSURI(%q, %q) fallback = %v, want %v", tc.issuer, tc.jwksURI, ok, tc.wantFallback)
+			}
+			if ok && got != tc.want {
+				t.Fatalf("sameOriginJWKSURI(%q, %q) = %q, want %q", tc.issuer, tc.jwksURI, got, tc.want)
+			}
+		})
 	}
 }
 
