@@ -32,6 +32,9 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Caches are only saved from main. PRs and the merge queue restore main's
+# caches and save nothing, their entries are only visible to their own ref and
+# would evict main's under the 10GB repo limit.
 jobs:
   run-tests:
     runs-on: ubuntu-latest
@@ -51,6 +54,16 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
+        # setup-go saves from any ref, and only when go.sum changes
+        cache: false
+    - name: Restore Go build cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: unit-go-${{ runner.os }}-${{ github.sha }}
+        restore-keys: unit-go-${{ runner.os }}-
     # we only test on amd64, make sure everything still builds for arm64
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
@@ -85,8 +98,9 @@ jobs:
           --jsonfile "${ARTIFACTS}/junittool.json" \
           --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
-    - name: Cache cargo
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+    - name: Restore cargo cache
+      id: cargo-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cargo/registry/index
@@ -100,6 +114,16 @@ jobs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
         hack/test-dynamic-modules.sh
+    - name: Save cargo cache
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          cmd/dataplane/envoy/dynamic-modules/target
+        key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
@@ -123,6 +147,14 @@ jobs:
         name: test-results-unit
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
+    - name: Save Go build cache
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: unit-go-${{ runner.os }}-${{ github.sha }}
   # Separate from run-tests so the two run in parallel.
   verify:
     runs-on: ubuntu-latest
@@ -137,8 +169,30 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
+        cache: false
+    # mostly the tools verify builds (go tool -n) and golangci-lint results, so
+    # this only needs saving when dependencies change
+    - name: Restore Go build cache
+      id: verify-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/.cache/golangci-lint
+          ~/go/pkg/mod
+        key: verify-go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: verify-go-${{ runner.os }}-
     - name: verify
       run: hack/verify-all.sh
+    - name: Save Go build cache
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.verify-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/.cache/golangci-lint
+          ~/go/pkg/mod
+        key: ${{ steps.verify-cache.outputs.cache-primary-key }}
   verify-migrations:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
@@ -222,9 +276,8 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        # Use the e2e cache below instead. setup-go's cache key is shared with
-        # run-tests, whose unit-test builds don't match ko's flags
-        # (CGO_ENABLED=0, -trimpath), so ko got no cache hits from it.
+        # ko's flags (CGO_ENABLED=0, -trimpath) don't match the unit test
+        # builds, so e2e has its own cache below
         cache: false
     - name: Restore Go build cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -252,9 +305,9 @@ jobs:
           for (const [key, value] of Object.entries(process.env)) {
             if (key.startsWith('ACTIONS_')) core.exportVariable(key, value);
           }
-    - name: Cache micro-VM assets
+    - name: Restore microVM assets
       id: microvm-assets
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         # Assembling the assets (download kata-static + cloud-hypervisor) is
         # pinned by the SHA-256 digests in
@@ -280,6 +333,14 @@ jobs:
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: go run ./cmd/ate-setup --kind deploy ate-system
+    - name: Save microVM assets
+      if: >-
+        ${{ github.ref == 'refs/heads/main' && steps.microvm-assets.outputs.cache-hit != 'true'
+          && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'microvm' }}
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: bin/microvm-assets
+        key: ${{ steps.microvm-assets.outputs.cache-primary-key }}
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
@@ -316,8 +377,6 @@ jobs:
       if: always()
       run: go -C tools/junittool run . report "${ARTIFACTS}"
     - name: Save Go build cache
-      # Main only, so PRs restore the latest main build rather than each
-      # storing its own copy.
       if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'gvisor' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
