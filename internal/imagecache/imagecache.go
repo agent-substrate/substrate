@@ -300,8 +300,22 @@ type Image struct {
 	// Config is the OCI image config (entrypoint, env, ...).
 	Config v1.Config
 	// LayerDirs are the absolute cached layer directories, bottom-most layer
-	// first. Each contains the unpacked tree under "fs/".
+	// first. Each contains the unpacked tree under "fs/". Empty for an image
+	// the image provider plugin prepared.
 	LayerDirs []string
+	// ProviderDirs are the overlayfs lowerdirs the image provider plugin
+	// returned, bottom-most first. Empty for a Store image.
+	ProviderDirs []string
+	// LeaseID is the image provider plugin's lease on ProviderDirs.
+	LeaseID string
+}
+
+// LowerDirs returns the image's overlayfs lowerdirs, bottom-most first.
+func (img *Image) LowerDirs() []string {
+	if len(img.LayerDirs) == 0 {
+		return slices.Clone(img.ProviderDirs)
+	}
+	return storeLowerDirs(img.LayerDirs)
 }
 
 // imageRecord is the persisted form of a cached image, stored under
