@@ -17,6 +17,7 @@ package fakeip
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ import (
 )
 
 func TestSaveAndLoad(t *testing.T) {
-	saved := newTable(capacity, 1000, poolSize)
+	saved := newTable(slog.Default(), capacity, 1000, poolSize)
 	addresses := map[string]netip.Addr{}
 	for _, name := range []string{"a.example.com", "b.example.com", "c.example.com"} {
 		addresses[name] = mustAddress(t, saved, name)
@@ -43,7 +44,7 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Fatalf("the saved table is not a regular file in the directory: %v", err)
 	}
 
-	loaded, err := Load(dir)
+	loaded, err := Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestSaveAndLoad(t *testing.T) {
 // The addresses a table gave out can run past the end of the pool and go on
 // from its start.
 func TestSaveAndLoadAcrossTheEndOfThePool(t *testing.T) {
-	saved := newTable(capacity, poolSize-5, poolSize)
+	saved := newTable(slog.Default(), capacity, poolSize-5, poolSize)
 	addresses := map[string]netip.Addr{}
 	for i := range 12 {
 		name := fmt.Sprintf("host-%d.example.com", i)
@@ -75,7 +76,7 @@ func TestSaveAndLoadAcrossTheEndOfThePool(t *testing.T) {
 	if _, err := saved.Save(dir); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	loaded, err := Load(dir)
+	loaded, err := Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestSaveAndLoadAcrossTheEndOfThePool(t *testing.T) {
 
 // A table that gave out its whole pool must not start over after a restore.
 func TestLoadKeepsUsedUpPool(t *testing.T) {
-	saved := newTable(capacity, 1000, 2)
+	saved := newTable(slog.Default(), capacity, 1000, 2)
 	mustAddress(t, saved, "a.example.com")
 	mustAddress(t, saved, "b.example.com")
 	if addr, ok := saved.Address("c.example.com"); ok {
@@ -102,7 +103,7 @@ func TestLoadKeepsUsedUpPool(t *testing.T) {
 	if _, err := saved.Save(dir); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	loaded, err := Load(dir)
+	loaded, err := Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestLoadKeepsUsedUpPool(t *testing.T) {
 }
 
 func TestLoadKeepsOrderOfUse(t *testing.T) {
-	saved := newTable(3, 0, poolSize)
+	saved := newTable(slog.Default(), 3, 0, poolSize)
 	a := mustAddress(t, saved, "a.example.com")
 	b := mustAddress(t, saved, "b.example.com")
 	mustAddress(t, saved, "c.example.com")
@@ -123,7 +124,7 @@ func TestLoadKeepsOrderOfUse(t *testing.T) {
 	if _, err := saved.Save(dir); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	loaded, err := Load(dir)
+	loaded, err := Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestSaveWritesNothingWithoutNames(t *testing.T) {
 		table *Table
 	}{
 		{name: "nil table", table: nil},
-		{name: "table that gave out no address", table: New()},
+		{name: "table that gave out no address", table: New(slog.Default())},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,14 +166,14 @@ func TestSaveWritesNothingWithoutNames(t *testing.T) {
 }
 
 func TestLoadWithoutFile(t *testing.T) {
-	table, err := Load(t.TempDir())
+	table, err := Load(t.TempDir(), slog.Default())
 	if err != nil || table != nil {
 		t.Fatalf("Load without a saved table = %v, %v, want no table and no error", table, err)
 	}
 }
 
 func TestSaveFailsInMissingDirectory(t *testing.T) {
-	table := New()
+	table := New(slog.Default())
 	mustAddress(t, table, "a.example.com")
 	if _, err := table.Save(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("Save into a missing directory succeeded")
@@ -191,7 +192,7 @@ func TestLoadKeepsMostRecentNamesOverCapacity(t *testing.T) {
 	dir := t.TempDir()
 	writeSavedTable(t, dir, savedTable{Version: fileVersion, Pool: pool, Next: next, Left: poolSize - next, Names: names})
 
-	table, err := Load(dir)
+	table, err := Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -212,7 +213,7 @@ func TestLoadIgnoresUnknownFields(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	table, err := Load(dir)
+	table, err := Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestLoadRejectsInvalidTable(t *testing.T) {
 			} else {
 				writeSavedTable(t, dir, tc.content)
 			}
-			_, err := Load(dir)
+			_, err := Load(dir, slog.Default())
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("Load error = %v, want one containing %q", err, tc.wantErr)
 			}

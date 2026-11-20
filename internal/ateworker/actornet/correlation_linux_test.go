@@ -18,6 +18,7 @@ package actornet
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
@@ -241,7 +242,7 @@ func TestActorConnectionIsTunneledByName(t *testing.T) {
 	}
 	named := net.JoinHostPort(correlationName, strconv.Itoa(correlationPort))
 
-	table := fakeip.New()
+	table := fakeip.New(slog.Default())
 	actor := hostCorrelatedActor(t, "correlated-a", proxy, relay, table)
 	fake := actor.lookup(t, correlationName)
 	if !fakeip.Contains(fake) {
@@ -253,7 +254,7 @@ func TestActorConnectionIsTunneledByName(t *testing.T) {
 
 	// Another actor on the worker has its own table: the first actor's
 	// address is nothing to it, and its own lookups do not depend on it.
-	other := hostCorrelatedActor(t, "correlated-b", proxy, relay, fakeip.New())
+	other := hostCorrelatedActor(t, "correlated-b", proxy, relay, fakeip.New(slog.Default()))
 	literal := netip.AddrPortFrom(fake, correlationPort).String()
 	if got := other.connect(t, fake); got != literal {
 		t.Fatalf("another actor's connection to %s was tunneled to %q, want %q", fake, got, literal)
@@ -270,7 +271,7 @@ func TestActorConnectionIsTunneledByName(t *testing.T) {
 		t.Fatalf("saving the table: %v", err)
 	}
 	actor.unhost(t, proxy)
-	restored, err := fakeip.Load(dir)
+	restored, err := fakeip.Load(dir, slog.Default())
 	if err != nil {
 		t.Fatalf("loading the table: %v", err)
 	}

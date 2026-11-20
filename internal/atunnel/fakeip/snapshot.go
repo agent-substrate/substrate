@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -81,8 +82,9 @@ func (t *Table) Save(dir string) (string, error) {
 	return FileName, nil
 }
 
-// Load returns the table saved in dir, or nil if dir holds none.
-func Load(dir string) (*Table, error) {
+// Load returns the table saved in dir, logging to log, or nil if dir holds
+// none.
+func Load(dir string, log *slog.Logger) (*Table, error) {
 	data, err := os.ReadFile(filepath.Join(dir, FileName))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -104,7 +106,7 @@ func Load(dir string) (*Table, error) {
 		return nil, fmt.Errorf("fakeip: the saved table's next position %d with %d left is outside the pool", content.Next, content.Left)
 	}
 
-	t := newTable(capacity, content.Next, content.Left)
+	t := newTable(log, capacity, content.Next, content.Left)
 	// A table saved with a larger capacity keeps its most recently used names.
 	names := content.Names[max(0, len(content.Names)-t.capacity):]
 	for _, saved := range names {

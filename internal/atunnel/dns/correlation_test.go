@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"testing"
@@ -218,7 +219,7 @@ func TestUpstreamAnswerGetsFakeAddress(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeIPs := fakeip.New()
+			fakeIPs := fakeip.New(slog.Default())
 			h := newDNSHandler(nil, newLimiter(), nil, nil, fakeIPs)
 			tc.hdr.ID = 0x4242
 			raw := upstreamResponse(t, tc.hdr, tc.q, tc.answers...)
@@ -262,7 +263,7 @@ func TestUpstreamAnswerWithoutFakeAddressIsKept(t *testing.T) {
 
 	notHostname := question("_db._tcp.example.com.", dnsmessage.TypeA)
 
-	usedUp := fakeip.New()
+	usedUp := fakeip.New(slog.Default())
 	for i := 0; ; i++ {
 		if _, ok := usedUp.Address(fmt.Sprintf("host-%d.example.com", i)); !ok {
 			break
@@ -274,10 +275,10 @@ func TestUpstreamAnswerWithoutFakeAddressIsKept(t *testing.T) {
 		fakeIPs *fakeip.Table
 		raw     []byte
 	}{
-		{name: "answers that do not parse", fakeIPs: fakeip.New(), raw: brokenAnswers},
+		{name: "answers that do not parse", fakeIPs: fakeip.New(slog.Default()), raw: brokenAnswers},
 		{
 			name:    "name that is not a hostname",
-			fakeIPs: fakeip.New(),
+			fakeIPs: fakeip.New(slog.Default()),
 			raw:     upstreamResponse(t, dnsmessage.Header{ID: 0x4242}, notHostname, aRecord("_db._tcp.example.com.", realAddress)),
 		},
 		{
@@ -298,7 +299,7 @@ func TestUpstreamAnswerWithoutFakeAddressIsKept(t *testing.T) {
 }
 
 func TestFakeAddressIsStablePerName(t *testing.T) {
-	fakeIPs := fakeip.New()
+	fakeIPs := fakeip.New(slog.Default())
 	h := newDNSHandler(nil, newLimiter(), nil, nil, fakeIPs)
 	answerFor := func(name string) netip.Addr {
 		t.Helper()
@@ -323,7 +324,7 @@ func TestFakeAddressIsStablePerName(t *testing.T) {
 func TestUDPResponseGetsFakeAddress(t *testing.T) {
 	lim := newLimiter()
 	pending := newPendingRequests(lim)
-	fakeIPs := fakeip.New()
+	fakeIPs := fakeip.New(slog.Default())
 	h := newDNSHandler(pending, lim, nil, nil, fakeIPs)
 	upstream := "10.96.0.10:53"
 	clientAddr := &net.UDPAddr{IP: net.IPv4(169, 254, 17, 2), Port: 40000}
@@ -422,7 +423,7 @@ func TestRelayAnswersWithFakeAddresses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fakeIPs := fakeip.New()
+			fakeIPs := fakeip.New(slog.Default())
 			_, udpAddr, tcpAddr := serveLoopbackWithFakeIPs(t, relay, withPolicy, fakeIPs)
 
 			query, q := dnsQueryForName(t, 0x2222, "db.example.com.")

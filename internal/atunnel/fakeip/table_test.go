@@ -15,10 +15,13 @@
 package fakeip
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -38,7 +41,7 @@ func mustAddress(t *testing.T, table *Table, name string) netip.Addr {
 }
 
 func TestAddressIsStablePerName(t *testing.T) {
-	table := newTable(8, 0, poolSize)
+	table := newTable(slog.Default(), 8, 0, poolSize)
 	first := mustAddress(t, table, "api.example.com")
 	other := mustAddress(t, table, "db.example.com")
 	if first == other {
@@ -55,7 +58,7 @@ func TestAddressIsStablePerName(t *testing.T) {
 }
 
 func TestName(t *testing.T) {
-	table := newTable(8, 0, poolSize)
+	table := newTable(slog.Default(), 8, 0, poolSize)
 	addr := mustAddress(t, table, "api.example.com")
 
 	tests := []struct {
@@ -94,7 +97,7 @@ func TestFullTableForgetsNameUsedLongestAgo(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			table := newTable(3, 0, poolSize)
+			table := newTable(slog.Default(), 3, 0, poolSize)
 			addresses := map[string]netip.Addr{}
 			for _, name := range []string{"a.example.com", "b.example.com", "c.example.com"} {
 				addresses[name] = mustAddress(t, table, name)
@@ -121,7 +124,7 @@ func TestFullTableForgetsNameUsedLongestAgo(t *testing.T) {
 // A client may still hold the address of a forgotten name, so the name gets a
 // new one when it is looked up again and the old one stays unused.
 func TestForgottenNameGetsNewAddress(t *testing.T) {
-	table := newTable(1, 0, poolSize)
+	table := newTable(slog.Default(), 1, 0, poolSize)
 	first := mustAddress(t, table, "a.example.com")
 	mustAddress(t, table, "b.example.com")
 	if again := mustAddress(t, table, "a.example.com"); again == first {
@@ -133,7 +136,7 @@ func TestForgottenNameGetsNewAddress(t *testing.T) {
 }
 
 func TestAddressIsGivenOutOnce(t *testing.T) {
-	table := newTable(4, rand.Uint32N(poolSize), poolSize)
+	table := newTable(slog.Default(), 4, rand.Uint32N(poolSize), poolSize)
 	seen := make(map[netip.Addr]bool, usableAddresses)
 	for i := range usableAddresses {
 		addr := mustAddress(t, table, fmt.Sprintf("host-%d.example.com", i))
@@ -158,6 +161,26 @@ func TestAddressIsGivenOutOnce(t *testing.T) {
 	}
 	if name, ok := table.Name(addr); !ok || name != last {
 		t.Fatalf("Name(%s) = %q, %v, want %q", addr, name, ok, last)
+	}
+}
+
+func TestRunningOutWarnsOnce(t *testing.T) {
+	var logs bytes.Buffer
+	// Positions 1 and 2 are the only ones left, and both are usable.
+	table := newTable(slog.New(slog.NewTextHandler(&logs, nil)), capacity, 1, 2)
+	mustAddress(t, table, "a.example.com")
+	mustAddress(t, table, "b.example.com")
+	if logs.Len() != 0 {
+		t.Fatalf("the table logged before running out:\n%s", logs.String())
+	}
+
+	for i := range 3 {
+		if addr, ok := table.Address(fmt.Sprintf("new-%d.example.com", i)); ok {
+			t.Fatalf("Address() = %s, want none left", addr)
+		}
+	}
+	if got := strings.Count(logs.String(), "level=WARN"); got != 1 {
+		t.Fatalf("the table logged %d warnings after running out, want 1:\n%s", got, logs.String())
 	}
 }
 
@@ -217,7 +240,7 @@ func TestTableMatchesModel(t *testing.T) {
 		tableCapacity = 8
 		steps         = 20000
 	)
-	table := newTable(tableCapacity, rand.Uint32N(poolSize), poolSize)
+	table := newTable(slog.Default(), tableCapacity, rand.Uint32N(poolSize), poolSize)
 	model := &tableModel{capacity: tableCapacity, addresses: map[string]netip.Addr{}, givenOut: map[netip.Addr]bool{}}
 	// More names than the table holds, so names are forgotten and come back.
 	names := make([]string, 3*tableCapacity)
@@ -246,7 +269,7 @@ func TestTableMatchesModel(t *testing.T) {
 }
 
 func TestTableConcurrentUse(t *testing.T) {
-	table := newTable(16, 0, poolSize)
+	table := newTable(slog.Default(), 16, 0, poolSize)
 	var wg sync.WaitGroup
 	for worker := range 8 {
 		wg.Add(1)

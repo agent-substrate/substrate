@@ -16,6 +16,7 @@ package fakeip
 
 import (
 	"container/list"
+	"log/slog"
 	"math/rand/v2"
 	"net/netip"
 	"sync"
@@ -42,6 +43,11 @@ type Table struct {
 	next     uint32
 	left     uint32
 	capacity int
+	// log carries the actor's attributes, so the warning below says whose
+	// addresses ran out.
+	log *slog.Logger
+	// ranOut is set once the table has warned that it has no address left.
+	ranOut bool
 }
 
 // entry is one name and the pool position of its address.
@@ -50,16 +56,17 @@ type entry struct {
 	index uint32
 }
 
-// New returns an empty table.
-func New() *Table {
+// New returns an empty table that logs to log.
+func New(log *slog.Logger) *Table {
 	// The start is random because an actor restored from a snapshot that
 	// carries no table may still hold addresses from an older one, and those
 	// should not match the names this table gives addresses to.
-	return newTable(capacity, rand.Uint32N(poolSize), poolSize)
+	return newTable(log, capacity, rand.Uint32N(poolSize), poolSize)
 }
 
-func newTable(capacity int, next, left uint32) *Table {
+func newTable(log *slog.Logger, capacity int, next, left uint32) *Table {
 	return &Table{
+		log:      log,
 		byName:   make(map[string]*list.Element),
 		byIndex:  make(map[uint32]*list.Element),
 		recent:   list.New(),
@@ -81,6 +88,11 @@ func (t *Table) Address(name string) (netip.Addr, bool) {
 	}
 	index, ok := t.unusedIndex()
 	if !ok {
+		// Once, since every new name the actor looks up lands here from now on.
+		if !t.ranOut {
+			t.ranOut = true
+			t.log.Warn("The actor has used up its fake DNS addresses; names it has not looked up before now resolve to their real addresses")
+		}
 		return netip.Addr{}, false
 	}
 	if t.recent.Len() >= t.capacity {

@@ -27,11 +27,11 @@ import (
 
 // NewFakeIPs returns the fake address table for an actor that starts without
 // a snapshot. It returns nil unless the worker runs with --dns-correlation.
-func (t *Tunnel) NewFakeIPs() *fakeip.Table {
+func (t *Tunnel) NewFakeIPs(actor resources.ActorAttribution) *fakeip.Table {
 	if !t.cfg.DNSCorrelation {
 		return nil
 	}
-	return fakeip.New()
+	return fakeip.New(fakeIPsLogger(actor))
 }
 
 // LoadFakeIPs returns the fake address table for an actor that is restored
@@ -42,7 +42,7 @@ func (t *Tunnel) NewFakeIPs() *fakeip.Table {
 // not serve it, but saves it with the actor's next checkpoint, so the actor
 // still has it on a later worker that does.
 func (t *Tunnel) LoadFakeIPs(ctx context.Context, actor resources.ActorAttribution, dir string) *fakeip.Table {
-	table, err := fakeip.Load(dir)
+	table, err := fakeip.Load(dir, fakeIPsLogger(actor))
 	if err != nil {
 		// Not a reason to fail the restore: an address the actor kept then
 		// belongs to no name, and is tunneled as the address it is.
@@ -50,9 +50,14 @@ func (t *Tunnel) LoadFakeIPs(ctx context.Context, actor resources.ActorAttributi
 			append(ateattr.ActorLogAttrs(actor), slog.Any("err", err))...)
 	}
 	if table == nil {
-		return t.NewFakeIPs()
+		return t.NewFakeIPs(actor)
 	}
 	return table
+}
+
+// fakeIPsLogger returns the logger for actor's fake address table.
+func fakeIPsLogger(actor resources.ActorAttribution) *slog.Logger {
+	return slog.New(slog.Default().Handler().WithAttrs(ateattr.ActorLogAttrs(actor)))
 }
 
 // ServedFakeIPs returns table if the worker runs with --dns-correlation, and

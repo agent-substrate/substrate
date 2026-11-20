@@ -34,14 +34,14 @@ var correlating = &Tunnel{cfg: Config{DNSCorrelation: true}}
 func TestWorkerWithoutDNSCorrelationCarriesTheTable(t *testing.T) {
 	ctx := context.Background()
 	plain := &Tunnel{}
-	if table := plain.NewFakeIPs(); table != nil {
-		t.Errorf("NewFakeIPs() returned a table without --dns-correlation")
+	if table := plain.NewFakeIPs(testActor); table != nil {
+		t.Errorf("NewFakeIPs(testActor) returned a table without --dns-correlation")
 	}
 	if table := plain.LoadFakeIPs(ctx, testActor, t.TempDir()); table != nil {
 		t.Errorf("LoadFakeIPs() of a snapshot without a table returned one without --dns-correlation")
 	}
 
-	saved := correlating.NewFakeIPs()
+	saved := correlating.NewFakeIPs(testActor)
 	addr, ok := saved.Address("db.example.com")
 	if !ok {
 		t.Fatal("no fake address left")
@@ -74,9 +74,9 @@ func TestWorkerWithoutDNSCorrelationCarriesTheTable(t *testing.T) {
 
 func TestFakeIPsSurviveCheckpointAndRestore(t *testing.T) {
 	ctx := context.Background()
-	table := correlating.NewFakeIPs()
+	table := correlating.NewFakeIPs(testActor)
 	if table == nil {
-		t.Fatal("NewFakeIPs() returned no table with --dns-correlation")
+		t.Fatal("NewFakeIPs(testActor) returned no table with --dns-correlation")
 	}
 	addr, ok := table.Address("db.example.com")
 	if !ok {
@@ -99,7 +99,7 @@ func TestSaveFakeIPsWithNothingToSave(t *testing.T) {
 		table *fakeip.Table
 	}{
 		{name: "actor without a table", table: nil},
-		{name: "table that gave out no address", table: correlating.NewFakeIPs()},
+		{name: "table that gave out no address", table: correlating.NewFakeIPs(testActor)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,7 +114,7 @@ func TestSaveFakeIPsWithNothingToSave(t *testing.T) {
 // kept is then tunneled as the address it is.
 func TestFakeIPsFailuresDoNotFailTheActor(t *testing.T) {
 	ctx := context.Background()
-	table := correlating.NewFakeIPs()
+	table := correlating.NewFakeIPs(testActor)
 	if _, ok := table.Address("db.example.com"); !ok {
 		t.Fatal("no fake address left")
 	}

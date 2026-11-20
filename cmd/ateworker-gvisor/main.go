@@ -689,7 +689,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes, s.tunnel.NewFakeIPs())
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes, s.tunnel.NewFakeIPs(attribution))
 	if err != nil {
 		return nil, err
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -51,7 +52,7 @@ func unusedFakeAddress(t *testing.T, table *fakeip.Table, used netip.Addr) netip
 }
 
 func TestNamedDestination(t *testing.T) {
-	names := fakeip.New()
+	names := fakeip.New(slog.Default())
 	fake := fakeAddress(t, names, "db.example.com")
 	unused := net.JoinHostPort(unusedFakeAddress(t, names, fake).String(), "5432")
 
@@ -98,7 +99,7 @@ func TestRefusesNames(t *testing.T) {
 }
 
 func TestEgressTunnelsFakeAddressToItsName(t *testing.T) {
-	names := fakeip.New()
+	names := fakeip.New(slog.Default())
 	fakeAddr := fakeAddress(t, names, "db.example.com")
 	fake := net.JoinHostPort(fakeAddr.String(), "5432")
 	unused := net.JoinHostPort(unusedFakeAddress(t, names, fakeAddr).String(), "5432")

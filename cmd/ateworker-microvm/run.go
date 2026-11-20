@@ -267,10 +267,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		assetPaths:       req.GetRuntimeAssetPaths(),
 		egressGateway:    req.GetEgressGateway(),
 		size:             sizing.FromLimits(req.GetResources().GetLimits()),
-		fakeIPs:          s.tunnel.NewFakeIPs(),
 	}
 
 	attribution := p.actorAttribution()
+	p.fakeIPs = s.tunnel.NewFakeIPs(attribution)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {

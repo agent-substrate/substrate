@@ -16,7 +16,6 @@ package dns
 
 import (
 	"errors"
-	"log/slog"
 	"net/netip"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -52,7 +51,6 @@ func (h *dnsHandler) withFakeAddress(raw []byte, hdr dnsmessage.Header, q dnsmes
 	if !ok {
 		// The actor gets the real addresses, and its connections to them are
 		// tunneled by address, as they are without a table.
-		slog.Debug("dns relay answered with real addresses; the actor's fake addresses are used up")
 		return raw
 	}
 	return protocol.AddressPacket(hdr, q, addr.As4(), fakeAddressTTL)
