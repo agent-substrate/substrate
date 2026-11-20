@@ -903,7 +903,7 @@ groups:
       into the total. An unknown worker seeds no series. Thus a pool whose
       workers all count under unknown has no series for its class, and an alert
       on idle == 0 alone does not fire for it. The idle query in
-      docs/observability.md takes such a pool as 0 idle too.
+      docs/guides/observability.md takes such a pool as 0 idle too.
     annotations:
       substrate:
         emitted_by: [ateapi]

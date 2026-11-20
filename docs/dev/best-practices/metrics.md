@@ -314,7 +314,7 @@ the series an alert depends on with an explicit zero, so "no idle workers" is a
 `0` and not a missing series. Seed from what the source knows. ateapi learns a
 pool's sandbox class from its workers, so a pool whose workers have not reported
 one gets no zero series; the `ate.workerpool.workers` section of
-`docs/observability.md` gives the query that allows for that.
+`docs/guides/observability.md` gives the query that allows for that.
 
 Keep the callback cheap and lock-free where you can. It runs on every collection
 (every 10 s on kind, every 60 s in production) and on every Prometheus scrape.
