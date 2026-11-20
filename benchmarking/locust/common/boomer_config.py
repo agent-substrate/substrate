@@ -75,6 +75,7 @@ _FLAGS = {
     "--sweperf-total-steps": int,
     "--sweperf-num-cycles": int,
     "--sweperf-poll-interval-ms": int,
+    "--sweperf-resume-retry-budget": float,
     "--agentsession-script": str,
     "--agentsession-script-file": str,
     "--agentsession-think-scale": float,
