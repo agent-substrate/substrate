@@ -16,12 +16,14 @@ package scheduling
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/utils/ptr"
 )
 
 // The benchmark fleets are shaped like a production gVisor pool: every worker
@@ -120,11 +122,6 @@ type benchScenario struct {
 	wantOld *bool
 }
 
-var (
-	benchTrue  = true
-	benchFalse = false
-)
-
 var benchScenarios = []benchScenario{
 	{
 		name:  "cold-boot",
@@ -144,7 +141,7 @@ var benchScenarios = []benchScenario{
 		fleet:     func(n int) fleet { return benchFleet(n, benchFleetOpts{oldEvery: 20, oldFull: true}) },
 		snapshot:  "old",
 		relaxable: true,
-		wantOld:   &benchFalse,
+		wantOld:   ptr.To(false),
 	},
 	{
 		// A tenth of the fleet still restores the snapshot's memory and has
@@ -153,7 +150,7 @@ var benchScenarios = []benchScenario{
 		fleet:     func(n int) fleet { return benchFleet(n, benchFleetOpts{oldEvery: 10}) },
 		snapshot:  "old",
 		relaxable: true,
-		wantOld:   &benchTrue,
+		wantOld:   ptr.To(true),
 	},
 	{
 		// A pinned actor resumes on the node that holds its local snapshot.
@@ -163,8 +160,27 @@ var benchScenarios = []benchScenario{
 		snapshot:  "old",
 		relaxable: false,
 		pinned:    true,
-		wantOld:   &benchTrue,
+		wantOld:   ptr.To(true),
 	},
+}
+
+// resumeConstraints and scheduleResume are how assignWorkerAttempt asks for a
+// placement: the snapshot's runtime is required and, when the actor may fall
+// back, a second Schedule with the requirement dropped follows ErrNoCapacity.
+
+func resumeConstraints(c Constraints, snap hardware.Requirement) Constraints {
+	c.RequiredRuntime = snap
+	c.SnapshotRuntime = snap
+	return c
+}
+
+func scheduleResume(ctx context.Context, s Scheduler, c Constraints, relaxable bool) (*ateapi.Worker, error) {
+	w, err := s.Schedule(ctx, c)
+	if errors.Is(err, ErrNoCapacity) && relaxable {
+		c.RequiredRuntime = hardware.Requirement{}
+		return s.Schedule(ctx, c)
+	}
+	return w, err
 }
 
 // benchConstraints is what schedulingConstraints would build for the
