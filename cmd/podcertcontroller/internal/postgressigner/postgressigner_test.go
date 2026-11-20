@@ -40,11 +40,13 @@ import (
 func TestMakeCert(t *testing.T) {
 	for _, tc := range []struct {
 		name                              string
+		serviceAccount                    string
 		namespace                         string
 		mutate                            func(*certsv1beta1.PodCertificateRequest)
 		wantDenied, wantError, failUpdate bool
 		lifetime                          time.Duration
 		wantUsername                      string
+		additionalClients                 []Client
 	}{
 		{name: "runtime login", lifetime: 24 * time.Hour},
 		{name: "owner login", lifetime: 24 * time.Hour, wantUsername: postgressetup.OwnerUser, mutate: func(p *certsv1beta1.PodCertificateRequest) {
@@ -57,10 +59,31 @@ func TestMakeCert(t *testing.T) {
 			p.Namespace = "team-a-substrate"
 			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = postgressetup.OwnerUser
 		}},
+		{name: "additional client", lifetime: 24 * time.Hour, wantUsername: "application_user", additionalClients: []Client{{Namespace: "application", ServiceAccount: "controller", Usernames: []string{"application_user"}}}, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Namespace = "application"
+			p.Spec.ServiceAccountName = "controller"
+			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = "application_user"
+		}},
+		{name: "additional usernames for the default client", lifetime: 24 * time.Hour, wantUsername: "extra_user", additionalClients: []Client{{Namespace: "ate-system", ServiceAccount: "ate-api-server", Usernames: []string{"extra_user"}}}, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = "extra_user"
+		}},
+		{name: "repeated additional clients", lifetime: 24 * time.Hour, wantUsername: "second_user", additionalClients: []Client{{Namespace: "application", ServiceAccount: "controller", Usernames: []string{"first_user"}}, {Namespace: "application", ServiceAccount: "controller", Usernames: []string{"second_user"}}}, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Namespace = "application"
+			p.Spec.ServiceAccountName = "controller"
+			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = "second_user"
+		}},
 		{name: "default namespace denied after relocation", namespace: "team-a-substrate", wantDenied: true},
 		{name: "wrong service account after relocation", namespace: "team-a-substrate", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Namespace = "team-a-substrate"
 			p.Spec.ServiceAccountName = "default"
+		}},
+		{name: "prefixed service account", serviceAccount: "test-ate-api-server", lifetime: 24 * time.Hour, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Spec.ServiceAccountName = "test-ate-api-server"
+		}},
+		{name: "default account denied with prefixed configuration", serviceAccount: "test-ate-api-server", wantDenied: true},
+		{name: "prefixed account denied in wrong namespace", serviceAccount: "test-ate-api-server", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Spec.ServiceAccountName = "test-ate-api-server"
+			p.Namespace = "other"
 		}},
 		{name: "missing username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
 		{name: "administrator username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
@@ -136,7 +159,11 @@ func TestMakeCert(t *testing.T) {
 			if namespace == "" {
 				namespace = installdefaults.SystemNamespace
 			}
-			impl := NewImpl(namespace, &localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
+			serviceAccount := tc.serviceAccount
+			if serviceAccount == "" {
+				serviceAccount = "ate-api-server"
+			}
+			impl := NewImpl(namespace, serviceAccount, &localca.ConcretePool{CAs: []*localca.CA{ca}}, client, tc.additionalClients...)
 			err = impl.MakeCert(t.Context(), pcr)
 
 			if (err != nil) != tc.wantError {
@@ -198,6 +225,21 @@ func TestMakeCert(t *testing.T) {
 	}
 }
 
+func TestParseClient(t *testing.T) {
+	client, err := ParseClient("application/controller=owner_user,runtime_user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Namespace != "application" || client.ServiceAccount != "controller" || !slices.Equal(client.Usernames, []string{"owner_user", "runtime_user"}) {
+		t.Fatalf("unexpected client: %+v", client)
+	}
+	for _, value := range []string{"", "application", "application/controller", "/controller=user", "application/=user", "application/controller="} {
+		if _, err := ParseClient(value); err == nil {
+			t.Errorf("ParseClient(%q) succeeded", value)
+		}
+	}
+}
+
 func TestDesiredClusterTrustBundles(t *testing.T) {
 	pool := &localca.ConcretePool{}
 	for _, id := range []string{"old", "new"} {
@@ -207,7 +249,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		}
 		pool.CAs = append(pool.CAs, ca)
 	}
-	impl := NewImpl(installdefaults.SystemNamespace, pool, nil)
+	impl := NewImpl(installdefaults.SystemNamespace, "ate-api-server", pool, nil)
 	bundles, err := impl.DesiredClusterTrustBundles()
 	if err != nil {
 		t.Fatal(err)

@@ -22,6 +22,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"go.ate.dev/substrate/cmd/podcertcontroller/internal/podcertificate"
@@ -42,15 +44,52 @@ const UsernameAnnotation = "postgres.podcert.ate.dev/username"
 const CTBPrefix = "postgres.podcert.ate.dev:identity:"
 
 type Impl struct {
-	namespace string
 	pcrClient *podcertificate.Client
 	caPool    localca.Pool
+	clients   []Client
 }
 
-func NewImpl(namespace string, caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
+// Client grants one service account permission to request certificates for a
+// fixed set of PostgreSQL login names.
+type Client struct {
+	Namespace      string
+	ServiceAccount string
+	Usernames      []string
+}
+
+// ParseClient parses namespace/service-account=username[,username].
+func ParseClient(value string) (Client, error) {
+	identity, usernames, ok := strings.Cut(value, "=")
+	if !ok || identity == "" || usernames == "" {
+		return Client{}, fmt.Errorf("must have the form namespace/service-account=username[,username]")
+	}
+	namespace, serviceAccount, ok := strings.Cut(identity, "/")
+	if !ok || namespace == "" || serviceAccount == "" || strings.Contains(serviceAccount, "/") {
+		return Client{}, fmt.Errorf("must have the form namespace/service-account=username[,username]")
+	}
+	client := Client{Namespace: namespace, ServiceAccount: serviceAccount}
+	for username := range strings.SplitSeq(usernames, ",") {
+		if username == "" {
+			return Client{}, fmt.Errorf("contains an empty username")
+		}
+		client.Usernames = append(client.Usernames, username)
+	}
+	return client, nil
+}
+
+func defaultClients(namespace, serviceAccount string) []Client {
+	return []Client{{
+		Namespace:      namespace,
+		ServiceAccount: serviceAccount,
+		Usernames:      []string{postgressetup.OwnerUser, postgressetup.ReadWriteUser},
+	}}
+}
+
+func NewImpl(namespace, serviceAccount string, caPool localca.Pool, pcrClient *podcertificate.Client, additionalClients ...Client) *Impl {
 	return &Impl{
-		namespace: namespace, pcrClient: pcrClient,
-		caPool: caPool,
+		pcrClient: pcrClient,
+		caPool:    caPool,
+		clients:   append(defaultClients(namespace, serviceAccount), additionalClients...),
 	}
 }
 
@@ -99,16 +138,20 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	if pcr.Spec.SignerName != Name {
 		return fmt.Errorf("unexpected signer %q", pcr.Spec.SignerName)
 	}
-	// kube-apiserver validates the request identity. Authorization is tied to
-	// the namespace and service account, not the user-supplied annotations.
-	if pcr.Namespace != h.namespace || pcr.Spec.ServiceAccountName != "ate-api-server" {
-		return h.deny(ctx, pcr, "UnauthorizedServiceAccount", fmt.Sprintf("only %s/ate-api-server may request PostgreSQL login certificates", h.namespace))
+	var allowedUsernames []string
+	for _, client := range h.clients {
+		if pcr.Namespace == client.Namespace && pcr.Spec.ServiceAccountName == client.ServiceAccount {
+			allowedUsernames = append(allowedUsernames, client.Usernames...)
+		}
 	}
-	// Annotations are untrusted input; this service account may request only
-	// the two bundled application logins, never the administrator login.
+	if allowedUsernames == nil {
+		return h.deny(ctx, pcr, "UnauthorizedServiceAccount", "service account is not authorized to request PostgreSQL login certificates")
+	}
+	// kube-apiserver validates the request identity. The username annotation is
+	// untrusted input and may select only a login allowed for that identity.
 	username := pcr.Spec.UnverifiedUserAnnotations[UsernameAnnotation]
-	if len(pcr.Spec.UnverifiedUserAnnotations) != 1 || (username != postgressetup.OwnerUser && username != postgressetup.ReadWriteUser) {
-		return h.deny(ctx, pcr, certsv1beta1.PodCertificateRequestConditionInvalidUserConfig, "request must contain only the username annotation naming a bundled application login")
+	if len(pcr.Spec.UnverifiedUserAnnotations) != 1 || !slices.Contains(allowedUsernames, username) {
+		return h.deny(ctx, pcr, certsv1beta1.PodCertificateRequestConditionInvalidUserConfig, "request must contain only the username annotation naming an authorized application login")
 	}
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)

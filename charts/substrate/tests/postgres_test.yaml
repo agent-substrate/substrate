@@ -1,0 +1,103 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: PostgreSQL configuration
+templates:
+- ate-api-server-envvars.yaml
+- ate-api-server.yaml
+tests:
+- it: uses the managed schema by default
+  template: ate-api-server-envvars.yaml
+  asserts:
+  - equal:
+      path: data.ATE_API_POSTGRES_SCHEMA
+      value: substrate
+
+- it: reads separate owner and read-write connections from Secrets
+  template: ate-api-server.yaml
+  documentIndex: 3
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-read-write-connection-string=@env
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-owner-connection-string=@env
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-read-write-role=substrate_readwrite
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-owner-role=substrate_owner
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")].valueFrom.secretKeyRef.name
+      value: substrate-postgres-readwrite
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")].valueFrom.secretKeyRef.key
+      value: readWriteConnectionString
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_OWNER_CONNECTION_STRING")].valueFrom.secretKeyRef.name
+      value: substrate-postgres-owner
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_OWNER_CONNECTION_STRING")].valueFrom.secretKeyRef.key
+      value: ownerConnectionString
+
+- it: supports prepared database identities
+  template: ate-api-server.yaml
+  documentIndex: 3
+  set:
+    postgres:
+      readWriteConnectionStringSecretRef:
+        name: tenant-readwrite
+        key: connectionString
+      ownerConnectionStringSecretRef:
+        name: tenant-owner
+        key: connectionString
+      readWriteRole: tenant_readwrite
+      ownerRole: tenant_owner
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-read-write-role=tenant_readwrite
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-owner-role=tenant_owner
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")].valueFrom.secretKeyRef.name
+      value: tenant-readwrite
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")].valueFrom.secretKeyRef.key
+      value: connectionString
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_OWNER_CONNECTION_STRING")].valueFrom.secretKeyRef.name
+      value: tenant-owner
+  - equal:
+      path: spec.template.spec.containers[0].env[?(@.name == "ATE_API_POSTGRES_OWNER_CONNECTION_STRING")].valueFrom.secretKeyRef.key
+      value: connectionString
+
+- it: requires a read-write Secret
+  template: ate-api-server.yaml
+  set:
+    postgres.readWriteConnectionStringSecretRef.name: ""
+  asserts:
+  - failedTemplate:
+      errorMessage: postgres.readWriteConnectionStringSecretRef.name is required
+
+- it: requires an owner Secret
+  template: ate-api-server.yaml
+  set:
+    postgres.ownerConnectionStringSecretRef.name: ""
+  asserts:
+  - failedTemplate:
+      errorMessage: postgres.ownerConnectionStringSecretRef.name is required

@@ -1,0 +1,184 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Snapshot storage and credential exchange
+templates:
+- ate-api-server.yaml
+- ate-api-server-envvars.yaml
+- ate-system-networkpolicies.yaml
+- ate-controller.yaml
+release:
+  name: custom
+  namespace: custom-system
+tests:
+- it: defaults snapshots to the configured bundled bucket
+  template: ate-api-server-envvars.yaml
+  set:
+    rustfs.bucket: custom-snapshots
+  asserts:
+  - equal:
+      path: data.ATE_API_SNAPSHOT_LOCATION
+      value: gs://custom-snapshots/
+  - equal:
+      path: data.ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+      value: ""
+- it: uses an explicit external snapshot location
+  template: ate-api-server-envvars.yaml
+  set:
+    rustfs.enabled: false
+    ateApi.snapshotLocation: gs://external/prefix/
+    objectStorePlugin.transferServiceAccount: snapshot-transfer@example.iam.gserviceaccount.com
+  asserts:
+  - equal:
+      path: data.ATE_API_SNAPSHOT_LOCATION
+      value: gs://external/prefix/
+  - equal:
+      path: data.ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+      value: snapshot-transfer@example.iam.gserviceaccount.com
+- it: requires a snapshot location for external storage
+  template: ate-api-server.yaml
+  set:
+    rustfs.enabled: false
+  asserts:
+  - failedTemplate:
+      errorMessage: ateApi.snapshotLocation is required when rustfs.enabled=false unless PerTemplateSnapshotLocation preview is enabled
+- it: permits template-only locations with the preview gate
+  template: ate-api-server-envvars.yaml
+  set:
+    rustfs.enabled: false
+    preview: [PerTemplateSnapshotLocation]
+  asserts:
+  - equal:
+      path: data.ATE_API_SNAPSHOT_LOCATION
+      value: ""
+- it: supplies the exchange identity and issuer trust
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --snapshot-location=@env
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --api-server-sidecar-spiffe-id=spiffe://cluster.local/ns/custom-system/sa/custom-ate-api-server
+  - contains:
+      path: spec.template.spec.initContainers[0].args
+      content: --exchange-listen=:8445
+  - contains:
+      path: spec.template.spec.initContainers[0].args
+      content: --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+  - contains:
+      path: spec.template.spec.initContainers[0].args
+      content: --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
+  - contains:
+      path: spec.template.spec.initContainers[0].args
+      content: --ateapi-server-name=custom-api.custom-system.svc
+  - contains:
+      path: spec.template.spec.initContainers[0].env
+      content:
+        name: ATE_API_ACTOR_JWT_ISSUER
+        valueFrom:
+          configMapKeyRef:
+            name: ate-api-server-envvars
+            key: ATE_API_ACTOR_JWT_ISSUER
+  - contains:
+      path: spec.template.spec.initContainers[0].env
+      content:
+        name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+        valueFrom:
+          configMapKeyRef:
+            name: ate-api-server-envvars
+            key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+  - contains:
+      path: spec.template.spec.initContainers[0].volumeMounts
+      content:
+        name: servicedns
+        mountPath: /run/servicedns.podcert.ate.dev
+        readOnly: true
+  - notContains:
+      path: spec.template.spec.initContainers[0].volumeMounts
+      content:
+        name: actor-id-jwt-pool
+      any: true
+  - notContains:
+      path: spec.template.spec.volumes
+      content:
+        name: actor-id-jwt-jwks
+      any: true
+- it: exposes the exchange through the API service
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Service
+  asserts:
+  - contains:
+      path: spec.ports
+      content:
+        name: exchange
+        protocol: TCP
+        port: 8445
+        targetPort: exchange
+- it: admits only atelet to the credential exchange
+  template: ate-system-networkpolicies.yaml
+  documentSelector:
+    path: metadata.name
+    value: custom-ate-api-server
+  asserts:
+  - equal:
+      path: spec.ingress[1]
+      value:
+        from:
+        - podSelector:
+            matchLabels:
+              app: atelet
+        ports:
+        - protocol: TCP
+          port: exchange
+- it: enables worker logs independently of control plane exporter settings
+  template: ate-controller.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    otel.endpoint: http://collector:4317
+    otel.metrics.enabled: false
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: ATE_WORKER_OTEL_LOGS_EXPORTER
+        value: otlp
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: ATE_WORKER_OTEL_TRACES_EXPORTER
+        value: otlp
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: ATE_WORKER_OTEL_METRICS_EXPORTER
+        value: none
+- it: leaves worker telemetry off without a configured endpoint
+  template: ate-controller.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: ATE_WORKER_OTEL_LOGS_EXPORTER
+        value: none

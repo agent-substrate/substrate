@@ -1,0 +1,236 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for the substrate chart.
+#
+# The chart requires ClusterTrustBundle, ClusterTrustBundleProjection,
+# PodCertificateRequest, and the certificates.k8s.io/v1beta1 API.
+
+# Set to true to have the chart create the release namespace.
+# Off by default — most helm workflows expect the namespace to already exist
+# (helm install -n <ns> --create-namespace). Enable to install with
+# helm template and kubectl apply.
+createNamespace: false
+
+# Preview gates for the API server and the controller (including its workers).
+# Set the same gates in the substrate-atelet release.
+# ExternalVolumes is required for external volume APIs and mounts.
+preview: []
+
+postgres:
+  # Project database login certificates only when the connection strings use them.
+  clientCertificates:
+    enabled: false
+  # Read the read/write connection string from a pre-created Secret.
+  readWriteConnectionStringSecretRef:
+    name: substrate-postgres-readwrite
+    key: readWriteConnectionString
+  # Read the owner connection string from a pre-created Secret.
+  ownerConnectionStringSecretRef:
+    name: substrate-postgres-owner
+    key: ownerConnectionString
+  # Roles assumed on each connection. Use distinct roles for installs sharing a database.
+  readWriteRole: substrate_readwrite
+  ownerRole: substrate_owner
+  schema: substrate
+
+rustfs:
+  enabled: true
+  storageSize: 1Gi
+  bucket: ate-snapshots
+  accessKey: rustfsadmin
+  secretKey: rustfsadmin
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # The Job that creates the snapshot bucket.
+  bucketInit:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+# The substrate-atelet chart installs atelet. The API server's object-store
+# plugin still reads storageBackend from here.
+atelet:
+  # Snapshot backend: s3 or gcs. Set objectStore.backend in the
+  # substrate-atelet release to the same value.
+  storageBackend: s3
+
+# Object storage credentials/settings for snapshot transfers and private sandbox assets.
+objectStorePlugin:
+  # Required for GCS: the Google service account the exchange impersonates
+  # for actor-scoped snapshot transfers. Unused by S3/RustFS.
+  transferServiceAccount: ""
+  extraEnv: []
+  control:
+    resources: {}
+
+# Additional arguments appended to the ateapi defaults.
+ateApi:
+  # Cluster-wide snapshot URI. Empty uses gs://<rustfs.bucket>/ when RustFS is
+  # enabled (the S3 backend also uses gs:// URIs). Required for external storage
+  # unless the PerTemplateSnapshotLocation preview gate is enabled.
+  snapshotLocation: ""
+  logLevel: info
+  authorization:
+    # Empty defaults to the release's shared ate-client principal. Use explicit
+    # operator principals for shared installs; see docs/guides/authorization.md.
+    bootstrapOwners: []
+  # Defaults to the in-cluster IdP URL; set a stable issuer for external consumers.
+  actorJWTIssuer: ""
+  extraArgs: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+ateIdpServer:
+  resources: {}
+
+ateController:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+atenetRouter:
+  requestParking:
+    # Maximum time to wait for a suspended actor to become routable.
+    budget: "60s"
+  # Timeout for each Substrate ingress API call, including actor resolution.
+  requestTimeout: "60s"
+  # mTLS client identities allowed to reach actors. Empty denies all ingress.
+  ingressAllowedSPIFFEIDs: []
+  agentgateway:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+
+atenetEgress:
+  # Credential providers you deploy, added after the bundled k8s.io provider
+  # when credentialProvider.enabled. name is the host of the ate-secret:// URIs
+  # the provider serves, and address is the host:port the gateway dials over
+  # mTLS. The provider's serving certificate must chain to the servicedns CA
+  # and name the address host. Optional cacheTtl sets how long the gateway
+  # reuses a fetched credential, 5m by default. A grant the provider revokes
+  # keeps working until then. 0s sends every request to the provider.
+  extraCredentialProviders: []
+  # - name: vault.example.com
+  #   address: vault-provider.vault.svc:50051
+  #   cacheTtl: 30s
+  agentgateway:
+    logLevel: info
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+
+# Kubernetes Secret provider and AGW HTTP/HTTPS credential injection.
+# Includes get-only Secret RBAC. HTTPS requires egress-mitm-ca-pool and actor trust.
+credentialProvider:
+  # Deploy the Kubernetes Secret provider and route k8s.io credential URIs to it.
+  enabled: true
+  namespacePolicies: []
+  # - atespace: team-a
+  #   allowedNamespaces: [team-a-secrets]
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# Name of a ConfigMap in the release namespace that supplies per-environment
+# overrides for ate-api-server (ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING, ...).
+# Mounted via envFrom with optional=true. Created by the chart from these values.
+ateApiServerEnvVarsConfigMap: ate-api-server-envvars
+
+# OTLP export, following the OpenTelemetry SDK environment variable spec.
+# endpoint applies to every signal; a signal's own endpoint overrides it.
+# A signal exports only when it is enabled and resolves to an endpoint.
+#
+# metrics.enabled disables OTLP metrics push from the Go components and router.
+# traces.enabled disables OTLP trace push from the Go components and router.
+# logs.enabled gates OTLP actor events from ateapi and the ateworkers, plus the
+# router's access log. Actor events go to stdout when OTLP logs are disabled
+# or no endpoint resolves.
+otel:
+  endpoint: ""
+  traces:
+    enabled: true
+    endpoint: ""
+    samplingRatio: 0.01
+  metrics:
+    enabled: true
+    endpoint: ""
+  logs:
+    enabled: true
+    endpoint: ""
+
+# Values under `global` are visible to this chart and to every subchart. A parent
+# chart or an operator sets one value here instead of one value per chart.
+global:
+  # -- Mirror registry that overrides where every image is pulled from. This is
+  # the air-gap knob. It wins over image.registry for component images. Each
+  # `images.*` reference has its registry segment replaced. Repository paths are
+  # preserved, so a mirror only has to copy images under their existing paths.
+  # For control without the override, leave this unset and set image.registry.
+  imageRegistry: ""
+  # -- Pull secrets merged (union) into each pod's own imagePullSecrets list.
+  imagePullSecrets: []
+  # -- Fallback imagePullPolicy where a container does not set one.
+  imagePullPolicy: ""
+
+# Pull secrets for every pod this chart renders. Merged with global.imagePullSecrets.
+imagePullSecrets: []
+
+image:
+  # Registry host for the component images, and nothing else. To change
+  # environments, change only this value or global.imageRegistry, which overrides
+  # it. A path inside `registry` fails the render, and the error names this
+  # split.
+  registry: ghcr.io
+  # Image path prefix under the registry, ahead of each component name. The path
+  # is identical on every registry that serves the images. A mirror copies the
+  # images under this same path.
+  repository: agent-substrate/substrate
+  tag: ""
+
+images:
+  rustfs: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+  awsCli: amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
+  agentgateway: cr.agentgateway.dev/agentgateway:v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
+  busybox: busybox:1.36

@@ -1,0 +1,39 @@
+{{/*
+Copyright 2026 The Agent Substrate Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- if not .Values.postgres.readWriteConnectionStringSecretRef.name }}
+{{- fail "postgres.readWriteConnectionStringSecretRef.name is required" }}
+{{- end }}
+{{- if not .Values.postgres.ownerConnectionStringSecretRef.name }}
+{{- fail "postgres.ownerConnectionStringSecretRef.name is required" }}
+{{- end }}
+{{- $snapshotLocation := .Values.ateApi.snapshotLocation }}
+{{- if and (not $snapshotLocation) .Values.rustfs.enabled }}
+{{- $snapshotLocation = printf "gs://%s/" .Values.rustfs.bucket }}
+{{- end }}
+{{- if and (not $snapshotLocation) (not (has "PerTemplateSnapshotLocation" .Values.preview)) (not (has "ALL" .Values.preview)) }}
+{{- fail "ateApi.snapshotLocation is required when rustfs.enabled=false unless PerTemplateSnapshotLocation preview is enabled" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+  namespace: {{ .Release.Namespace }}
+data:
+  ATE_API_SNAPSHOT_LOCATION: {{ $snapshotLocation | quote }}
+  ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT: {{ .Values.objectStorePlugin.transferServiceAccount | quote }}
+  ATE_API_POSTGRES_SCHEMA: {{ .Values.postgres.schema | quote }}
+  ATE_API_ACTOR_JWT_ISSUER: {{ include "substrate.actorJWTIssuer" . | quote }}
