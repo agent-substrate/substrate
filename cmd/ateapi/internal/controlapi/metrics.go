@@ -91,7 +91,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapi.Worker, e
 				// Seed every state at 0 for the worker's pool so an idle==0
 				// alert sees 0 when the pool is full. Unknown seeds nothing,
 				// so a pool has no series for its class until a worker reports
-				// one; the idle query in docs/observability.md allows for that.
+				// one; the idle query in docs/guides/observability.md allows for that.
 				for _, s := range workerStates {
 					k := key{w.GetWorkerNamespace(), w.GetWorkerPool(), s, class}
 					if _, exists := tally[k]; !exists {

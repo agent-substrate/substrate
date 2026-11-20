@@ -331,13 +331,13 @@ For `ate.workerpool.workers`:
   ```promql
   (
     sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
-      max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+      avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
         {"ate.workerpool.workers", "ate.worker.state"="idle", "ate.sandbox.class"!="unknown"}
       )
     )
     or
     0 * sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
-      max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+      avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
         {"ate.workerpool.workers"}
       )
     )
