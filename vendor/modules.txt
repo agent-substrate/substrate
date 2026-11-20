@@ -88,6 +88,11 @@ github.com/Yiling-J/theine-go/internal/bf
 github.com/Yiling-J/theine-go/internal/clock
 github.com/Yiling-J/theine-go/internal/hasher
 github.com/Yiling-J/theine-go/internal/xruntime
+# github.com/ai-on-gke/image-provider-plugin v0.1.0
+## explicit; go 1.27.0
+github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1
+github.com/ai-on-gke/image-provider-plugin/client
+github.com/ai-on-gke/image-provider-plugin/client/mock
 # github.com/antlr4-go/antlr/v4 v4.13.1
 ## explicit; go 1.22
 github.com/antlr4-go/antlr/v4

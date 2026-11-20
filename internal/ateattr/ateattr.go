@@ -152,22 +152,24 @@ func ActorStateValue(state ateapi.ActorState) string {
 // pool is node state every actor shares. For the same reason it is the only
 // ate.* label on its counter.
 const (
-	ActorOperationNameKey  = attribute.Key("ate.actor.operation.name")
-	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
-	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
-	WorkerStateKey         = attribute.Key("ate.worker.state")
-	SandboxClassKey        = attribute.Key("ate.sandbox.class")
-	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
-	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
-	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
-	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
-	FileCacheNameKey       = attribute.Key("ate.filecache.name")
-	FileCacheGCOutcomeKey  = attribute.Key("ate.filecache.gc.outcome")
-	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
-	RouterResumeKey        = attribute.Key("ate.router.resume")
-	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
-	StatsSourceKey         = attribute.Key("ate.stats.source")
-	DNSDecisionKey         = attribute.Key("ate.dns.decision")
+	ActorOperationNameKey   = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey       = attribute.Key("ate.workerpool.name")
+	WorkerStateKey          = attribute.Key("ate.worker.state")
+	SandboxClassKey         = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey         = attribute.Key("ate.snapshot.kind")
+	SnapshotFidelityKey     = attribute.Key("ate.snapshot.fidelity")
+	SnapshotPhaseKey        = attribute.Key("ate.snapshot.phase")
+	ImageCacheOutcomeKey    = attribute.Key("ate.imagecache.outcome")
+	ImageProviderOutcomeKey = attribute.Key("ate.imageprovider.outcome")
+	ImageProviderKey        = attribute.Key("ate.imageprovider.provider")
+	FileCacheNameKey        = attribute.Key("ate.filecache.name")
+	FileCacheGCOutcomeKey   = attribute.Key("ate.filecache.gc.outcome")
+	SchedulerOutcomeKey     = attribute.Key("ate.scheduler.outcome")
+	RouterResumeKey         = attribute.Key("ate.router.resume")
+	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
+	StatsSourceKey          = attribute.Key("ate.stats.source")
+	DNSDecisionKey          = attribute.Key("ate.dns.decision")
 )
 
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
@@ -245,6 +247,15 @@ const (
 const (
 	DNSDecisionAllowed = "allowed"
 	DNSDecisionDenied  = "denied"
+)
+
+// Values for ImageProviderOutcomeKey. Fallback means the image provider plugin
+// declined the image or failed and the image cache served it. Error means both
+// failed.
+const (
+	ImageProviderOutcomeSuccess  = "success"
+	ImageProviderOutcomeFallback = "fallback"
+	ImageProviderOutcomeError    = "error"
 )
 
 // Values for FileCacheNameKey.

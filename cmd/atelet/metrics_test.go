@@ -174,6 +174,30 @@ func TestCheckpointDurationShape(t *testing.T) {
 	}
 }
 
+func TestRecordImageProvider(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+	inst.recordImageProvider(context.Background(), "nydus", ateattr.ImageProviderOutcomeFallback, time.Second)
+
+	want := attribute.NewSet(
+		ateattr.ImageProviderKey.String("nydus"),
+		ateattr.ImageProviderOutcomeKey.String(ateattr.ImageProviderOutcomeFallback),
+	)
+	requests, ok := collectHistogram(t, reader, imageProviderRequestsMetric).Data.(metricdata.Sum[int64])
+	if !ok || len(requests.DataPoints) != 1 {
+		t.Fatalf("%s = %+v, want one int64 sum datapoint", imageProviderRequestsMetric, requests)
+	}
+	if dp := requests.DataPoints[0]; dp.Value != 1 || !dp.Attributes.Equals(&want) {
+		t.Errorf("%s datapoint = %v %v, want 1 %v", imageProviderRequestsMetric, dp.Value, dp.Attributes.ToSlice(), want.ToSlice())
+	}
+	duration, ok := collectHistogram(t, reader, imageProviderDurationMetric).Data.(metricdata.Histogram[float64])
+	if !ok || len(duration.DataPoints) != 1 {
+		t.Fatalf("%s = %+v, want one float64 histogram datapoint", imageProviderDurationMetric, duration)
+	}
+	if dp := duration.DataPoints[0]; dp.Sum != 1 || !dp.Attributes.Equals(&want) {
+		t.Errorf("%s datapoint = %v %v, want sum 1 %v", imageProviderDurationMetric, dp.Sum, dp.Attributes.ToSlice(), want.ToSlice())
+	}
+}
+
 // TestCheckpointRecordsCleanup drives a Checkpoint: the node cleanup it does
 // once the snapshot commits lands in the cleanup phase, a failed upload returns
 // before it, and the phases fit in the total.
