@@ -76,7 +76,7 @@ type goldenActorControl interface {
 	CreateTag(ctx context.Context, req *ateapi.CreateTagRequest) (*ateapi.Tag, error)
 	DeleteTag(ctx context.Context, req *ateapi.DeleteTagRequest) (*ateapi.Tag, error)
 	DeleteActor(ctx context.Context, req *ateapi.DeleteActorRequest) (*ateapi.Actor, error)
-	CreateActor(ctx context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error)
+	createGoldenActor(ctx context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error)
 	GetActor(ctx context.Context, req *ateapi.GetActorRequest) (*ateapi.Actor, error)
 	CreateActorEgressPolicy(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error)
 	GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest) (*ateapi.EgressPolicy, error)
@@ -453,7 +453,7 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 	if apierror.Code(err) != codes.NotFound {
 		return nil, fmt.Errorf("while getting golden actor: %w", err)
 	}
-	actor, err = r.control.CreateActor(ctx, &ateapi.CreateActorRequest{
+	actor, err = r.control.createGoldenActor(ctx, &ateapi.CreateActorRequest{
 		Actor: &ateapi.Actor{
 			Metadata: &ateapi.ResourceMetadata{
 				Atespace: goldenActorRef.GetAtespace(),

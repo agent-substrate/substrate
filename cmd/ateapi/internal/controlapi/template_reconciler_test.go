@@ -198,7 +198,7 @@ func (c *fakeGoldenControl) goldenActorStatus() *ateapi.ActorStatus {
 	return st
 }
 
-func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error) {
+func (c *fakeGoldenControl) createGoldenActor(_ context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.createReqs = append(c.createReqs, req)
