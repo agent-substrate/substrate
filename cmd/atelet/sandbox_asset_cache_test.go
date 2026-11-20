@@ -54,7 +54,7 @@ func TestValidateSandboxAssetCacheFlags(t *testing.T) {
 func TestOpenSandboxAssetCacheResetsScratch(t *testing.T) {
 	useTempNodeDirs(t)
 	useTempAssetScratch(t)
-	leftover := filepath.Join(ateletpath.SandboxAssetScratchDir, "cpu-features-123", "runsc")
+	leftover := filepath.Join(ateletpath.SandboxAssetScratchDir, "sandbox-assets-123", "runsc")
 	if err := os.MkdirAll(filepath.Dir(leftover), 0o755); err != nil {
 		t.Fatal(err)
 	}
