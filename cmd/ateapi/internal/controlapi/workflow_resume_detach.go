@@ -67,7 +67,8 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	// their assignments; the loser is left durable-only.
 	ateletConn, err := w.dialer.DialForAteletOnNode(node)
 	if err != nil {
-		if canDetachWithoutAtelet(ctx, actor, err) {
+		// A dial error allows a detach only when no atelet pod is on the node.
+		if errors.Is(err, ErrNoAteletOnNode) && canDetachWithoutAtelet(ctx, actor, err) {
 			return w.recordDetach(ctx, actorRef, actor, node, nil)
 		}
 		if errors.Is(err, ErrNoAteletOnNode) && latestLocalNotDurable(actor) {

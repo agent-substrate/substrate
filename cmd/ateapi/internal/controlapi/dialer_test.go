@@ -33,10 +33,12 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/substratex509"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -371,8 +373,18 @@ func TestDialForAteletOnNode(t *testing.T) {
 
 	t.Run("no atelet on node", func(t *testing.T) {
 		d := NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "")
-		if _, err := d.DialForAteletOnNode("node1"); !errors.Is(err, ErrNoAteletOnNode) {
-			t.Fatalf("DialForAteletOnNode = %v, want ErrNoAteletOnNode", err)
+		_, err := d.DialForAteletOnNode("node1")
+		if !errors.Is(err, ErrNoAteletOnNode) || apierror.Code(err) != codes.Unavailable {
+			t.Fatalf("DialForAteletOnNode = %v, want Unavailable ErrNoAteletOnNode", err)
+		}
+	})
+
+	t.Run("atelet without an IP", func(t *testing.T) {
+		pod := ateletPod("atelet-1", "uid-1", "node1", "")
+		pod.Status.PodIPs = nil
+		d := NewAteletDialer(newTestAteletIndexer(t, pod), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "")
+		if _, err := d.DialForAteletOnNode("node1"); apierror.Code(err) != codes.Unavailable {
+			t.Fatalf("DialForAteletOnNode = %v, want Unavailable", err)
 		}
 	})
 

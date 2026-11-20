@@ -28,6 +28,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -154,7 +155,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	}
 
 	if len(matchingAtelets) == 0 {
-		return nil, fmt.Errorf("%w: %q", ErrNoAteletOnNode, nodeName)
+		return nil, apierror.Unavailable("%w: %q", ErrNoAteletOnNode, nodeName)
 	}
 	if len(matchingAtelets) > 1 {
 		return nil, fmt.Errorf("found %d atelet pods on node %q, expected 1", len(matchingAtelets), nodeName)
@@ -162,7 +163,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 
 	selectedAtelet := matchingAtelets[0].(*corev1.Pod)
 	if len(selectedAtelet.Status.PodIPs) == 0 {
-		return nil, fmt.Errorf("selected atelet %q has no assigned IPs", selectedAtelet.ObjectMeta.Namespace+"/"+selectedAtelet.ObjectMeta.Name)
+		return nil, apierror.Unavailable("selected atelet %q has no assigned IPs", selectedAtelet.ObjectMeta.Namespace+"/"+selectedAtelet.ObjectMeta.Name)
 	}
 	ateletKey := string(selectedAtelet.ObjectMeta.UID)
 	ateletIP := selectedAtelet.Status.PodIPs[0].IP
