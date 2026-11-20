@@ -336,6 +336,9 @@ ate-api-server stores every actor and tag snapshot under a cluster-wide
 `--snapshot-location`, an object-storage URI such as `gs://BUCKET/PREFIX/`.
 Its path segments may contain only ASCII letters, digits, `_` and `-` (see
 [Snapshot Storage Layout](../reference/api-guide.md#snapshot-storage-layout)).
+For a `gs://` location, the bucket name and path together may be at most 338
+characters, so each actor's prefix fits the 512 bytes GCS accepts in a snapshot
+transfer token's access boundary.
 Set it with `SNAPSHOT_LOCATION` (or ate-setup's `--snapshot-location`). It has
 no default, and ate-setup fails before deploying without it unless the
 `PerTemplateSnapshotLocation` preview gate is enabled. Even with the gate, the

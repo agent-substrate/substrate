@@ -164,8 +164,9 @@ func TestNew_NeedsATransferAccount(t *testing.T) {
 }
 
 // TestIssue_DownscopesTheTransferAccountsToken checks the issuer's source is
-// the impersonated account: STS reports no lifetime, so the downscoped token
-// expires with the token the IAM Credentials API returned.
+// the impersonated account: the token the IAM Credentials API returned is
+// exchanged for the intermediary token, and the downscoped token expires with
+// it.
 func TestIssue_DownscopesTheTransferAccountsToken(t *testing.T) {
 	iam := &fakeIAMCredentials{t: t, left: time.Hour}
 	sts := &fakeSTS{t: t}

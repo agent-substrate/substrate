@@ -480,7 +480,7 @@ records its snapshot's URI in `status.snapshot` right after it is reserved,
 before anything is copied, so a tag whose creation failed still names any
 partial copy to collect.
 
-Every owner's prefix starts with `<location>/atespaces/`. So where a location is set, through `--snapshot-location` or a template's `storageLocation`, each path segment may contain only ASCII letters, digits, `_` and `-`, and no segment may be `atespaces` in any letter case. The bucket is not restricted. A location such as `gs://my-bucket/atespaces/team-a/actors/<actor uid>` would otherwise put one owner's objects under another owner's or atespace's prefix, inside its grants and its cleanup.
+Every owner's prefix starts with `<location>/atespaces/`. So where a location is set, through `--snapshot-location` or a template's `storageLocation`, each path segment may contain only ASCII letters, digits, `_` and `-`, and no segment may be `atespaces` in any letter case. For a `gs://` location, the bucket name and path together may be at most 338 characters, so each actor's prefix fits the 512 bytes GCS accepts in a snapshot transfer token's access boundary. The bucket is not otherwise restricted. A location such as `gs://my-bucket/atespaces/team-a/actors/<actor uid>` would otherwise put one owner's objects under another owner's or atespace's prefix, inside its grants and its cleanup.
 
 ate-api-server refuses to start with a `--snapshot-location` that breaks these rules, `ate-setup deploy` rejects it, and creating a template rejects such a `storageLocation`. Creating a tag checks the location the tag is stored under and fails with `FAILED_PRECONDITION` on one that breaks them.
 

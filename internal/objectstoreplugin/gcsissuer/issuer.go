@@ -18,26 +18,30 @@
 //
 // The source credential is a token for the snapshot transfer service account,
 // which the pod's own identity impersonates through the IAM Credentials API.
-// GCS audit logs then name that account rather than ate-api-server. The
-// downscope package exchanges the token at STS with a Credential Access
-// Boundary and returns an access token GCS limits to the boundary. STS reports
-// no lifetime for that token, so the package falls back to the source token's
-// expiry, and the two expire together.
+// GCS audit logs then name that account rather than ate-api-server. Each
+// source token is exchanged at STS once, for an intermediary token and a
+// session key. Every downscoped token is then minted locally, with the actor's
+// Credential Access Boundary encrypted into it, so STS sees one call per source
+// token rather than one per actor. A downscoped token expires with the
+// intermediary token. STS gives that the source token's remaining life, and
+// the issuer never lets it outlive the source token.
 package gcsissuer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/cel-go/cel"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google/downscope"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/utils/lru"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
@@ -53,22 +57,32 @@ const (
 	// minServeLifetime is the least remaining lifetime a token is cached and
 	// served with, the same on the node plugin's side.
 	minServeLifetime = credential.MinServeLifetime
-	// defaultCacheSize bounds the per-actor cache. A miss costs an exchange,
+	// defaultCacheSize bounds the per-actor cache. A miss costs a local mint,
 	// never correctness.
 	defaultCacheSize = 100_000
-	// stsTimeout bounds one exchange. The downscope package does not take a
-	// per-call context, so the client's timeout is the only bound.
+	// stsTimeout bounds one exchange.
 	stsTimeout = 30 * time.Second
 )
 
-// Issuer exchanges the transfer account's token for per-actor downscoped
-// tokens and caches them by actor UID.
+// Issuer mints per-actor downscoped tokens from the transfer account's token
+// and caches them by actor UID.
 type Issuer struct {
 	source     oauth2.TokenSource
 	iamOptions []option.ClientOption
 	client     *http.Client
 	now        func() time.Time
 	cache      *lru.Cache
+	cel        *cel.Env
+
+	flight singleflight.Group
+	// intermediaries maps a source token to its *intermediary until the
+	// intermediary expires.
+	intermediaries *cache.Expiring
+	// latest is the intermediary that expires last, minted with while a
+	// refreshed source token's exchange runs or after it fails.
+	latest atomic.Pointer[intermediary]
+	// failure holds the last failed exchange while new ones are paused.
+	failure atomic.Pointer[failure]
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
@@ -107,13 +121,19 @@ func WithCacheSize(n int) Option {
 // the Issuer's whole life, so ctx is detached from cancellation.
 func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 	i := &Issuer{
-		client: &http.Client{Timeout: stsTimeout},
-		now:    time.Now,
-		cache:  lru.New(defaultCacheSize),
+		client:         &http.Client{Timeout: stsTimeout},
+		now:            time.Now,
+		cache:          lru.New(defaultCacheSize),
+		intermediaries: cache.NewExpiring(),
 	}
 	for _, o := range opts {
 		o(i)
 	}
+	env, err := cel.NewEnv()
+	if err != nil {
+		return nil, fmt.Errorf("while creating the CEL environment: %w", err)
+	}
+	i.cel = env
 	if i.source == nil {
 		src, err := newTransferAccountSource(context.WithoutCancel(ctx), account, i.iamOptions...)
 		if err != nil {
@@ -127,12 +147,20 @@ func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 // Issue returns a token downscoped to grants for the actor. A cached token is
 // returned while it covers the grants and has at least minServeLifetime left,
 // unless force is set, which mints regardless and is what the node plugin
-// sends after GCS refused a token. A minted token expires with the source
-// token, which is fetched again once less than sourceRefreshMargin is left, so
-// it starts with at least that long. If that fetch fails, the previous source
-// token is used until it expires. A minted token with less than
-// minServeLifetime left, which only that leaves behind, is handed out anyway,
-// since a short token beats a failed transfer, but it is not cached.
+// sends after GCS refused a token. A forced mint still uses the stored
+// intermediary token: a new one for the same source token carries the same
+// permissions, and an STS call on every refusal would bring back the per-actor
+// calls this package avoids.
+//
+// A minted token expires with the intermediary token it was minted from, which
+// expires no later than its source token. Normally a minted token starts with
+// at least minServeLifetime: the source token is fetched again once less than
+// sourceRefreshMargin is left, and mints keep using the previous intermediary
+// until the new one is exchanged. When fetching or exchanging the source token
+// keeps failing, mints use what is left, so a token can start with as little
+// as stsTimeout. A minted token with less than minServeLifetime left is handed
+// out anyway, since a short token beats a failed transfer, but it is not
+// cached.
 //
 // The cache is keyed by actor UID and each entry remembers its grants. Grants
 // narrow when the tag an actor was created from drops out after its first
@@ -142,7 +170,8 @@ func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 // nothing and a repoint never hands out a token GCS would refuse.
 //
 // A grant set the access boundary cannot express fails with codes.Internal.
-// Every other failure is an STS or network error and carries no code.
+// The caller's own context error is returned as it is. Every other failure is
+// a source token, STS, network or encryption failure and carries no code.
 func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	if len(grants) == 0 {
 		// Checked before the cache: an empty set is covered by any cached
@@ -186,43 +215,17 @@ func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (credentia
 	if err != nil {
 		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
 	}
-	// The downscope package reads its HTTP client from the context but sends
-	// the STS request without one, so the caller's deadline is attached by the
-	// transport instead.
-	ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{
-		Transport: contextTransport{ctx: ctx, base: i.client.Transport},
-		Timeout:   i.client.Timeout,
-	})
-	ts, err := downscope.NewTokenSource(ctx, downscope.DownscopingConfig{RootSource: i.source, Rules: rules})
+	plain, err := encode(i.cel, rules)
 	if err != nil {
-		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
+		return credential.Token{}, status.Errorf(codes.Internal, "while encoding the access boundary: %v", err)
 	}
-	tok, err := ts.Token()
+	in, err := i.currentIntermediary(ctx)
 	if err != nil {
-		return credential.Token{}, fmt.Errorf("while exchanging at STS: %w", err)
+		return credential.Token{}, err
 	}
-	if tok.AccessToken == "" {
-		return credential.Token{}, errors.New("STS returned no access token")
+	tok, err := in.seal(plain)
+	if err != nil {
+		return credential.Token{}, err
 	}
-	if tok.Expiry.IsZero() {
-		// Without an expiry the node plugin could not know when to stop using
-		// the token.
-		return credential.Token{}, errors.New("downscoped token has no expiry")
-	}
-	return credential.Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
-}
-
-// contextTransport sends every request with ctx, so a cancelled or expired
-// caller stops an STS exchange in flight instead of waiting out the timeout.
-type contextTransport struct {
-	ctx  context.Context
-	base http.RoundTripper
-}
-
-func (t contextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return base.RoundTrip(req.WithContext(t.ctx))
+	return credential.Token{AccessToken: tok, Expiry: in.expiry}, nil
 }
