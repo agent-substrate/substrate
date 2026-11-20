@@ -69,6 +69,16 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "golden_egress_policy", "rules").Index(1).Child("tls_passthrough", "hostnames").Index(0), nil, "")},
 	}, {
+		"golden egress token exchange at an endpoint no rule allows",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapi.EgressPolicyTemplate{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
+				Hostnames: []string{"api.example.com"},
+				Ports:     &ateapi.Ports{Numbers: []int32{443}},
+				Effects:   &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{tokenExchangeHeader("https://sts.example.com/token")}},
+			}}}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "golden_egress_policy", "rules").Index(0).Child("https", "effects", "replace_headers").Index(0).Child("token_exchange", "token_url"), nil, "")},
+	}, {
 		"too many golden egress rules",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.GoldenEgressPolicy = &ateapi.EgressPolicyTemplate{}
