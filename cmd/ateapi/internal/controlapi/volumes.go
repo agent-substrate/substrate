@@ -36,6 +36,17 @@ func externalVolumesStatus(vols []*ateapi.ExternalVolumeStatus) *ateapi.External
 	return &ateapi.ExternalVolumes{Volumes: vols}
 }
 
+// templateHasExternalVolumes reports whether template provisions any external
+// volume.
+func templateHasExternalVolumes(template *ateapi.ActorTemplate) bool {
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternal().GetTemplate() != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // externalVolumeClassGetter reads an ExternalVolumeClass by name. ServiceImpl
 // implements it and reports a missing class as a NotFound API error.
 type externalVolumeClassGetter interface {
