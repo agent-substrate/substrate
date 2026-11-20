@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,6 +68,12 @@ const storageExternalComponent = installDir + "/components/storage-external"
 // nothing in it matches, so composing a manifest that carries none of them is
 // harmless.
 func (e *Env) components() []string {
+	// Operator components come last, so they patch the result of ours.
+	return append(e.inTreeComponents(), e.Cfg.Components...)
+}
+
+// inTreeComponents lists the installer's own components in components.
+func (e *Env) inTreeComponents() []string {
 	var components []string
 	// e2e must come before fake-data-plane: e2e appends to atelet's args,
 	// and fake-data-plane removes args entirely.
@@ -85,8 +92,7 @@ func (e *Env) components() []string {
 	if e.Cfg.StorageBackend == config.StorageBackendExternal {
 		components = append(components, e.Cfg.Path(storageExternalComponent))
 	}
-	// Operator components come last, so they patch the result of ours.
-	return append(components, e.Cfg.Components...)
+	return components
 }
 
 // SystemOverlay picks the kustomization for a full control plane install.
@@ -115,17 +121,23 @@ func SystemOverlay(cfg *config.Config) string {
 // selected components (see components), so the same patches reach every
 // control plane workload whichever apply path delivers it.
 func (e *Env) render(path string) ([]byte, error) {
-	if components := e.components(); len(components) > 0 {
-		manifest, err := kustomize.Compose(path, components...)
-		if err != nil {
+	manifest, err := composeManifest(path, e.components())
+	if err != nil {
+		return nil, err
+	}
+	if e.Cfg.StorageBackend == config.StorageBackendExternal {
+		if err := e.checkProviderPluginImages(manifest); err != nil {
 			return nil, err
 		}
-		if e.Cfg.StorageBackend == config.StorageBackendExternal {
-			if err := e.checkProviderPluginImages(manifest); err != nil {
-				return nil, err
-			}
-		}
-		return manifest, nil
+	}
+	return manifest, nil
+}
+
+// composeManifest renders path, a manifest file or a kustomization directory,
+// composed with components.
+func composeManifest(path string, components []string) ([]byte, error) {
+	if len(components) > 0 {
+		return kustomize.Compose(path, components...)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -167,6 +179,72 @@ func (e *Env) checkProviderPluginImages(manifest []byte) error {
 		}
 	}
 	return nil
+}
+
+// checkComponentTargets fails unless each patch in each --component selects a
+// resource in some manifest that deploy ate-system composes the components
+// into. Kustomize skips a patch whose target matches nothing, so a misspelled
+// target would otherwise leave the in-tree workload in place with no error.
+// It renders those manifests without the later splices and image resolution,
+// which edit fields of existing objects and add none. Rendering also runs the
+// render-time checks, so they fail here before any cluster write.
+//
+// A patch matches if its target selects a resource either before or after the
+// operator components apply. The first covers a patch that deletes or renames
+// its target, and the second a resource that a component adds. A patch whose
+// target only a later --component adds, or an earlier one removes, passes here
+// but kustomize skips it.
+func (e *Env) checkComponentTargets(providers []config.CredentialProvider) error {
+	if len(e.Cfg.Components) == 0 {
+		return nil
+	}
+	var manifests [][]byte
+	for _, path := range e.ateSystemSources(providers) {
+		composed, err := e.render(path)
+		if err != nil {
+			return err
+		}
+		inTree, err := composeManifest(path, e.inTreeComponents())
+		if err != nil {
+			return err
+		}
+		manifests = append(manifests, composed, inTree)
+	}
+	var errs []error
+	for _, dir := range e.Cfg.Components {
+		patches, err := kustomize.ComponentPatches(dir)
+		if err != nil {
+			return fmt.Errorf("--component %s: %w", dir, err)
+		}
+		unmatched, err := kustomize.Unmatched(patches, manifests)
+		if err != nil {
+			return fmt.Errorf("--component %s: %w", dir, err)
+		}
+		for _, p := range unmatched {
+			errs = append(errs, fmt.Errorf("--component %s: patch %s targets %s, which matches no control plane resource",
+				dir, p.Name, kustomize.DescribeSelector(p.Target)))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ateSystemSources lists each manifest DeployAteSystem composes the components
+// into. Keep it in step with the render calls there. It includes the bundled
+// PostgreSQL even when the install uses an external database, which only
+// takes a cluster read to know.
+func (e *Env) ateSystemSources(providers []config.CredentialProvider) []string {
+	paths := []string{
+		e.podCertificateControllerPath(),
+		e.postgresManifestPath(),
+		e.Cfg.Path(SystemOverlay(e.Cfg)),
+	}
+	if config.HasKubernetesProvider(providers) {
+		paths = append(paths, e.k8sCredentialProviderPath(k8sCredentialProviderManifest))
+	}
+	if e.Cfg.Router == config.RouterAgentgateway {
+		return append(paths, e.Cfg.Path(installDir+"/agentgateway-egress"))
+	}
+	return append(paths, e.atenetEgressManifestPath())
 }
 
 // renderBytes is render for a manifest already held in memory.

@@ -18,12 +18,16 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
@@ -227,5 +231,45 @@ func TestComponentManifestsMatchSystemBundle(t *testing.T) {
 				t.Errorf("router=%s kind=%v: %s renders a different %s/%s than the system bundle (-bundle +standalone):\n%s", tc.router, tc.kind, component.path, component.kind, component.name, diff)
 			}
 		}
+	}
+}
+
+// deploy ate-system checks --component patches before its first API call.
+func TestDeployAteSystemChecksComponentsFirst(t *testing.T) {
+	silenceStepLog(t)
+	for _, tc := range []struct {
+		name    string
+		backend string
+		target  [2]string
+		wantErr string
+	}{
+		{name: "misspelled target", backend: config.StorageBackendGCS, target: [2]string{"Deployment", "ate-api-srever"}, wantErr: "matches no control plane resource"},
+		{name: "in-tree image under external", backend: config.StorageBackendExternal, target: [2]string{"DaemonSet", "atelet"}, wantErr: "still runs the in-tree image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := fake.NewClientset()
+			cs.PrependReactor("*", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, errors.New("unexpected API call")
+			})
+			e := &Env{
+				Cfg: &config.Config{
+					Root:                   repoRoot(t),
+					Kind:                   true,
+					Router:                 config.RouterEnvoy,
+					CredentialProviderJSON: `{"enabled":false}`,
+					SnapshotLocation:       "gs://example-bucket/",
+					StorageBackend:         tc.backend,
+					Components:             []string{providerImageComponent(t, tc.target)},
+				},
+				Kube: kube.NewFromClients(nil, cs, nil, cs.Discovery()),
+			}
+			err := e.DeployAteSystem(t.Context(), DeployOptions{SetupCSI: "none", SandboxClasses: "gvisor"})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("DeployAteSystem() = %v, want an error containing %q", err, tc.wantErr)
+			}
+			if got := len(cs.Actions()); got != 0 {
+				t.Errorf("DeployAteSystem() made %d API calls before the component check failed, want 0", got)
+			}
+		})
 	}
 }

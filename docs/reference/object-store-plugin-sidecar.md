@@ -50,13 +50,17 @@ Under `external`, `ate-setup`:
   so set `--snapshot-location` to a URI your plugin serves;
 - stages no microVM assets (see [microVM assets](#microvm-assets));
 - refuses to install without a `--component`;
-- fails the render if either sidecar still runs the in-tree image, for
-  example when a patch's `target:` matches nothing.
+- fails if either sidecar still runs the in-tree image, for example when a
+  patch's `target:` matches nothing.
+
+`deploy ate-system` also fails on a patch whose `target:` matches no
+control plane resource. It runs both checks before it applies anything.
 
 The component patches each sidecar:
 
 - Select each target with `target:` and namespace `ate-system`. Each apply
-  renders only part of the control plane.
+  renders only part of the control plane, so `ate-setup` refuses a patch
+  without `target:`.
 - `ate-setup` composes the component into every control plane apply, so any
   `resources:` it lists are applied each time too.
 - Set `image`, `args` and any `env` your plugin needs.

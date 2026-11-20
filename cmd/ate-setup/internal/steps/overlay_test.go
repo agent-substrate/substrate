@@ -984,6 +984,12 @@ func providerImageComponent(t *testing.T, targets ...[2]string) string {
                 image: example.invalid/objectstore-plugin:v1
 `, target[0], target[1], target[0], target[1])
 	}
+	return writeComponent(t, body)
+}
+
+// writeComponent writes body as the kustomization of a new component directory.
+func writeComponent(t *testing.T, body string) string {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -1032,6 +1038,148 @@ func TestRenderExternalStorageRequiresProviderImages(t *testing.T) {
 			for _, want := range []string{tc.wantErr, images.KoReference("cmd/objectstore-plugin"), "--component " + component} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("render error %q does not contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// Every --component patch must select a resource in some manifest that deploy
+// ate-system renders. The errors name the component, the patch and its target.
+func TestCheckComponentTargets(t *testing.T) {
+	root := repoRoot(t)
+	example := filepath.Join(root, "docs", "examples", "object-store-provider-component")
+	for _, tc := range []struct {
+		name       string
+		cfg        config.Config
+		components func(t *testing.T) []string
+		// wantErr returns the substrings the error must contain, given the
+		// component directories; nil for success.
+		wantErr func(dirs []string) []string
+	}{
+		{
+			name:       "no components renders nothing",
+			cfg:        config.Config{Root: t.TempDir()},
+			components: func(*testing.T) []string { return nil },
+		},
+		{
+			name:       "example component",
+			cfg:        config.Config{Router: config.RouterEnvoy, StorageBackend: config.StorageBackendExternal},
+			components: func(*testing.T) []string { return []string{example} },
+		},
+		{
+			name:       "example component kind agentgateway",
+			cfg:        config.Config{Router: config.RouterAgentgateway, Kind: true, StorageBackend: config.StorageBackendExternal},
+			components: func(*testing.T) []string { return []string{example} },
+		},
+		{
+			name: "targets outside the system overlay",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			components: func(t *testing.T) []string {
+				return []string{providerImageComponent(t, [2]string{"Deployment", "atenet-egress"}, [2]string{"Deployment", "podcertificate-controller"}, [2]string{"StatefulSet", "postgres"})}
+			},
+		},
+		{
+			name: "agentgateway egress",
+			cfg:  config.Config{Router: config.RouterAgentgateway},
+			components: func(t *testing.T) []string {
+				return []string{providerImageComponent(t, [2]string{"Deployment", "atenet-egress"})}
+			},
+		},
+		{
+			name: "patch that deletes its target",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			components: func(t *testing.T) []string {
+				return []string{writeComponent(t, `apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: PodMonitoring
+      name: atenet-router-envoy
+    patch: |-
+      apiVersion: monitoring.googleapis.com/v1
+      kind: PodMonitoring
+      metadata:
+        name: atenet-router-envoy
+      $patch: delete
+`)}
+			},
+		},
+		{
+			name: "patch that renames its target",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			components: func(t *testing.T) []string {
+				return []string{writeComponent(t, `apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: Deployment
+      name: ate-idp-server
+    options:
+      allowNameChange: true
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: my-idp
+`)}
+			},
+		},
+		{
+			name: "misspelled target",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			components: func(t *testing.T) []string {
+				return []string{example, providerImageComponent(t, [2]string{"DaemonSet", "atelet"}, [2]string{"Deployment", "ate-api-srever"})}
+			},
+			wantErr: func(dirs []string) []string {
+				return []string{"--component " + dirs[1] + `: patch patches[1] targets {kind="Deployment" name="ate-api-srever"}, which matches no control plane resource`}
+			},
+		},
+		{
+			name: "every unmatched patch",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			components: func(t *testing.T) []string {
+				return []string{
+					providerImageComponent(t, [2]string{"DaemonSet", "atelet-node"}),
+					providerImageComponent(t, [2]string{"Deployment", "api-server"}),
+				}
+			},
+			wantErr: func(dirs []string) []string {
+				return []string{
+					"--component " + dirs[0] + `: patch patches[0] targets {kind="DaemonSet" name="atelet-node"}`,
+					"--component " + dirs[1] + `: patch patches[0] targets {kind="Deployment" name="api-server"}`,
+				}
+			},
+		},
+		{
+			name: "external backend with the in-tree image",
+			cfg:  config.Config{Router: config.RouterEnvoy, StorageBackend: config.StorageBackendExternal},
+			components: func(t *testing.T) []string {
+				return []string{providerImageComponent(t, [2]string{"DaemonSet", "atelet"})}
+			},
+			wantErr: func([]string) []string {
+				return []string{"container objectstore-plugin in Deployment ate-api-server still runs the in-tree image"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			if cfg.Root == "" {
+				cfg.Root = root
+			}
+			cfg.Components = tc.components(t)
+			err := (&Env{Cfg: &cfg}).checkComponentTargets(nil)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("checkComponentTargets: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("checkComponentTargets = nil error, want an error")
+			}
+			for _, want := range tc.wantErr(cfg.Components) {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("checkComponentTargets error %q does not contain %q", err, want)
 				}
 			}
 		})

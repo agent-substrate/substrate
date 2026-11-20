@@ -62,9 +62,9 @@ caught at all and surfaced from inside `deploy_locust.sh` after the microvm
 dependencies had already been installed. `--setup-csi` is checked the same way:
 an unknown driver is rejected during argument validation, before the
 configuration is even loaded, and `--setup-csi=hostpath` against a cluster that
-is not Kind is refused before `deploy ate-system` installs anything. A
-`--component` with a bad patch is the exception; see "Operator components are
-new" below.
+is not Kind is refused before `deploy ate-system` installs anything. So is a
+`--component` patch whose target matches nothing; the single-workload `deploy`
+commands are the exception, see "Operator components are new" below.
 
 `.ate-dev-env.sh` is still sourced through bash — a developer's file can contain
 arbitrary shell — but its variables are then layered under the process
@@ -206,13 +206,18 @@ composes `manifests/ate-install/components/storage-external`, which removes the
 in-tree GCS and S3 settings from both objectstore-plugin sidecars, and leaves
 them to a `--component`. Under that backend ate-setup stages no microVM assets.
 The `microvm` SandboxConfig fetches them from `--microvm-asset-location`, and
-that location is validated before any cluster mutation. A `--component` is only
-checked to be a directory holding a kustomize Component. Its patches are
-applied when the first control plane apply renders, after the namespace, CRD
-and SandboxConfig applies have already run. A patch that fails stops the
-install there. So does a component that leaves either objectstore-plugin
-sidecar on the in-tree image under `--storage-backend=external`. Fix the
-component and rerun the same command.
+that location is validated before any cluster mutation. A `--component` must be
+a directory holding a kustomize Component, and ate-setup refuses a patch in it
+without `target:` when the configuration loads. Before its first cluster write,
+`deploy ate-system` renders every manifest it composes the components into,
+with and without the `--component` directories. It fails if a patch's target
+matches no resource in any of them, or if either objectstore-plugin sidecar
+keeps the in-tree image under `--storage-backend=external`. A patch whose
+target only a later `--component` adds, or an earlier one removes, passes that
+check, but kustomize skips it. The single-workload `deploy`
+commands do not check targets. They check the sidecar image only as they
+render, which can follow a cluster write. Fix the component and rerun the same
+command.
 
 **Timing lines are new.** `ate-setup` prints `(kubectl apply took 1.234s)`
 after each apply, delete, rollout wait, trust bundle wait, `ko` invocation, and

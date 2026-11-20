@@ -15,9 +15,7 @@
 package config
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,10 +23,9 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
-	"sigs.k8s.io/kustomize/api/konfig"
-	"sigs.k8s.io/kustomize/api/types"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
@@ -302,10 +299,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 }
 
 // resolveComponents makes the component paths absolute and checks each is a
-// kustomize Component, so a bad path fails before anything is applied. The
-// file already resolved its relative paths against its own directory; the
-// flag and the environment resolve against the working directory. The
-// absolute paths are written back so the report and the record name them.
+// kustomize Component whose patches all have a target, so a bad component
+// fails before anything is applied. The file already resolved its relative
+// paths against its own directory; the flag and the environment resolve
+// against the working directory. The absolute paths are written back so the
+// report and the record name them.
 func resolveComponents(r *Resolved) ([]string, error) {
 	v, _ := r.Value("components")
 	paths := r.PathList("components")
@@ -315,7 +313,7 @@ func resolveComponents(r *Resolved) ([]string, error) {
 			return nil, err
 		}
 		paths[i] = abs
-		if err := checkComponent(abs); err != nil {
+		if _, err := kustomize.ComponentPatches(abs); err != nil {
 			return nil, fmt.Errorf("%s: %w (from %s)", v.Setting.Key, err, v.From.Describe(v.Setting))
 		}
 	}
@@ -323,36 +321,6 @@ func resolveComponents(r *Resolved) ([]string, error) {
 		r.set("components", joined, v.From)
 	}
 	return paths, nil
-}
-
-// checkComponent reports whether dir holds a kustomization of kind Component.
-func checkComponent(dir string) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", dir)
-	}
-	for _, name := range konfig.RecognizedKustomizationFileNames() {
-		path := filepath.Join(dir, name)
-		raw, err := os.ReadFile(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		var k types.Kustomization
-		if err := k.Unmarshal(raw); err != nil {
-			return fmt.Errorf("parsing %s: %w", path, err)
-		}
-		if k.Kind != types.ComponentKind {
-			return fmt.Errorf("%s must declare kind: %s, got %q", path, types.ComponentKind, k.Kind)
-		}
-		return nil
-	}
-	return fmt.Errorf("%s has no kustomization.yaml", dir)
 }
 
 // splitList splits a comma-separated value, dropping empty items, so an empty

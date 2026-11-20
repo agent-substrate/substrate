@@ -148,6 +148,21 @@ func TestLoadComponentsRejectsBadDirectories(t *testing.T) {
 			path: writeComponent(t, filepath.Join(dir, "unknown-field"), "Component\npatchesStrategicMerg: []"),
 			want: `invalid Kustomization: json: unknown field "patchesStrategicMerg"`,
 		},
+		{
+			name: "patch without a target",
+			path: writeComponent(t, filepath.Join(dir, "untargeted"), "Component\npatches:\n  - path: targeted.yaml\n    target:\n      kind: Deployment\n  - path: node.yaml\n  - patch: '{}'"),
+			want: "patch node.yaml, patches[2] has no target",
+		},
+		{
+			name: "patchesStrategicMerge",
+			path: writeComponent(t, filepath.Join(dir, "strategic-merge"), "Component\npatchesStrategicMerge:\n  - node.yaml"),
+			want: "patchesStrategicMerge cannot set a target",
+		},
+		{
+			name: "patchesJson6902 without a target",
+			path: writeComponent(t, filepath.Join(dir, "json6902"), "Component\npatchesJson6902:\n  - path: node.yaml"),
+			want: "patch node.yaml has no target",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := loadComponents(t, []string{"--component", tc.path}, "")
