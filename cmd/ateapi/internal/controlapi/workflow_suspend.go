@@ -95,20 +95,28 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err, attrs...)
 	}()
 
+	// An already suspended actor needs no work, even if atelet is still
+	// uploading its snapshot in the background.
+	observed, err := w.store.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	if observed.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		actor = observed
+		return actor, nil
+	}
+
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
 	defer lease.Close()
 
+	// Another suspend may have finished before we took the lease.
 	actor, actorTemplate, err = w.loadActorForSuspend(leaseCtx, actorRef)
 	if err != nil {
 		return nil, err
 	}
-	// A SUSPENDED actor has nothing left to do, whatever the mode and wherever
-	// its snapshot is: atelet uploads a node-local snapshot in the background.
-	// These successes report no pool, and cannot: the previous attempt
-	// released the worker, so the record names none (#957).
 	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		return actor, nil
 	}
@@ -137,7 +145,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	return actor, nil
 }
 
-// loadActorForSuspend fetches the current actor record and its template.
+// loadActorForSuspend fetches the actor and resolves its template if needed.
 func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForSuspend")
 	defer func() { err = done(err) }()
@@ -145,6 +153,9 @@ func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resour
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, nil, err
+	}
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		return actor, nil, nil
 	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {

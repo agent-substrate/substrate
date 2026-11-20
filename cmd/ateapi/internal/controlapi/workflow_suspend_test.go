@@ -140,6 +140,45 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 	}
 }
 
+type suspendedActorStore struct {
+	store.Interface
+	actor      *ateapi.Actor
+	leaseCalls int
+}
+
+func (s *suspendedActorStore) GetActor(context.Context, resources.ActorRef) (*ateapi.Actor, error) {
+	return s.actor, nil
+}
+
+func (s *suspendedActorStore) AcquireLease(context.Context, string) (*store.Lease, error) {
+	s.leaseCalls++
+	return nil, store.ErrLeaseConflict
+}
+
+func TestSuspendActor_SuspendedFastPathDoesNotAcquireLease(t *testing.T) {
+	actor := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	for _, mode := range suspendModes {
+		t.Run(mode.name, func(t *testing.T) {
+			st := &suspendedActorStore{actor: actor}
+			w := &ActorWorkflow{store: st}
+			got, err := w.SuspendActor(context.Background(), resources.ActorRefFromActor(actor), mode.suspendMode)
+			if st.leaseCalls != 0 {
+				t.Errorf("AcquireLease calls = %d, want 0", st.leaseCalls)
+			}
+			if err != nil {
+				t.Fatalf("SuspendActor: %v", err)
+			}
+			if !proto.Equal(got, actor) {
+				t.Errorf("SuspendActor actor = %v, want %v", got, actor)
+			}
+		})
+	}
+}
+
 func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
