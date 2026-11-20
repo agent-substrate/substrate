@@ -130,6 +130,10 @@ func DeepEqual[T any](a, b T) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// MaxResourceNameLength is the longest resource name ValidateResourceName
+// accepts.
+const MaxResourceNameLength = content.DNS1123LabelMaxLength
+
 // ValidateResourceName checks that a string conforms to Agent Substrate's
 // rules for a resource name, which is a subset of the rules for an RFC-1123
 // DNS label.  This does not check for zero-length strings, which callers may
@@ -268,6 +272,18 @@ func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.E
 // into another name.
 var snapshotLocationSegmentRE = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// MaxGCSResourceName is the longest object prefix, as GCSResourceName writes
+// it, that GCS accepts in the access boundary condition of a locally minted
+// token, in bytes. GCS refuses a token with a longer one with a 401 that does
+// not say why. We measured the limit. It is not documented.
+const MaxGCSResourceName = 512
+
+// GCSResourceName is the prefix an access boundary condition matches the
+// objects under path in bucket by. path must end in "/".
+func GCSResourceName(bucket, path string) string {
+	return "projects/_/buckets/" + bucket + "/objects/" + path
+}
+
 // ValidateSnapshotLocation checks ate-api-server's --snapshot-location, an
 // ActorTemplate's snapshotConfig.storageLocation on create, and the location a
 // tag is created under. The location must be a URI with a bucket, so a bad
@@ -279,10 +295,18 @@ var snapshotLocationSegmentRE = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // Each path segment must match snapshotLocationSegmentRE and must not be
 // "atespaces" in any letter case, so a location cannot sit inside the
 // <location>/atespaces/... prefix another location builds.
+//
+// A gs:// location must leave room for every actor's prefix within
+// MaxGCSResourceName, or no token could be minted for the actor.
 func ValidateSnapshotLocation(location string) error {
 	u, err := parseStorageURI(location)
 	if err != nil {
 		return fmt.Errorf("invalid snapshot location %q: %w", location, err)
+	}
+	if u.Scheme == "gs" {
+		if err := validateGCSPrefixLength(location); err != nil {
+			return err
+		}
 	}
 	path := u.EscapedPath()
 	if path == "" || path == "/" {
@@ -299,6 +323,26 @@ func ValidateSnapshotLocation(location string) error {
 		if strings.EqualFold(segment, atespacesPathSegment) {
 			return fmt.Errorf("invalid snapshot location %q: must not contain an %q path segment; snapshots are stored under <location>/%s/", location, atespacesPathSegment, atespacesPathSegment)
 		}
+	}
+	return nil
+}
+
+// validateGCSPrefixLength checks that every actor's prefix under a gs://
+// location fits within MaxGCSResourceName.
+func validateGCSPrefixLength(location string) error {
+	// The longest prefix under the location is an actor's whose atespace and
+	// UID are as long as a resource name can be.
+	longestName := strings.Repeat("a", MaxResourceNameLength)
+	longest, err := ActorSnapshotOwner(longestName, longestName).Prefix(location)
+	if err != nil {
+		return err
+	}
+	lu, err := url.Parse(longest.String())
+	if err != nil {
+		return err
+	}
+	if name := GCSResourceName(lu.Host, strings.TrimPrefix(lu.Path, "/")+"/"); len(name) > MaxGCSResourceName {
+		return fmt.Errorf("invalid snapshot location %q: the longest actor prefix under it is %d bytes in a GCS access boundary, more than the %d GCS accepts", location, len(name), MaxGCSResourceName)
 	}
 	return nil
 }

@@ -81,8 +81,8 @@ func TestFromGrants_Refuses(t *testing.T) {
 }
 
 func TestFromGrants_EscapesTheCELLiteral(t *testing.T) {
-	// Substrate accepts a quote in a storage location, so the condition must
-	// escape it rather than let it end the string literal.
+	// A location stored before the segment rules may contain a quote, so the
+	// condition must escape it rather than let it end the string literal.
 	rules, err := FromGrants([]actorscope.Grant{{Prefix: prefix(t, `gs://snaps/tenant's/atespaces/team-a/actors/9f1e`), Access: actorscope.ReadWrite}})
 	if err != nil {
 		t.Fatalf("FromGrants: %v", err)
