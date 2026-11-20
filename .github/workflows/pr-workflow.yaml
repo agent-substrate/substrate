@@ -139,22 +139,20 @@ jobs:
       env:
         BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
       run: hack/verify/postgresql-migrations.sh "origin/${BASE_REF#refs/heads/}"
-  # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
-  # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
-  # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
+  # Free x86-64 ubuntu-latest runners expose /dev/kvm (with a udev rule), so
+  # create-kind-cluster.sh mounts it and the micro-VM (kata + cloud-hypervisor)
+  # sandbox class works alongside gVisor.
   #
   # Each matrix entry is an independent job on a fresh cluster, so the steps
-  # below are written once and run for every dataplane and preview mode. The
-  # envoy entry with preview features off reports the required e2e-test check.
-  e2e-test:
+  # below are written once and run for every dataplane, sandbox class and
+  # preview mode. The e2e-test job below reports the required checks.
+  e2e:
     name: >-
-      ${{ (matrix.dataplane == 'envoy' && matrix.preview == 'off') && 'e2e-test'
-        || format('e2e-test ({0}{1})', matrix.dataplane, matrix.preview == 'on' && ', preview' || '') }}
+      ${{ format('e2e ({0}, {1}{2})', matrix.dataplane, matrix.sandbox, matrix.preview == 'on' && ', preview' || '') }}
     runs-on: ubuntu-latest
-    # Cluster bring-up, image builds and two sequential lanes; generous, but far
-    # short of the six-hour platform default a hung lane would otherwise consume.
+    # Cluster bring-up, image builds and one lane; generous, but far short of
+    # the six-hour platform default a hung lane would otherwise consume.
     timeout-minutes: 120
-    continue-on-error: ${{ matrix.dataplane == 'agentgateway' }} # TODO: Make AgentGateway required once tests show stability
     strategy:
       fail-fast: false
       matrix:
@@ -173,6 +171,7 @@ jobs:
         # "off" is the default install, and proves the suites pass without
         # preview features; "on" enables every one of them.
         preview: ['off', 'on']
+        sandbox: [gvisor, microvm]
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # Apply the e2e test component (short atelet snapshot delays) during the
@@ -191,17 +190,16 @@ jobs:
       # installs allowlist it, so the suites can reach actors through the
       # router's mTLS listeners.
       ATE_INGRESS_ALLOWED_SPIFFE_IDS: spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
-      # Appended to the lane and artifact names: e2e-gvisor runs without
+      # The lane name, also used for its JUnit file: e2e-gvisor runs without
       # preview features, e2e-gvisor-preview with them.
-      LANE_SUFFIX: ${{ matrix.preview == 'on' && '-preview' || '' }}
-      # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
-      # job, so one job-level path would have each overwrite the last.
+      LANE: e2e-${{ matrix.sandbox }}${{ matrix.preview == 'on' && '-preview' || '' }}
       ARTIFACTS: ${{ github.workspace }}/_artifacts
       # Cache the envoy-dataplane Rust build. Only main writes it, so PRs
       # share one copy instead of each storing their own.
       DOCKER_BUILD_FLAGS: >-
         --cache-from type=gha,scope=envoy-dataplane
         ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off'
+          && matrix.sandbox == 'gvisor'
           && '--cache-to type=gha,mode=max,scope=envoy-dataplane,ignore-error=true' || '' }}
     steps:
     - name: Checkout
@@ -275,43 +273,29 @@ jobs:
         sudo modprobe nfsd || true
     - name: Install CSI NFS driver
       run: go run ./cmd/ate-setup --kind setup csi nfs
-    - name: Deploy micro-VM counter demo
-      run: go run ./cmd/ate-setup --kind deploy demo counter-microvm
-    - name: Deploy gVisor counter demo
-      run: go run ./cmd/ate-setup --kind deploy demo counter
-    - name: Deploy egress demos
-      # TestActorEgress in the networking suite builds its Actor from the egress
-      # ActorTemplate for the class under test, so both fixtures have to exist
-      # before their respective lane runs. The demo's actors trust the CA the
-      # gateway mints its leaves from.
+    # Deploy only the demos for the class under test. The suites build their
+    # actors from the counter and egress ActorTemplates for that class. The
+    # egress demo's actors trust the CA the gateway mints its leaves from.
+    - name: Deploy demos (${{ matrix.sandbox }})
+      env:
+        DEMO_SUFFIX: ${{ matrix.sandbox == 'microvm' && '-microvm' || '' }}
       run: |
-        go run ./cmd/ate-setup --kind deploy demo egress
-        go run ./cmd/ate-setup --kind deploy demo egress-microvm
+        go run ./cmd/ate-setup --kind deploy demo "counter${DEMO_SUFFIX}"
+        go run ./cmd/ate-setup --kind deploy demo "egress${DEMO_SUFFIX}"
     - name: Trust local TLS origins in egress gateway
       run: hack/setup-e2e-egress-tls-kind.sh
-    # scale the idle sandbox class's demo pools to zero so each lane has the node
-    - name: Focus the node on gVisor
-      run: hack/e2e-focus-sandbox-class.sh gvisor
-    - name: Run E2E tests (gVisor)
+    - name: Run E2E tests (${{ matrix.sandbox }})
+      # E2E_SANDBOX_CLASS repoints every fixture at its micro-VM variant (see
+      # internal/e2e/sandbox.go). Empty selects gVisor.
       env:
+        E2E_SANDBOX_CLASS: ${{ matrix.sandbox == 'microvm' && 'microvm' || '' }}
         E2E_PARALLELISM: 8
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor${{ env.LANE_SUFFIX }}.xml
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/${{ env.LANE }}.xml
       run: hack/run-e2e-kind.sh -args --no-color --preview="${ATE_PREVIEW}"
-    - name: Focus the node on micro-VM
-      run: hack/e2e-focus-sandbox-class.sh microvm
-    - name: Run E2E tests (micro-VM)
-      # The same suites again, with every fixture repointed at its micro-VM
-      # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
-      env:
-        E2E_SANDBOX_CLASS: microvm
-        E2E_PARALLELISM: 8
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm${{ env.LANE_SUFFIX }}.xml
-      run: hack/run-e2e-kind.sh -args --no-color --preview="${ATE_PREVIEW}"
-    # Every lane must have reported tests; a `-run` filter that stops matching
-    # otherwise leaves its lane green and empty. The set comes from the manifest
-    # each lane registers itself in, so adding a lane needs no change here, and
-    # run-e2e.sh refuses to run in CI without E2E_JUNIT_FILE.
-    - name: Require every lane to have run tests
+    # The lane must have reported tests; a `-run` filter that stops matching
+    # otherwise leaves it green and empty. run-e2e.sh registers the lane in the
+    # manifest, and refuses to run in CI without E2E_JUNIT_FILE.
+    - name: Require the lane to have run tests
       if: always()
       run: go -C tools/junittool run . verify -manifest "${ARTIFACTS}/expected-junit.txt"
     - name: Summarize test failures
@@ -320,7 +304,7 @@ jobs:
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
       # storing its own copy.
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' }}
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'gvisor' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
@@ -331,7 +315,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-e2e-${{ matrix.dataplane }}${{ env.LANE_SUFFIX }}
+        name: test-results-e2e-${{ matrix.dataplane }}-${{ matrix.sandbox }}${{ matrix.preview == 'on' && '-preview' || '' }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: Dump diagnostics on failure
@@ -352,3 +336,13 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
+  # The required check, so the branch rules don't list each lane. Passes only
+  # when every lane passed.
+  e2e-test:
+    needs: e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Require every e2e lane to pass
+      run: test "${{ needs.e2e.result }}" = success
