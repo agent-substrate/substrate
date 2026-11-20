@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -563,5 +566,114 @@ func TestTopWorkersRunner_InvalidSelector(t *testing.T) {
 
 	if err := runner.Run(context.Background()); err == nil {
 		t.Errorf("expected error for invalid label selector, got nil")
+	}
+}
+
+func TestWorkersRunner_PermissionDenied(t *testing.T) {
+	listDeniedErr := status.Error(codes.PermissionDenied, `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`)
+	getDeniedErr := status.Error(codes.PermissionDenied, `permission denied: principal "alice" lacks "can_get" on "worker:worker-1"`)
+	unavailableErr := status.Error(codes.Unavailable, "connection refused")
+	const clarification = "workers are global objects and require global viewer permission"
+
+	tests := []struct {
+		name              string
+		run               func(ctx context.Context) error
+		wantCode          codes.Code
+		wantErr           string
+		wantClarification bool
+	}{
+		{
+			name: "get workers without -a",
+			run: (&GetWorkersRunner{
+				workerLister: &mockWorkerLister{err: listDeniedErr},
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
+			wantClarification: true,
+		},
+		{
+			name: "get workers with -a",
+			run: (&GetWorkersRunner{
+				workerLister: &mockWorkerLister{err: listDeniedErr},
+				atespace:     "space-a",
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
+			wantClarification: true,
+		},
+		{
+			name: "get worker by name",
+			run: (&GetWorkersRunner{
+				workerGetter: &mockWorkerGetter{err: getDeniedErr},
+				names:        []string{"worker-1"},
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `failed to get worker "worker-1": rpc error: code = PermissionDenied desc = permission denied: principal "alice" lacks "can_get" on "worker:worker-1"`,
+			wantClarification: true,
+		},
+		{
+			name: "top worker without -a",
+			run: (&TopWorkersRunner{
+				workerLister: &mockWorkerLister{err: listDeniedErr},
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
+			wantClarification: true,
+		},
+		{
+			name: "top worker with -a",
+			run: (&TopWorkersRunner{
+				workerLister: &mockWorkerLister{err: listDeniedErr},
+				atespace:     "space-a",
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
+			wantClarification: true,
+		},
+		{
+			name: "non-permission error omits clarification",
+			run: (&GetWorkersRunner{
+				workerLister: &mockWorkerLister{err: unavailableErr},
+			}).Run,
+			wantCode:          codes.Unavailable,
+			wantErr:           "connection refused",
+			wantClarification: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run(context.Background())
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if got := status.Code(err); got != tc.wantCode {
+				t.Errorf("status.Code(err) = %v, want %v", got, tc.wantCode)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+			if got := strings.Contains(err.Error(), clarification); got != tc.wantClarification {
+				t.Errorf("error %q contains clarification = %v, want %v", err.Error(), got, tc.wantClarification)
+			}
+		})
+	}
+}
+
+func TestWorkerCmd_AtespaceFlagHelp(t *testing.T) {
+	getFlag := getWorkersCmd.Flags().Lookup("atespace")
+	if getFlag == nil {
+		t.Fatal("atespace flag not found on getWorkersCmd")
+	}
+	if !strings.Contains(getFlag.Usage, "requires global viewer") {
+		t.Errorf("getWorkersCmd atespace flag usage %q does not mention required global viewer", getFlag.Usage)
+	}
+
+	topFlag := topWorkersCmd.Flags().Lookup("atespace")
+	if topFlag == nil {
+		t.Fatal("atespace flag not found on topWorkersCmd")
+	}
+	if !strings.Contains(topFlag.Usage, "requires global viewer") {
+		t.Errorf("topWorkersCmd atespace flag usage %q does not mention required global viewer", topFlag.Usage)
 	}
 }
