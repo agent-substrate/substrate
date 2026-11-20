@@ -23,14 +23,15 @@ type Process struct {
 	PID  int `json:"pid"`
 	PPID int `json:"ppid"`
 	// Name is the base name of argv[0].
-	Name       string   `json:"name"`
-	CapPrm     uint64   `json:"capPrm"`
-	CapEff     uint64   `json:"capEff"`
-	CapBnd     uint64   `json:"capBnd"`
-	CapAmb     uint64   `json:"capAmb"`
-	NoNewPrivs int      `json:"noNewPrivs"`
-	Seccomp    int      `json:"seccomp"`
-	Threads    []Thread `json:"threads"`
+	Name           string   `json:"name"`
+	CapPrm         uint64   `json:"capPrm"`
+	CapEff         uint64   `json:"capEff"`
+	CapBnd         uint64   `json:"capBnd"`
+	CapAmb         uint64   `json:"capAmb"`
+	NoNewPrivs     int      `json:"noNewPrivs"`
+	Seccomp        int      `json:"seccomp"`
+	SeccompFilters int      `json:"seccompFilters"`
+	Threads        []Thread `json:"threads"`
 }
 
 // Thread is one thread of a process, read from /proc/<pid>/task/<tid>/status.
@@ -38,6 +39,7 @@ type Thread struct {
 	TID int `json:"tid"`
 	// Name is the thread's comm. cloud-hypervisor names each thread it
 	// starts, such as "vmm" and "vcpu0".
-	Name    string `json:"name"`
-	Seccomp int    `json:"seccomp"`
+	Name           string `json:"name"`
+	Seccomp        int    `json:"seccomp"`
+	SeccompFilters int    `json:"seccompFilters"`
 }

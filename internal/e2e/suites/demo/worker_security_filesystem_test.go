@@ -90,17 +90,20 @@ func assertWorkerProcessState(ctx context.Context, t *testing.T, clients *e2e.Cl
 	if worker.NoNewPrivs != 1 {
 		t.Errorf("worker NoNewPrivs = %d, want 1", worker.NoNewPrivs)
 	}
+	if worker.Seccomp != 2 || worker.SeccompFilters != 1 {
+		t.Errorf("worker Seccomp=%d SeccompFilters=%d, want 2 and 1", worker.Seccomp, worker.SeccompFilters)
+	}
 	if e2e.IsMicroVM() {
-		assertVirtiofsdChild(t, procs)
-		assertCloudHypervisor(t, procs)
+		assertVirtiofsdChild(t, procs, worker.SeccompFilters)
+		assertCloudHypervisor(t, procs, worker.SeccompFilters)
 		return
 	}
-	// runsc installs its filters with SECCOMP_FILTER_FLAG_TSYNC, so the main
-	// thread's mode is every thread's
+	// runsc installs its filters with SECCOMP_FILTER_FLAG_TSYNC on top of the
+	// worker's inherited filter, so the main thread's count is every thread's.
 	for _, name := range names {
 		for _, p := range processesNamed(t, procs, name) {
-			if p.NoNewPrivs != 1 || p.Seccomp != 2 {
-				t.Errorf("%s %d NoNewPrivs=%d Seccomp=%d, want 1 and 2", name, p.PID, p.NoNewPrivs, p.Seccomp)
+			if p.NoNewPrivs != 1 || p.Seccomp != 2 || p.SeccompFilters <= worker.SeccompFilters {
+				t.Errorf("%s %d NoNewPrivs=%d Seccomp=%d SeccompFilters=%d, want 1, 2 and > %d", name, p.PID, p.NoNewPrivs, p.Seccomp, p.SeccompFilters, worker.SeccompFilters)
 			}
 		}
 	}
@@ -129,7 +132,7 @@ func processesNamed(t *testing.T, procs []procstatus.Process, name string) []pro
 // with PR_CAPBSET_DROP, which libcap-ng only issues while CAP_SETPCAP is
 // effective. A worker without SETPCAP leaves the child's bounding set at the
 // worker's own.
-func assertVirtiofsdChild(t *testing.T, procs []procstatus.Process) {
+func assertVirtiofsdChild(t *testing.T, procs []procstatus.Process, workerFilters int) {
 	t.Helper()
 	virtiofsd := map[int]bool{}
 	for _, p := range procs {
@@ -144,8 +147,8 @@ func assertVirtiofsdChild(t *testing.T, procs []procstatus.Process) {
 			continue
 		}
 		children++
-		if p.NoNewPrivs != 1 || p.Seccomp != 2 {
-			t.Errorf("virtiofsd child %d NoNewPrivs=%d Seccomp=%d, want 1 and 2", p.PID, p.NoNewPrivs, p.Seccomp)
+		if p.NoNewPrivs != 1 || p.Seccomp != 2 || p.SeccompFilters <= workerFilters {
+			t.Errorf("virtiofsd child %d NoNewPrivs=%d Seccomp=%d SeccompFilters=%d, want 1, 2 and > %d", p.PID, p.NoNewPrivs, p.Seccomp, p.SeccompFilters, workerFilters)
 		}
 		if p.CapPrm != want || p.CapEff != want || p.CapBnd != 0 {
 			t.Errorf("virtiofsd child %d capabilities prm=%#x eff=%#x bnd=%#x, want prm and eff %#x and an empty bounding set", p.PID, p.CapPrm, p.CapEff, p.CapBnd, want)
@@ -156,10 +159,10 @@ func assertVirtiofsdChild(t *testing.T, procs []procstatus.Process) {
 	}
 }
 
-// assertCloudHypervisor checks that every thread cloud-hypervisor starts runs
-// under seccomp. It installs a filter on each of those threads but never on
-// its main thread, which only waits for the vmm thread to exit.
-func assertCloudHypervisor(t *testing.T, procs []procstatus.Process) {
+// assertCloudHypervisor checks that cloud-hypervisor's main thread inherits
+// the worker's seccomp filter and every thread it starts stacks its own filter
+// on top.
+func assertCloudHypervisor(t *testing.T, procs []procstatus.Process, workerFilters int) {
 	t.Helper()
 	for _, p := range processesNamed(t, procs, "cloud-hypervisor") {
 		if p.NoNewPrivs != 1 {
@@ -168,13 +171,16 @@ func assertCloudHypervisor(t *testing.T, procs []procstatus.Process) {
 		vcpus := 0
 		for _, thread := range p.Threads {
 			if thread.TID == p.PID {
+				if thread.Seccomp != 2 || thread.SeccompFilters < workerFilters {
+					t.Errorf("cloud-hypervisor %d main thread Seccomp=%d SeccompFilters=%d, want 2 and >= %d", p.PID, thread.Seccomp, thread.SeccompFilters, workerFilters)
+				}
 				continue
 			}
 			if strings.HasPrefix(thread.Name, "vcpu") {
 				vcpus++
 			}
-			if thread.Seccomp != 2 {
-				t.Errorf("cloud-hypervisor %d thread %d (%s) Seccomp = %d, want 2", p.PID, thread.TID, thread.Name, thread.Seccomp)
+			if thread.Seccomp != 2 || thread.SeccompFilters <= workerFilters {
+				t.Errorf("cloud-hypervisor %d thread %d (%s) Seccomp=%d SeccompFilters=%d, want 2 and > %d", p.PID, thread.TID, thread.Name, thread.Seccomp, thread.SeccompFilters, workerFilters)
 			}
 		}
 		// the vcpu threads run the guest; a VMM without any has no VM to check

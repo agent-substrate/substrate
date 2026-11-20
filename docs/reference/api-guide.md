@@ -81,9 +81,11 @@ guest filesystem operations. virtiofsd tracks guest inodes with `O_PATH` file
 descriptors instead of file handles, which is also what it falls back to by
 default on the worker's overlayfs rootfs. virtiofsd explicitly uses namespace
 isolation (`pivot_root`, not `chroot`) and its own seccomp filter.
-The outer worker's seccomp and AppArmor profiles remain `Unconfined` so the
-sandbox runtimes can set up their mounts; worker seccomp hardening is separate
-from these capability defaults.
+The worker pod spec keeps `seccompProfile: Unconfined` and `AppArmor:
+Unconfined` so the sandbox runtimes can set up their mounts, and `ateworker`
+installs a Substrate-owned seccomp-bpf filter on itself at startup (inherited
+by PID 1, `ateworker`, `runsc`, `virtiofsd`, and `cloud-hypervisor`; see
+`manifests/seccomp/README.md`).
 
 #### Worker Capacity (`spec.template.resources`)
 

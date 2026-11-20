@@ -80,7 +80,7 @@ func TestParseProcessStatus(t *testing.T) {
 		{
 			name:   "virtiofsd child",
 			status: virtiofsdChildStatus,
-			want:   procstatus.Process{PPID: 125, CapPrm: 0x880000db, CapEff: 0x880000db, NoNewPrivs: 1, Seccomp: 2},
+			want:   procstatus.Process{PPID: 125, CapPrm: 0x880000db, CapEff: 0x880000db, NoNewPrivs: 1, Seccomp: 2, SeccompFilters: 1},
 		},
 		{
 			name:    "missing field",
@@ -106,8 +106,8 @@ func TestParseProcessStatus(t *testing.T) {
 	}
 }
 
-func threadStatus(name string, seccomp int) string {
-	return fmt.Sprintf("Name:\t%s\nState:\tS (sleeping)\nSeccomp:\t%d\n", name, seccomp)
+func threadStatus(name string, seccomp, filters int) string {
+	return fmt.Sprintf("Name:\t%s\nState:\tS (sleeping)\nSeccomp:\t%d\nSeccomp_filters:\t%d\n", name, seccomp, filters)
 }
 
 func TestReadProcesses(t *testing.T) {
@@ -124,15 +124,15 @@ func TestReadProcesses(t *testing.T) {
 	}
 	write("1/cmdline", "/ko-app/ateworker-microvm\x00--pod-uid=abc\x00")
 	write("1/status", workerStatus)
-	write("1/task/1/status", threadStatus("ateworker-micro", 0))
+	write("1/task/1/status", threadStatus("ateworker-micro", 2, 1))
 	// runsc sets the gofer's argv[0]; its comm is "exe"
 	write("20/cmdline", "runsc-gofer\x00gofer\x00--bundle\x00/run/bundle\x00")
 	write("20/status", workerStatus)
-	write("20/task/20/status", threadStatus("exe", 2))
+	write("20/task/20/status", threadStatus("exe", 2, 2))
 	// names virtiofsd only in an argument
 	write("21/cmdline", "/bin/sh\x00-c\x00virtiofsd --shared-dir=/run/shared\x00")
 	write("21/status", workerStatus)
-	write("21/task/21/status", threadStatus("sh", 0))
+	write("21/task/21/status", threadStatus("sh", 0, 0))
 	write("22/cmdline", "testserver\x00procstatus\x00")
 	// listed, then exited
 	if err := os.Mkdir(filepath.Join(proc, "23"), 0o755); err != nil {
@@ -141,13 +141,13 @@ func TestReadProcesses(t *testing.T) {
 	const assets = "/var/lib/ate/actors/abc/sandbox-assets/"
 	write("126/cmdline", assets+"virtiofsd\x00--shared-dir=/run/shared\x00")
 	write("126/status", virtiofsdChildStatus)
-	write("126/task/126/status", threadStatus("virtiofsd", 2))
-	write("126/task/127/status", threadStatus("virtiofsd", 2))
+	write("126/task/126/status", threadStatus("virtiofsd", 2, 2))
+	write("126/task/127/status", threadStatus("virtiofsd", 2, 2))
 	write("130/cmdline", assets+"cloud-hypervisor\x00--api-socket\x00/run/vc/vm/abc/clh-api.sock\x00")
 	write("130/status", workerStatus)
-	write("130/task/130/status", threadStatus("cloud-hyperviso", 0))
-	write("130/task/131/status", threadStatus("vmm", 2))
-	write("130/task/132/status", threadStatus("vcpu0", 2))
+	write("130/task/130/status", threadStatus("cloud-hyperviso", 2, 1))
+	write("130/task/131/status", threadStatus("vmm", 2, 2))
+	write("130/task/132/status", threadStatus("vcpu0", 2, 2))
 	// a thread that exited
 	if err := os.MkdirAll(filepath.Join(proc, "130/task/133"), 0o755); err != nil {
 		t.Fatal(err)
@@ -167,10 +167,10 @@ func TestReadProcesses(t *testing.T) {
 		got = append(got, row{p.PID, p.Name, p.Threads})
 	}
 	want := []row{
-		{1, "ateworker-microvm", []procstatus.Thread{{TID: 1, Name: "ateworker-micro"}}},
-		{126, "virtiofsd", []procstatus.Thread{{TID: 126, Name: "virtiofsd", Seccomp: 2}, {TID: 127, Name: "virtiofsd", Seccomp: 2}}},
-		{130, "cloud-hypervisor", []procstatus.Thread{{TID: 130, Name: "cloud-hyperviso"}, {TID: 131, Name: "vmm", Seccomp: 2}, {TID: 132, Name: "vcpu0", Seccomp: 2}}},
-		{20, "runsc-gofer", []procstatus.Thread{{TID: 20, Name: "exe", Seccomp: 2}}},
+		{1, "ateworker-microvm", []procstatus.Thread{{TID: 1, Name: "ateworker-micro", Seccomp: 2, SeccompFilters: 1}}},
+		{126, "virtiofsd", []procstatus.Thread{{TID: 126, Name: "virtiofsd", Seccomp: 2, SeccompFilters: 2}, {TID: 127, Name: "virtiofsd", Seccomp: 2, SeccompFilters: 2}}},
+		{130, "cloud-hypervisor", []procstatus.Thread{{TID: 130, Name: "cloud-hyperviso", Seccomp: 2, SeccompFilters: 1}, {TID: 131, Name: "vmm", Seccomp: 2, SeccompFilters: 2}, {TID: 132, Name: "vcpu0", Seccomp: 2, SeccompFilters: 2}}},
+		{20, "runsc-gofer", []procstatus.Thread{{TID: 20, Name: "exe", Seccomp: 2, SeccompFilters: 2}}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("readProcesses() = %+v\nwant %+v", got, want)
