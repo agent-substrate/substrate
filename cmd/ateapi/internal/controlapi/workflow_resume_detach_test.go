@@ -444,7 +444,7 @@ func TestDetachFromFullNode(t *testing.T) {
 			}
 
 			tmpl := &ateapi.ActorTemplate{Resources: &ateapi.ResourceRequirements{Limits: tt.limits}}
-			stored, err := w.detachFromFullNode(ctx, actorRef, actor, tmpl, noRoom)
+			stored, err := w.detachFromFullNode(ctx, actorRef, actor, tmpl, noRoom, store.Precondition{})
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("detachFromFullNode() = %v, want code %v", err, tt.wantCode)
 			}
@@ -587,7 +587,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			atelet.detachState = detachedState(snap)
 			atelet.detachErr = tt.detachErr
 
-			got, resumed, err := w.ResumeActor(ctx, actorRef)
+			got, resumed, err := w.ResumeActor(ctx, actorRef, store.Precondition{})
 			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("ResumeActor() = %v, want code %v", err, tt.wantCode)
 			}
@@ -698,7 +698,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				atelet.restoreErr = apierror.NotFound("snapshot has no usable local copy and no uploaded copy")
 			}
 
-			got, resumed, err := w.ResumeActor(ctx, actorRef)
+			got, resumed, err := w.ResumeActor(ctx, actorRef, store.Precondition{})
 			restore, _ := atelet.requests()
 			if restore.GetWorkerPodUid() != worker.GetWorkerPodUid() || restore.GetSnapshot().GetSnapshotUuid() != pending.GetUuid() {
 				t.Fatalf("Restore = (worker %q, snapshot %q), want (%q, %q)", restore.GetWorkerPodUid(), restore.GetSnapshot().GetSnapshotUuid(), worker.GetWorkerPodUid(), pending.GetUuid())
@@ -742,7 +742,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 
 			// The crash leaves the actor on node-2, so revert terminates it
 			// there.
-			reverted, err := w.RevertActor(ctx, actorRef)
+			reverted, err := w.RevertActor(ctx, actorRef, store.Precondition{})
 			if err != nil {
 				t.Fatalf("RevertActor: %v", err)
 			}
@@ -752,7 +752,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			atelet.mu.Lock()
 			atelet.restoreErr = nil
 			atelet.mu.Unlock()
-			if _, _, err := w.ResumeActor(ctx, actorRef); err != nil {
+			if _, _, err := w.ResumeActor(ctx, actorRef, store.Precondition{}); err != nil {
 				t.Fatalf("second ResumeActor: %v", err)
 			}
 			if restore, _ := atelet.requests(); restore.GetSnapshot().GetSnapshotUuid() != durable.GetUuid() {
@@ -778,6 +778,32 @@ func addAteletOnNode(t *testing.T, w *ActorWorkflow, node string) {
 		t.Fatalf("adding atelet pod on %s: %v", node, err)
 	}
 	w.dialer.ateletConns.Add(string(uid), &ateletConn{ip: "10.0.0.2", conn: cached.(*ateletConn).conn})
+}
+
+// Under the caller's version guard, an actor written since the resume read it
+// aborts the detach before atelet is asked.
+func TestDetachFromFullNode_VersionGuardAbortsOnNewerActor(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	fillWorker(t, st, seedRuntimeWorker(t, ctx, st, "pod-node-1", "node-1", testSandboxRuntime()))
+	seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", testSandboxRuntime())
+	snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
+	actor := seedActorWithSnapshot(t, ctx, st, ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", snap)
+	w, atelet := newDetachTestWorkflow(t, ctx, st)
+	atelet.detachState = detachedState(snap)
+	noRoom := apierror.ResourceExhausted("%w", errNoWorkerRoom)
+
+	if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(*ateapi.Actor) error { return nil }); err != nil {
+		t.Fatalf("UpdateActor: %v", err)
+	}
+	guard := store.Precondition{Version: actor.GetMetadata().GetVersion()}
+	if _, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom, guard); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("detachFromFullNode() = %v, want Aborted", err)
+	}
+	if atelet.detach != nil {
+		t.Errorf("DetachActor called with %v, want no call", atelet.detach)
+	}
 }
 
 // TestDetachFromFullNode_ReentryRecordsAfterConflict loses the record write
@@ -806,12 +832,12 @@ func TestDetachFromFullNode_ReentryRecordsAfterConflict(t *testing.T) {
 			t.Errorf("UpdateActor: %v", err)
 		}
 	}
-	if _, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom); apierror.Code(err) != codes.Aborted {
+	if _, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom, store.Precondition{}); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("first detachFromFullNode() = %v, want Aborted", err)
 	}
 
 	atelet.onDetach = nil
-	stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom)
+	stored, err := w.detachFromFullNode(ctx, actorRef, actor, &ateapi.ActorTemplate{}, noRoom, store.Precondition{})
 	if err != nil {
 		t.Fatalf("second detachFromFullNode() = %v, want success", err)
 	}

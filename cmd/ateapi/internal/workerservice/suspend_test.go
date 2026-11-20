@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -87,7 +88,8 @@ func TestRequestActorSuspend(t *testing.T) {
 		t.Fatalf("RequestActorSuspend() failed: %v", err)
 	}
 	want := []*ateapi.SuspendActorRequest{{
-		Actor: &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		Actor:         &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		Preconditions: &ateapi.Preconditions{Uid: actor.GetMetadata().GetUid(), Version: actor.GetMetadata().GetVersion()},
 	}}
 	if diff := cmp.Diff(want, control.calls, protocmp.Transform()); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
@@ -210,19 +212,51 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 
 // The suspend is a proposal, and the control plane's refusal is the answer: a
 // request that loses a race to a resume, suspend, or delete comes back as what
-// the workflow said, not as something the worker has to interpret.
+// the workflow said, not as something the worker has to interpret. The
+// exception is an Actor the caller no longer hosts, which is NotFound as
+// before the suspend.
 func TestRequestActorSuspend_PassesThroughTheWorkflowsRefusal(t *testing.T) {
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
-	actor := seedHostedActor(t, st, testWorkerName)
-	control := &fakeControl{err: apierror.FailedPrecondition("Actor is RESUMING")}
-	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
+	tests := []struct {
+		name       string
+		controlErr error
+		recreate   bool
+		want       codes.Code
+	}{
+		{name: "refused", controlErr: apierror.FailedPrecondition("Actor is RESUMING"), want: codes.FailedPrecondition},
+		{name: "lease contention", controlErr: apierror.Aborted("concurrent update conflict, please retry"), want: codes.Aborted},
+		{name: "actor recreated", controlErr: apierror.Aborted("Actor does not have uid"), recreate: true, want: codes.NotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
+			actor := seedHostedActor(t, st, testWorkerName)
+			control := &fakeControl{err: tc.controlErr}
+			if tc.recreate {
+				control.onSuspend = func() {
+					// The store deletes only an Actor with no assignment.
+					if _, err := st.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+						a.Status = &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
+						return nil
+					}); err != nil {
+						t.Fatalf("UpdateActor() failed: %v", err)
+					}
+					if _, err := st.DeleteActor(ctx, resources.ActorRefFromActor(actor), store.Precondition{}); err != nil {
+						t.Fatalf("DeleteActor() failed: %v", err)
+					}
+					seedHostedActor(t, st, testWorkerName)
+				}
+			}
+			s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
-	_, err := s.RequestActorSuspend(
-		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),
-		suspendRequest(actor.GetMetadata().GetUid()))
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v (err %v), want FailedPrecondition", got, err)
+			_, err := s.RequestActorSuspend(
+				ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),
+				suspendRequest(actor.GetMetadata().GetUid()))
+			if got := apierror.Code(err); got != tc.want {
+				t.Fatalf("code = %v (err %v), want %v", got, err, tc.want)
+			}
+		})
 	}
 }

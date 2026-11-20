@@ -952,6 +952,27 @@ func TestValidateResumeActorRequest(t *testing.T) {
 		"invalid actor.name",
 		&ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: "ns1", Name: "ID1"}},
 		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"valid preconditions",
+		&ateapi.ResumeActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Uid: someActorUID, Version: 3},
+		},
+		nil,
+	}, {
+		"invalid preconditions.uid",
+		&ateapi.ResumeActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative preconditions.version",
+		&ateapi.ResumeActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "version"), nil, "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1024,10 +1045,73 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode(3)},
 		},
 		field.ErrorList{field.Invalid(field.NewPath("options", "mode"), nil, "").WithOrigin("maximum")},
+	}, {
+		"valid preconditions",
+		&ateapi.SuspendActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Uid: someActorUID, Version: 3},
+		},
+		nil,
+	}, {
+		"invalid preconditions.uid",
+		&ateapi.SuspendActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative preconditions.version",
+		&ateapi.SuspendActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "version"), nil, "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateSuspendActorRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateRevertActorRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapi.RevertActorRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		&ateapi.RevertActorRequest{Actor: &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"}},
+		nil,
+	}, {
+		"missing actor",
+		&ateapi.RevertActorRequest{},
+		field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		"valid preconditions",
+		&ateapi.RevertActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Uid: someActorUID, Version: 3},
+		},
+		nil,
+	}, {
+		"invalid preconditions.uid",
+		&ateapi.RevertActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative preconditions.version",
+		&ateapi.RevertActorRequest{
+			Actor:         &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Preconditions: &ateapi.Preconditions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "version"), nil, "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateRevertActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }

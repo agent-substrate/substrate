@@ -266,6 +266,132 @@ func TestValidateDeleteWorkerRequest(t *testing.T) {
 	}
 }
 
+func TestValidateDrainWorkerRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapi.DrainWorkerRequest
+		want field.ErrorList
+	}{{
+		"valid, no preconditions",
+		&ateapi.DrainWorkerRequest{Worker: workerRef(apiWorkerName)},
+		nil,
+	}, {
+		"valid, both guards",
+		&ateapi.DrainWorkerRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Uid: apiOtherWorkerName, Version: 3},
+		},
+		nil,
+	}, {
+		"missing worker",
+		&ateapi.DrainWorkerRequest{},
+		field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		"invalid preconditions.uid",
+		&ateapi.DrainWorkerRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative preconditions.version",
+		&ateapi.DrainWorkerRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "version"), nil, "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateDrainWorkerRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateMarkWorkerAvailableRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapi.MarkWorkerAvailableRequest
+		want field.ErrorList
+	}{{
+		"valid, no preconditions",
+		&ateapi.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)},
+		nil,
+	}, {
+		"valid, both guards",
+		&ateapi.MarkWorkerAvailableRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Uid: apiOtherWorkerName, Version: 3},
+		},
+		nil,
+	}, {
+		"missing worker",
+		&ateapi.MarkWorkerAvailableRequest{},
+		field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		"invalid preconditions.uid",
+		&ateapi.MarkWorkerAvailableRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative preconditions.version",
+		&ateapi.MarkWorkerAvailableRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "version"), nil, "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateMarkWorkerAvailableRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateMarkWorkerUnavailableRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapi.MarkWorkerUnavailableRequest
+		want field.ErrorList
+	}{{
+		"valid, no preconditions",
+		&ateapi.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)},
+		nil,
+	}, {
+		"valid, both guards",
+		&ateapi.MarkWorkerUnavailableRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Uid: apiOtherWorkerName, Version: 3},
+		},
+		nil,
+	}, {
+		"missing worker",
+		&ateapi.MarkWorkerUnavailableRequest{},
+		field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		"invalid preconditions.uid",
+		&ateapi.MarkWorkerUnavailableRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative preconditions.version",
+		&ateapi.MarkWorkerUnavailableRequest{
+			Worker:        workerRef(apiWorkerName),
+			Preconditions: &ateapi.Preconditions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("preconditions", "version"), nil, "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateMarkWorkerUnavailableRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
 func TestValidateUpdateWorkerRequest(t *testing.T) {
 	// This test verifies validation of user input for update. The worker body
 	// is deliberately not descended into here (updates are validated in two

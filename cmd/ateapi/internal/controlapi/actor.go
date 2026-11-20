@@ -301,7 +301,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 // API errors, and returns any other error unchanged.
 func actorWriteError(actorRef resources.ActorRef, err error) error {
 	switch {
-	case errors.Is(err, store.ErrVersionConflict), errors.Is(err, store.ErrUIDConflict):
+	case errors.Is(err, store.ErrUIDConflict):
+		return apierror.Aborted("actor %s has a different uid than expected", actorRef)
+	case errors.Is(err, store.ErrVersionConflict):
 		return apierror.Aborted("concurrent update conflict, please retry")
 	case errors.Is(err, store.ErrNotFound):
 		return apierror.NotFound("actor %s not found", actorRef)
@@ -490,15 +492,9 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
+	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef, toPreconditions(req.GetPreconditions()))
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 
 	setSpanActorAttributes(ctx, actor)
@@ -512,15 +508,9 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, toPreconditions(req.GetPreconditions()), suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapi.SuspendActorResponse{Actor: actor}, nil
@@ -548,15 +538,9 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapi.RevertActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef, toPreconditions(req.GetPreconditions()))
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapi.RevertActorResponse{Actor: actor}, nil
