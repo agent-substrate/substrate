@@ -72,6 +72,15 @@ func TestPreconditionCheck(t *testing.T) {
 			precondition: Precondition{UID: storedUID},
 		},
 		{
+			name:         "stale uid only",
+			precondition: Precondition{UID: staleUID},
+			wantErr:      ErrUIDConflict,
+		},
+		{
+			name:         "version only",
+			precondition: Precondition{Version: storedVer},
+		},
+		{
 			name:         "stale version only",
 			precondition: Precondition{Version: staleVer},
 			wantErr:      ErrVersionConflict,

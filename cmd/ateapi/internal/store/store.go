@@ -349,13 +349,15 @@ type Interface interface {
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
 }
 
-// Precondition holds the uid and version guards of a write.
+// Precondition holds validation checks that allow callers to enforce that
+// a mutated resource has a given UID and/or version. Useful for implementing
+// optimistic locking.
 type Precondition struct {
-	// UID is the incarnation the write is for. Empty, under Check, accepts
-	// whichever object holds the name when the write runs.
+	// A precondition that validates the mutated resource still has this
+	// UID. If not set, no validation is performed.
 	UID string
-	// Version is the revision the write is against. Zero, under Check, accepts
-	// whatever revision the store is at.
+	// A precondition that validates the mutated resource still is at this
+	// version. If not set, no validation is performed.
 	Version int64
 }
 
@@ -385,9 +387,9 @@ func (p Precondition) ValidateRequired() error {
 	return nil
 }
 
-// Check reports whether md still matches the guards p carries. An unset guard
-// is not checked, so a method that requires both guards calls ValidateRequired
-// first. The uid is reported first: a new incarnation makes the version
+// Checks whether a given resource passes a given set of preconditions.
+// An unset guard is not checked.
+// The uid check is reported first: a new incarnation makes the version
 // meaningless.
 //
 // Returns ErrUIDConflict or ErrVersionConflict.

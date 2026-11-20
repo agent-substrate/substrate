@@ -100,8 +100,6 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
-	// Updates validated both guards on entry. A mark for deletion checks
-	// only the guards the caller set.
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
 		return nil, err
 	}
