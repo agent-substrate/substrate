@@ -192,6 +192,9 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapi.UpdateWorkerReq
 	if md.GetUid() != stored.GetMetadata().GetUid() || md.GetVersion() != stored.GetMetadata().GetVersion() {
 		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 	}
+	if stored.GetMetadata().GetDeleteTime() != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "Worker %s is being deleted", md.GetName())
+	}
 
 	// UpdateWorker replaces the whole resource: the request's Worker is taken
 	// wholesale and only the server-owned metadata and status are kept as
