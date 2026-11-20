@@ -1010,7 +1010,6 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 	durableFiles := durableSnapshotFiles(snapshotFiles)
 	if fakeIPsFile != "" {
-		// Restored at every fidelity: the durable data can hold the addresses.
 		durableFiles = append(durableFiles, fakeIPsFile)
 	}
 

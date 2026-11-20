@@ -39,10 +39,10 @@ type Gate string
 // Gates should always be named in UpperCamelCase.  Please keep this list
 // sorted alphabetically by value.
 const (
-	// GateDNSCorrelation controls whether an actor's DNS lookups are answered
-	// with fake addresses, so that its connections are tunneled to the egress
-	// gateway by name.
-	GateDNSCorrelation Gate = "DnsCorrelation"
+	// GateDNSCorrelationInWorker controls whether the worker answers an actor's
+	// DNS lookups with fake addresses, so that its connections are tunneled to
+	// the egress gateway by name.
+	GateDNSCorrelationInWorker Gate = "DnsCorrelationInWorker"
 
 	// GateExternalVolumes controls whether external volumes are supported.
 	GateExternalVolumes Gate = "ExternalVolumes"
@@ -67,7 +67,7 @@ const All = "ALL"
 // realKnownGates lists all declared preview gates. Preview gates are disabled by
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
-	GateDNSCorrelation,
+	GateDNSCorrelationInWorker,
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
 	GatePerTemplateSnapshotLocation,

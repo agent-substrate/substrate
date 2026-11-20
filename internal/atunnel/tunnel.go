@@ -97,7 +97,7 @@ func RegisterFlags(fs FlagSet) *Config {
 	fs.StringVar(&c.EgressListenAddress, "atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	fs.StringVar(&c.EgressTrustBundle, "atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+")")
-	fs.BoolVar(&c.DNSCorrelation, "dns-correlation", false, "Answer actor DNS lookups with fake addresses, so that actor connections are tunneled to the egress gateway by name. Needs the "+string(preview.GateDNSCorrelation)+" preview gate.")
+	fs.BoolVar(&c.DNSCorrelation, "dns-correlation", false, "Answer actor DNS lookups with fake addresses, so that actor connections are tunneled to the egress gateway by name. Needs the "+string(preview.GateDNSCorrelationInWorker)+" preview gate.")
 	return c
 }
 
@@ -129,8 +129,8 @@ func Start(ctx context.Context, cfg Config, upstream string, meter metric.Meter)
 	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
 		return nil, err
 	}
-	if cfg.DNSCorrelation && !preview.IsEnabled(preview.GateDNSCorrelation) {
-		return nil, fmt.Errorf("--dns-correlation needs the %s preview gate", preview.GateDNSCorrelation)
+	if cfg.DNSCorrelation && !preview.IsEnabled(preview.GateDNSCorrelationInWorker) {
+		return nil, fmt.Errorf("--dns-correlation needs the %s preview gate", preview.GateDNSCorrelationInWorker)
 	}
 	upstreamURL, err := url.Parse(upstream)
 	if err != nil {

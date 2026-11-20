@@ -4,7 +4,7 @@ linkTitle: "DNS Correlation"
 weight: 6
 status: preview
 status_note: >
-  DNS correlation is disabled by default behind the `DnsCorrelation` preview
+  DNS correlation is disabled by default behind the `DnsCorrelationInWorker` preview
   gate, and its behavior may change.
 description: >
   Tunnel an actor's connections to the egress gateway by name.
@@ -33,7 +33,7 @@ with this preview.
 
 Two switches, both needed:
 
-1. Run Substrate with `--preview=DnsCorrelation` (ate-setup's `preview`
+1. Run Substrate with `--preview=DnsCorrelationInWorker` (ate-setup's `preview`
    setting).
 2. Annotate each WorkerPool whose actors should use it:
 

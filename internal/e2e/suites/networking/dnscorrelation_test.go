@@ -53,10 +53,10 @@ var fakeAddresses = netip.MustParsePrefix("198.18.0.0/15")
 // DNS correlation is a preview feature: install the cluster with its gate and
 // pass the gate to the suite, which skips the test otherwise.
 //
-//	ATE_PREVIEW=DnsCorrelation go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}'
-//	hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run TestActorDNSCorrelation -v -args --no-color --preview=DnsCorrelation
+//	ATE_PREVIEW=DnsCorrelationInWorker go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}'
+//	hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run TestActorDNSCorrelation -v -args --no-color --preview=DnsCorrelationInWorker
 func TestActorDNSCorrelation(t *testing.T) {
-	e2e.RequirePreview(t, preview.GateDNSCorrelation)
+	e2e.RequirePreview(t, preview.GateDNSCorrelationInWorker)
 	if e2e.IsAgentGateway() {
 		t.Skip("agentgateway connects plain HTTP to the address in the CONNECT, so its actors cannot be given fake addresses")
 	}

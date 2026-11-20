@@ -29,8 +29,8 @@ import (
 // given to, so the gateway receives the name the actor looked up.
 //
 // Any other address is returned as it is. That includes a fake address that
-// belongs to no name, such as one whose name lost it: the gateway then decides
-// on the SNI or Host of the connection, as it does without fake addresses.
+// belongs to no name, such as one whose name lost it. The gateway then has
+// only the SNI or Host to go on, as without fake addresses.
 func namedDestination(names *fakeip.Table, address string) string {
 	addrPort, err := netip.ParseAddrPort(address)
 	if err != nil {
@@ -46,8 +46,11 @@ func namedDestination(names *fakeip.Table, address string) string {
 // refusesNames reports whether err is how a gateway that only takes addresses
 // answers a CONNECT to a name.
 //
-// TODO: remove once every supported gateway accepts a name. Workers upgrade
-// before the gateway, so a 1.1 worker can face a 1.0 gateway.
+// TODO(liorlieberman): do we need this, or is an upgrade note enough? Workers
+// upgrade before atenet and roll back after it
+// (docs/reference/version-skew-policy.md), so a worker can face a gateway one
+// release older. If we keep it, remove it once every supported gateway accepts
+// a name.
 func refusesNames(err error) bool {
 	var rejected *ConnectRejectedError
 	if !errors.As(err, &rejected) {

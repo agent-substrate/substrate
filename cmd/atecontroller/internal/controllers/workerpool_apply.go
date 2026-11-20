@@ -170,7 +170,7 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 
 	// Passed only on opt-in: a worker exits on a flag it does not know, and
 	// refuses this one without the gate.
-	if wp.Annotations[atev1.WorkerPoolDNSCorrelationAnnotation] == "true" && preview.IsEnabled(preview.GateDNSCorrelation) {
+	if wp.Annotations[atev1.WorkerPoolDNSCorrelationAnnotation] == "true" && preview.IsEnabled(preview.GateDNSCorrelationInWorker) {
 		args = append(args, "--dns-correlation")
 	}
 

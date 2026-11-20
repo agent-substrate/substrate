@@ -24,20 +24,20 @@ import (
 	"go.ate.dev/substrate/internal/egresspolicy"
 )
 
-// fakeAddressTTL is how many seconds a resolver may cache a fake address. A
-// name can lose its address when the actor's table fills up, so the TTL is
-// short: a client that honors it soon asks again and gets the new address.
+// fakeAddressTTL is how many seconds a resolver may cache a fake address. The
+// table keeps the address until the name is evicted, whatever the TTL. A short
+// TTL makes a client that honors it pick up the new address soon after that.
 const fakeAddressTTL = 30
 
 // withFakeAddress returns what the actor gets for the upstream response raw,
 // whose header and question are hdr and q, with p positioned after q.
 //
-// The addresses in an answer to an A query are replaced with the fake address
-// of the queried name, so a connection to it can later be tunneled to that
-// name. Any other response is returned as it is.
+// An answer to an A query gets the queried name's fake address in place of the
+// real ones, so atunnel can tunnel a connection to it by name. Any other
+// response is returned as it is.
 //
-// The egress policy plays no part here: which names the actor may reach is
-// decided where the query is admitted, and by the gateway at connect time.
+// There is no policy check here: the relay checked the query before forwarding
+// it, and the gateway checks the connection.
 func (h *dnsHandler) withFakeAddress(raw []byte, hdr dnsmessage.Header, q dnsmessage.Question, p *dnsmessage.Parser) []byte {
 	if h.fakeIPs == nil || hdr.RCode != dnsmessage.RCodeSuccess || q.Class != dnsmessage.ClassINET || q.Type != dnsmessage.TypeA {
 		return raw
@@ -49,8 +49,8 @@ func (h *dnsHandler) withFakeAddress(raw []byte, hdr dnsmessage.Header, q dnsmes
 	}
 	addr, ok := h.fakeIPs.Address(name)
 	if !ok {
-		// The actor gets the real addresses, and its connections to them are
-		// tunneled by address, as they are without a table.
+		// No fake address left: answer as without DNS correlation. The actor's
+		// connections to the real addresses are tunneled by address.
 		return raw
 	}
 	return protocol.AddressPacket(hdr, q, addr.As4(), fakeAddressTTL)

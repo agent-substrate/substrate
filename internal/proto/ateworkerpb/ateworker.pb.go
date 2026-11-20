@@ -1492,9 +1492,7 @@ type CheckpointWorkloadResponse struct {
 	// its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
 	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	// data_snapshot_files is the subset of snapshot_files that restores the
-	// actor at VOLUMES fidelity on its own: its durable data, and its fake
-	// addresses if DNS correlation gave it any. Empty when the capture holds
-	// neither.
+	// actor at VOLUMES fidelity on its own. Empty when the capture holds no durable data.
 	DataSnapshotFiles []string `protobuf:"bytes,2,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache

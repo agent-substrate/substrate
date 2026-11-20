@@ -77,9 +77,9 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
 
 #### Fake addresses
 
-`correlation.go`: with the `DnsCorrelation` preview, the relay gives each name the Actor resolves its own fake address, so that atunnel can tunnel a connection to that address by name (see `internal/atunnel/fakeip` and `internal/atunnel/egress/correlation.go`).
+`correlation.go`: with the `DnsCorrelationInWorker` preview, the relay gives each name the Actor resolves its own fake address, so that atunnel can tunnel a connection to that address by name (see `internal/atunnel/fakeip` and `internal/atunnel/egress/correlation.go`).
 
-- The query is still checked against the egress policy and forwarded upstream. Only a `NOERROR` response to an `A` query that holds an `A` record is replaced, by one `A` record with the name's fake address and a short TTL. Every other response reaches the Actor as it is, so a denied name is still `NXDOMAIN`, a name that does not exist still fails, and the `resolv.conf` search list keeps working.
+- The query is still checked against the egress policy and forwarded upstream. Only a `NOERROR` response to an `A` query that holds an `A` record is replaced: the Actor gets one `A` record with the name's fake address and a short TTL, so it connects to an address atunnel can map back to the name. Every other response reaches the Actor as it is, so a denied name is still `NXDOMAIN`, a name that does not exist still fails, and the `resolv.conf` search list keeps working.
 - A response with a loopback, link-local or unspecified address is not replaced either: the Actor's connections to those never leave the sandbox, so a tunnel would not reach what the name points at.
 - The fake address comes from the Actor's `fakeip.Table`, which the ateworker saves in every snapshot and loads on restore, whether or not it runs with `--dns-correlation`. The table never gives an address to a second name.
-- When the table has no address left for a new name, the upstream response is delivered as it is.
+- When the table has no address left for a new name, the upstream response is delivered as it is, as without DNS correlation: connections to the real addresses are tunneled by address, and the gateway decides on the SNI or Host. Reusing an address instead would send a client that kept it to another name. The table logs a warning the first time it runs out.

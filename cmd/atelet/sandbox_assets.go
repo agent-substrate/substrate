@@ -99,7 +99,7 @@ type sandboxAssetsRecord struct {
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
 	// DataSnapshotFiles is the subset of SnapshotFiles that restores the actor
 	// at VOLUMES fidelity on its own, as reported by CheckpointWorkloadResponse.
-	// Empty when the capture holds no durable data and no fake addresses.
+	// Empty when the capture holds no durable data.
 	DataSnapshotFiles []string `json:"dataSnapshotFiles,omitempty"`
 	// Fidelity is the snapshot fidelity the checkpoint captured, as the shared
 	// ateattr label ("volumes", "rootfs", or "memory"), so a snapshot's content

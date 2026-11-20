@@ -1185,10 +1185,10 @@ func TestBuildDeploymentDNSCorrelation(t *testing.T) {
 		annotation string
 		want       bool
 	}{
-		{name: "annotated with the gate", gates: []string{string(preview.GateDNSCorrelation)}, annotation: "true", want: true},
+		{name: "annotated with the gate", gates: []string{string(preview.GateDNSCorrelationInWorker)}, annotation: "true", want: true},
 		{name: "annotated without the gate", annotation: "true"},
-		{name: "not annotated", gates: []string{string(preview.GateDNSCorrelation)}},
-		{name: "annotated false", gates: []string{string(preview.GateDNSCorrelation)}, annotation: "false"},
+		{name: "not annotated", gates: []string{string(preview.GateDNSCorrelationInWorker)}},
+		{name: "annotated false", gates: []string{string(preview.GateDNSCorrelationInWorker)}, annotation: "false"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			preview.InitForTest(t, tc.gates...)

@@ -88,6 +88,10 @@ func (t *Table) Address(name string) (netip.Addr, bool) {
 	}
 	index, ok := t.unusedIndex()
 	if !ok {
+		// TODO(liorlieberman): once the gateway decides plain TCP on the name
+		// (#3873), should a used-up table reuse addresses that have gone unused
+		// for a long time, say a day, instead of answering with real addresses?
+
 		// Once, since every new name the actor looks up lands here from now on.
 		if !t.ranOut {
 			t.ranOut = true
