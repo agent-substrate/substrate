@@ -386,6 +386,10 @@ func TestStartRootfsContainerForwardsLogs(t *testing.T) {
 				if err := unmarshal(&req); err != nil {
 					return nil, err
 				}
+				if req.GetContainerId() != "c_first" {
+					t.Errorf("ReadStdout for container %q, want c_first", req.GetContainerId())
+					return nil, errors.New("unexpected container")
+				}
 				mu.Lock()
 				defer mu.Unlock()
 				stdoutCalls++
@@ -398,6 +402,10 @@ func TestStartRootfsContainerForwardsLogs(t *testing.T) {
 				var req agentpb.ReadStreamRequest
 				if err := unmarshal(&req); err != nil {
 					return nil, err
+				}
+				if req.GetContainerId() != "c_first" {
+					t.Errorf("ReadStderr for container %q, want c_first", req.GetContainerId())
+					return nil, errors.New("unexpected container")
 				}
 				mu.Lock()
 				defer mu.Unlock()
@@ -439,9 +447,6 @@ func TestStartRootfsContainerForwardsLogs(t *testing.T) {
 			if !strings.Contains(got, want) {
 				t.Errorf("forwarded logs = %s, missing %q", got, want)
 			}
-		}
-		if strings.Contains(got, `"ate.actor.container.name":"second"`) {
-			t.Errorf("forwarded logs = %s, must not forward for a container that failed StartContainer", got)
 		}
 	})
 

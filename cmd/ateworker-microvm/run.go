@@ -922,9 +922,7 @@ func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *agentCo
 // for those goroutines to exit.
 type agentConn struct {
 	*kata.AgentClient
-	closeOnce sync.Once
-	closeErr  error
-	logWG     sync.WaitGroup
+	logWG sync.WaitGroup
 }
 
 func newAgentConn(ac *kata.AgentClient) *agentConn {
@@ -948,11 +946,9 @@ func (c *agentConn) startLogForwarding(logger *actorlog.ActorLogger, a resources
 // Close shuts the underlying AgentClient to unblock live stream reads and waits
 // for the forwarding goroutines to exit. Safe to call more than once.
 func (c *agentConn) Close() error {
-	c.closeOnce.Do(func() {
-		c.closeErr = c.AgentClient.Close()
-	})
+	err := c.AgentClient.Close()
 	c.logWG.Wait()
-	return c.closeErr
+	return err
 }
 
 // errGuestStopped reports that the micro-VM stopped before the kata-agent
