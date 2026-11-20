@@ -1676,7 +1676,7 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapi.ActorStatus{
 			State: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+			ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "substrate.io/mock"},
 				{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "substrate.io/mock"},
 			}},
@@ -1754,7 +1754,7 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapi.ActorStatus{
 			State: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+			ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "substrate.io/mock"},
 			}},
 		},
@@ -2091,7 +2091,7 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	if len(getResp.GetStatus().GetExternalVolumes().GetVolumes()) != 2 {
 		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetStatus().GetExternalVolumes().GetVolumes()))
 	}
-	volsByName := make(map[string]*ateapi.ExternalVolumeStatus)
+	volsByName := make(map[string]*ateapi.ActorExternalVolumeStatus)
 	for _, v := range getResp.GetStatus().GetExternalVolumes().GetVolumes() {
 		volsByName[v.GetName()] = v
 	}
@@ -2227,7 +2227,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		t.Errorf("actor state after first resume = %v, want %v", getResp.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
-	volsByName := make(map[string]*ateapi.ExternalVolumeStatus)
+	volsByName := make(map[string]*ateapi.ActorExternalVolumeStatus)
 	for _, v := range getResp.GetStatus().GetExternalVolumes().GetVolumes() {
 		volsByName[v.GetName()] = v
 	}

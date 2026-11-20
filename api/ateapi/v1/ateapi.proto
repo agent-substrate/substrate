@@ -476,9 +476,9 @@ message ResourceMetadata {
   google.protobuf.Timestamp delete_time = 7;
 }
 
-// ExternalVolumes is the external volume state recorded on an actor, wrapped
-// so later additions do not reshape ActorStatus.
-message ExternalVolumes {
+// ActorExternalVolumes is the external volume state recorded on an actor,
+// wrapped so later additions do not reshape ActorStatus.
+message ActorExternalVolumes {
   // volumes has one entry per external volume of the template. Each template
   // volume appears at most once.
   //
@@ -486,11 +486,11 @@ message ExternalVolumes {
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
   // +k8s:listMapKey=name
-  repeated ExternalVolumeStatus volumes = 1;
+  repeated ActorExternalVolumeStatus volumes = 1;
 }
 
-// ExternalVolumeStatus is one actor's view of an external volume it mounts.
-message ExternalVolumeStatus {
+// ActorExternalVolumeStatus is one actor's view of an external volume it mounts.
+message ActorExternalVolumeStatus {
   // Name of the volume specified in the actor template. Template volume
   // names are DNS labels.
   //
@@ -911,7 +911,7 @@ message ActorStatus {
   //
   // +ate:preview=ExternalVolumes
   // +k8s:optional
-  ExternalVolumes external_volumes = 3;
+  ActorExternalVolumes external_volumes = 3;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.

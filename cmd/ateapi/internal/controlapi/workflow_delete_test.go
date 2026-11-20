@@ -215,7 +215,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 						s.Snapshots = append(s.Snapshots, local)
 					}
 					if tc.volume {
-						s.ExternalVolumes = &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+						s.ExternalVolumes = &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 							{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"}}}
 					}
 				})
