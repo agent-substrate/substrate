@@ -58,6 +58,49 @@ func checkResourceStatusField(r model.Resource) []Finding {
 	return nil
 }
 
+var ResourceFieldOrder = Rule{
+	Name:        "resource-field-order",
+	Description: `A resource message declares "metadata" first and "status", if present, last.`,
+	Check:       forEachResource(checkResourceFieldOrder),
+}
+
+// checkResourceFieldOrder checks declaration order, not field numbers.
+// resource-metadata already pins "metadata" to number 1, but a field's number
+// and the position it is written at are independent: a resource can hold
+// "metadata = 1" halfway down the message and still satisfy that rule. Reading
+// a resource is easier when its identity is at the top and its observed state
+// at the bottom, in every message.
+//
+// A missing "metadata" is resource-metadata's finding to report, not this
+// one's, so its absence is passed over here rather than reported twice.
+func checkResourceFieldOrder(r model.Resource) []Finding {
+	fields := r.Message.Fields
+	if len(fields) == 0 {
+		return nil
+	}
+	var findings []Finding
+	if i := indexOfFieldByName(fields, "metadata"); i > 0 {
+		findings = append(findings, findingf(r.Message.FullName,
+			`"metadata" is declared after %q, want it declared first`, fields[0].Name))
+	}
+	// A "status" that is also the first field is reported once, as being out of
+	// place at the end, because a one-field message cannot be wrong both ways.
+	if i := indexOfFieldByName(fields, "status"); i >= 0 && i != len(fields)-1 {
+		findings = append(findings, findingf(r.Message.FullName,
+			`"status" is declared before %q, want it declared last`, fields[len(fields)-1].Name))
+	}
+	return findings
+}
+
+func indexOfFieldByName(fields []model.Field, name protoreflect.Name) int {
+	for i := range fields {
+		if fields[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func findFieldByName(m model.Message, name protoreflect.Name) *model.Field {
 	for i := range m.Fields {
 		if m.Fields[i].Name == name {
