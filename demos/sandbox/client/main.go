@@ -76,20 +76,13 @@ func main() {
 		cancel()
 	}()
 
-	// 1. Connect to ateapi and Resume Actor
+	// 1. Connect to ateapi
 	log.Println("Connecting to ateapi...")
 	cli, err := ateclient.NewClient(ctx, *kubeconfig, *k8sContext, *ateapiAddr, "", false)
 	if err != nil {
 		log.Fatalf("Failed to dial ateapi: %v", err)
 	}
 	defer cli.Close()
-
-	log.Printf("Resuming actor %s...", actorRef.Name)
-	_, err = cli.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
-	if err != nil {
-		log.Fatalf("Failed to resume actor: %v", err)
-	}
-	log.Println("Actor resumed successfully.")
 
 	// Ensure we suspend the actor on exit
 	defer func() {
