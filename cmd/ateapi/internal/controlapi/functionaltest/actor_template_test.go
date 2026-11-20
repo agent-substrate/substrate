@@ -145,7 +145,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second).Start(ctx)
+	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second, controlapi.DefaultTemplateReconcilerWorkers).Start(ctx)
 	var goldenRef *ateapi.ObjectRef
 	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		current, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()})
@@ -257,7 +257,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 		}
 		return nil
 	}
-	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second).Start(ctx)
+	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second, controlapi.DefaultTemplateReconcilerWorkers).Start(ctx)
 	// The enabled template proves the same reconciler is making progress.
 	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := assertNoGolden(ctx); err != nil {

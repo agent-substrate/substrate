@@ -113,7 +113,8 @@ var (
 	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
 	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the PerTemplateSnapshotLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
 
-	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
+	templateResyncInterval    = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
+	templateReconcilerWorkers = pflag.Int("template-reconciler-workers", controlapi.DefaultTemplateReconcilerWorkers, "Number of concurrent workers reconciling actor templates. Must be at least 1.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
@@ -160,6 +161,9 @@ func main() {
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
+	}
+	if *templateReconcilerWorkers < 1 {
+		serverboot.Fatal(ctx, "Invalid --template-reconciler-workers", errors.New("must be at least 1"))
 	}
 	if err := validateActorJWTIssuer(*actorJWTIssuer); err != nil {
 		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
@@ -359,7 +363,7 @@ func main() {
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval, *templateReconcilerWorkers)
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's worker restarts.

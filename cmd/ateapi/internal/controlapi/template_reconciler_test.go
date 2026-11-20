@@ -21,7 +21,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -392,7 +394,7 @@ func withFailed(reason string) func(*ateapi.ActorTemplate) {
 }
 
 func newTestTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
-	return NewActorTemplateReconciler(persistence, control, 7*time.Second)
+	return NewActorTemplateReconciler(persistence, control, 7*time.Second, DefaultTemplateReconcilerWorkers)
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
@@ -1256,6 +1258,50 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 			if r.queue.Len() != 0 {
 				t.Fatal("resync queued a terminally failed template")
 			}
+		})
+	}
+}
+
+// blockingTagControl parks every GetTag call until its context ends, counting
+// the calls so a test can see how many reconciles are in flight at once.
+type blockingTagControl struct {
+	fakeGoldenControl
+	inFlight atomic.Int32
+}
+
+func (c *blockingTagControl) GetTag(ctx context.Context, _ *ateapi.GetTagRequest) (*ateapi.Tag, error) {
+	c.inFlight.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestStart_RunsConfiguredWorkers(t *testing.T) {
+	t.Parallel()
+	const templateCount = 8
+	templates := make([]*ateapi.ActorTemplate, templateCount)
+	for i := range templates {
+		templates[i] = testTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Name = "tmpl-" + strconv.Itoa(i)
+			tmpl.Metadata.Uid = "uid-" + strconv.Itoa(i)
+		})
+	}
+
+	for _, workers := range []int{1, DefaultTemplateReconcilerWorkers + 1} {
+		t.Run(strconv.Itoa(workers), func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctrl := &blockingTagControl{}
+				ctx, cancel := context.WithCancel(t.Context())
+				NewActorTemplateReconciler(newFakeTemplateStore(templates...), ctrl, time.Hour, workers).Start(ctx)
+
+				// Every worker is parked in GetTag and the rest of the
+				// templates are still queued.
+				synctest.Wait()
+				if got := int(ctrl.inFlight.Load()); got != workers {
+					t.Errorf("reconciles in flight = %d, want %d", got, workers)
+				}
+				cancel()
+			})
 		})
 	}
 }
