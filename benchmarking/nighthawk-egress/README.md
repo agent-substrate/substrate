@@ -2,6 +2,14 @@
 
 Benchmarks the Agent Substrate egress dataplane (`atunnel` -> `atenet-egress`) using [Nighthawk](https://github.com/envoyproxy/nighthawk).
 
+## Objective
+
+For `http` / `mitm` egress mode, the benchmark finds the highest request rate that one `atenet-egress` replica carries with 1 CPU allocated for each of its `envoy` and `ext-proc` containers under 3 thresholds:
+
+- `success-rate`: at least 99.8% of the sent requests get a 2xx response.
+- `send-rate`: the client sends at least 90% of the scheduled requests.
+- `latency-ns-mean-plus-2stdev`: the latency mean plus two standard deviations is at most 25 ms.
+
 ## What it measures
 
 ```mermaid
@@ -30,6 +38,78 @@ flowchart LR
     egress ==> server
 ```
 
+The test traffic follows the thick arrows:
+
+- `nighthawk_service` inside the actor sends it.
+- The egress `atunnel` of the worker pod and `atenet-egress` carry it.
+- `nighthawk-server`: a `nighthawk_test_server` that answers each request with a 10-byte body.
+
+The runner Job only starts each stage of the search.
+
+Each suite uses one egress mode, `http` or `mitm`. [Target URLs and Default Egress Policy](#target-urls-and-default-egress-policy) lists the target URL of each mode.
+
+A stage passes only when each of the three thresholds holds.
+
+| Threshold | Purpose |
+|---|---|
+| `success-rate`: at least 99.8% of the sent requests get a 2xx response. | Detects fast errors, such as 503 and 504. |
+| `send-rate`: the client sends at least 90% of the scheduled requests. | Detects scheduled requests that the client skips. |
+| `latency-ns-mean-plus-2stdev`: the latency mean plus two standard deviations is at most 25 ms. | Detects a slow egress path. This threshold is the SLO. |
+
+In the runs so far, the stages directly above the highest rate fail the latency threshold.
+
+## How it works
+
+One Kubernetes Job per `type: nighthawk-egress` tests.yaml entry, driven by [`../automation/orchestrator.py`](../automation/orchestrator.py). For each suite the orchestrator deploys Substrate with the `ateArgs` of the entry, then:
+
+1. **Pin the gateway.** The orchestrator pins `deployment/atenet-egress` to 1 replica with `envoy` and `ext-proc` at 1 CPU each, and waits for the rollout.
+2. **Deploy the rig.** `hack/setup-e2e-egress-tls-kind.sh` provisions the CA bundle so `atenet-egress` trusts the certificate of `nighthawk-server`. `deploy.sh` and `deploy-traffic-driver.sh` deploy `nighthawk-server`, the worker pool, the actor template, and the `nighthawk/tester` actor with its egress policy.
+3. **Adaptive search.** The orchestrator submits one Job from `nighthawk-egress-runner-job.yaml.tmpl`. In the Job, `runner.py` builds the load spec for the mode (`spec.py`) and runs `nighthawk_adaptive_load_client` against `nighthawk_service` in the `nighthawk/tester` actor, through the `invoker` sidecar of the Job. The sidecar is an Envoy that adds the `ate-target-actor: nighthawk/tester` header and connects to `atenet-router` as `benchmarking/benchmark-runner`. The search doubles the rate until a stage fails a threshold, then narrows the range, and ends with one testing stage. [Search values](#search-values) gives the rates and the durations.
+4. **Upload results** (see [Reading the results](#reading-the-results)). The runner uploads the files that exist before it exits. The Job fails in each of these cases:
+   - The adaptive client exits non-zero, with no output. It does so when a stage ends with an error, the first stage fails a threshold, or the search passes its deadline.
+   - The output of the client has no testing stage.
+   - The runner raises an error.
+   - An upload fails.
+
+## How to run it
+
+### In CI
+
+The scheduled job in [benchmarking/automation](../automation/README.md) runs the two `type: nighthawk-egress` suites of [`benchmarking/automation/tests.yaml`](../automation/tests.yaml):
+
+| Suite | `mode` |
+|---|---|
+| `egress_gatewaycap_http_1cpu` | `http` |
+| `egress_gatewaycap_mitm_1cpu` | `mitm` |
+
+The suites support gVisor only. Each suite passes `--cordon-system-infra-components` in `ateArgs`, so the cluster needs the node pools of [Sizing the rig](#sizing-the-rig). The entry of the `http` suite:
+
+```yaml
+- name: egress_gatewaycap_http_1cpu
+  type: nighthawk-egress
+  targetCluster: dev
+  duration: 30m
+  ateArgs:
+    - "--cordon-system-infra-components"
+  nighthawk-egress:
+    mode: http
+```
+
+### Reading the results
+
+The runner uploads these files to `<dest>/runs/<name>/run_date=<date>/run_ts=<ts>/run_tag=<tag>/`:
+
+| File | Content |
+|---|---|
+| `capacity.json` | The verdict. `slo_max_rps` is the achieved rate of the highest stage that passed every threshold, and `slo_max_stage` names that stage. `binding_threshold` lists the thresholds that failed in any stage. The other keys are those of the [nighthawk-ingress](../nighthawk-ingress/README.md) summary, plus `mode`. The runner writes this file only when the search succeeds. |
+| `status.json` | `adaptive_client_exit_code`, `slo_max_rps`, and `failures`, the reasons why the run does not count. A failed upload of `status.json` itself is in the Job log only. |
+| `stats.jsonl`, `results.json` | One record for each stage, and the Nighthawk output as JSON. |
+| `spec.textproto`, `output.textproto`, `logs.txt` | The load spec, the raw Nighthawk output, and the client log. |
+
+#### Limitations
+
+Nighthawk starts its latency clock when it sends a request, so the latency does not count the wait for a free connection. A run does not record the CPU use of the gateway, so a result that `send-rate` sets does not show by itself that the gateway was the limit.
+
 ## Tuning
 
 ### Configuration knobs (the `nighthawk-egress:` block)
@@ -41,6 +121,21 @@ A `type: nighthawk-egress` entry in [`benchmarking/automation/tests.yaml`](../au
 | `mode` | required | `http`, `mitm`, or `passthrough`. |
 
 The gateway size is not a knob. The orchestrator gives `envoy` and `ext-proc` of `deployment/atenet-egress` a CPU request and limit of 1 each and starts Envoy with `--concurrency 1`. [Sizing the rig](#sizing-the-rig) sizes the load for that gateway.
+
+### Search values
+
+The thresholds of [What it measures](#what-it-measures) and these search values are constants in [`spec.py`](spec.py):
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `DEFAULT_CONCURRENCY` | 16 | Nighthawk event loops of `nighthawk_service` in the actor. |
+| `DEFAULT_CONNECTIONS` | 16 | Client connections of each event loop, 256 in total. |
+| `DEFAULT_MAX_PENDING` | 32 | Requests of each event loop that can wait for a free connection. The client does not send a request beyond this number and counts it in `pool_overflow`, which lowers `send-rate`. |
+| `DEFAULT_INITIAL_RPS` | 500 | Start rate in requests per second in total. Nighthawk rounds it down to 31 for each event loop, 496 in total. |
+| `DEFAULT_EXP_FACTOR` | 2 | Multiplies the rate after each stage that passes, until a stage fails. |
+| `DEFAULT_MEASURING_PERIOD_S` | 20 | Length in seconds of each stage before the testing stage. |
+| `DEFAULT_CONVERGENCE_DEADLINE_S` | 600 | Total time in seconds of the stages before the testing stage. |
+| `DEFAULT_TESTING_STAGE_S` | 60 | Length in seconds of the last stage, at the rate where the search converged. |
 
 ### Sizing the rig
 
@@ -54,7 +149,7 @@ The actor, the worker pool, and `nighthawk-server` are sized to outscale `atenet
 
 The sizes:
 
-- `traffic-driver-template.yaml.tmpl` gives the `nighthawk/tester` sandbox 16 vCPUs and 8 GiB, so `nighthawk_service` runs the 16 worker threads that the example `nighthawk_client` command below asks for (`--concurrency 16`) without CPU throttling.
+- `traffic-driver-template.yaml.tmpl` gives the `nighthawk/tester` sandbox 16 vCPUs and 8 GiB, so `nighthawk_service` runs its 16 event loops without CPU throttling. The suites and the manual example command both use 16.
 - `traffic-driver.yaml.tmpl` requests 12 vCPUs and 8 GiB for the worker pod and sets no limits, so only the actor's own limits cap the load generator. The request fits a `c3-standard-22` node beside the system DaemonSets. The worker pod and `nighthawk-server` request 18 vCPUs together, so the scheduler may place them on the same node; this benchmark accepts that.
 - `nighthawk-server.yaml` runs `nighthawk_test_server` with `--concurrency 8` and requests 6 vCPUs, so upstream HTTP and TLS on `:80`, `:443`, and `:8443` do not saturate before the gateway.
 
