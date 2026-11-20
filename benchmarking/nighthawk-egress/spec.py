@@ -19,7 +19,6 @@ from typing import Any
 from nighthawk_common.spec import (
     PERMISSIVE_FAILURE_PREDICATES,
     build_session_spec,
-    spec_dict_to_textproto,
 )
 
 UPSTREAM_SNI = "nighthawk-server.nighthawk.svc"
