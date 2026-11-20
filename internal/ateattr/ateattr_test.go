@@ -163,6 +163,8 @@ func TestKeySpellings(t *testing.T) {
 		{SnapshotFidelityKey, "ate.snapshot.fidelity"},
 		{SnapshotPhaseKey, "ate.snapshot.phase"},
 		{ImageCacheOutcomeKey, "ate.imagecache.outcome"},
+		{ImageProviderOutcomeKey, "ate.imageprovider.outcome"},
+		{ImageProviderKey, "ate.imageprovider.provider"},
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
 		{OTLPRelayKey, "ate.otlp.relay"},
@@ -386,6 +388,10 @@ func TestMetricLabelValues(t *testing.T) {
 		{ImageCacheOutcomeError, "error"},
 		{ImageCacheOutcomeCancelled, "cancelled"},
 		{ImageCacheOutcomeTimeout, "timeout"},
+
+		{ImageProviderOutcomeSuccess, "success"},
+		{ImageProviderOutcomeFallback, "fallback"},
+		{ImageProviderOutcomeError, "error"},
 
 		{SchedulerOutcomeAssigned, "assigned"},
 		{SchedulerOutcomeNoCapacity, "no_capacity"},

@@ -300,8 +300,22 @@ type Image struct {
 	// Config is the OCI image config (entrypoint, env, ...).
 	Config v1.Config
 	// LayerDirs are the absolute cached layer directories, bottom-most layer
-	// first. Each contains the unpacked tree under "fs/".
+	// first. Each contains the unpacked tree under "fs/". Empty for an image
+	// the image provider plugin prepared.
 	LayerDirs []string
+	// ProviderDirs are the overlayfs lowerdirs the image provider plugin
+	// returned, bottom-most first. Empty for a Store image.
+	ProviderDirs []string
+	// LeaseID is the image provider plugin's lease on ProviderDirs.
+	LeaseID string
+}
+
+// LowerDirs returns the image's overlayfs lowerdirs, bottom-most first.
+func (img *Image) LowerDirs() []string {
+	if len(img.LayerDirs) == 0 {
+		return slices.Clone(img.ProviderDirs)
+	}
+	return storeLowerDirs(img.LayerDirs)
 }
 
 // imageRecord is the persisted form of a cached image, stored under
@@ -430,6 +444,34 @@ func (s *Store) sweepTempDirs() error {
 		}
 	}
 	return nil
+}
+
+// CachedImage returns ref's image if ref is digest-pinned and the image is
+// complete on disk, with no network I/O. It returns (nil, nil) on a miss and
+// for refs that are not digest-pinned or do not parse, so the caller can fall
+// back to EnsureImage, which reports the parse error.
+func (s *Store) CachedImage(ctx context.Context, ref string) (*Image, error) {
+	parsedRef, err := s.parseRef(ref)
+	if err != nil {
+		return nil, nil
+	}
+	d, ok := parsedRef.(name.Digest)
+	if !ok {
+		return nil, nil
+	}
+	digest, err := v1.NewHash(d.DigestStr())
+	if err != nil {
+		return nil, nil
+	}
+	img, err := s.cachedImageHit(digest)
+	if err != nil {
+		return nil, err
+	}
+	if img != nil {
+		s.recordRequest(ctx, ateattr.ImageCacheOutcomeHit, nil)
+		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
+	}
+	return img, nil
 }
 
 // EnsureImage makes ref's image available in the pool and returns its config
