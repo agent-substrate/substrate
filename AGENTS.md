@@ -28,8 +28,8 @@
 
 - Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Optimizing PRs for review" in `CONTRIBUTING.md`.
 - Split a PR into commits that are easy to review in order. PRs are squash-merged, so only the branch `HEAD` needs to build and pass tests.
-- Follow "Contribution process" in `CONTRIBUTING.md`: open an issue first for anything beyond a small fix, and search open PRs and issues before you start.
-- Start the PR description with why the change is needed, or link the issue. Only write "Fixes #N" if the PR fully fixes it, and keep the description in sync with the final diff.
+- Follow "Contribution process" in `CONTRIBUTING.md`: search open issues and PRs before you start, and do not open a PR (including a draft or a small fix) without an issue labeled `ready-for-pr`.
+- Link the `ready-for-pr` issue in the PR description (`Fixes #N` only if the PR fully fixes it, otherwise `Part of #N`), explain why the change is needed, and keep the description in sync with the final diff.
 - Rebase onto upstream `main` before opening a PR, and don't merge main into your branch. This file may have changed there. Follow that version.
 - When updating a PR, keep rebases and other changes in separate pushes, so reviewers can see what changed:
   - To address review comments or test failures, push the fix without rebasing.
