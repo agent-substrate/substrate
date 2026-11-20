@@ -23,6 +23,7 @@ import (
 	"sync"
 	"testing"
 
+	imageprovider "github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/api/objectstore/v1"
@@ -369,6 +370,7 @@ var ourProtoFiles = []protoreflect.FileDescriptor{
 	grpcechopb.File_internal_proto_grpcechopb_grpcecho_proto,
 	objectstoreexchangepb.File_internal_proto_objectstoreexchangepb_exchange_proto,
 	objectstore.File_api_objectstore_v1_objectstore_proto,
+	imageprovider.File_api_imageprovider_v1alpha1_image_provider_proto,
 }
 
 // forEachField calls fn for every field of every message in ourProtoFiles,
@@ -411,6 +413,10 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 		"substrate.objectstore.v1.UploadSnapshotRequest.actor_jwt":   true,
 		"objectstoreexchange.ExchangeActorJwtRequest.actor_jwt":      true,
 		"objectstoreexchange.ExchangeActorJwtResponse.access_token":  true,
+		"imageprovider.v1alpha1.RegistryAuth.auth":                   true,
+		"imageprovider.v1alpha1.RegistryAuth.identity_token":         true,
+		"imageprovider.v1alpha1.RegistryAuth.password":               true,
+		"imageprovider.v1alpha1.RegistryAuth.registry_token":         true,
 	}
 	got := map[string]bool{}
 	forEachField(func(fd protoreflect.FieldDescriptor) {

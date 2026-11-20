@@ -98,7 +98,7 @@ func TestDigestlessSpecLayersReclaimedAfterBundleGone(t *testing.T) {
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSpec(bundle, &OverlaySpec{Layers: img.LayerDirs}); err != nil {
+	if err := WriteSpec(bundle, &OverlaySpec{StoreLayers: img.LayerDirs}); err != nil {
 		t.Fatal(err)
 	}
 	backdateStore(t, store, 3*time.Hour)
@@ -240,7 +240,7 @@ func TestEvictionRestoresRecordWhenLayerRooted(t *testing.T) {
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{store.layerDir(shared)}}); err != nil {
+	if err := WriteSpec(bundle, &OverlaySpec{StoreLayers: []string{store.layerDir(shared)}}); err != nil {
 		t.Fatal(err)
 	}
 	backdateStore(t, store, 3*time.Hour)
