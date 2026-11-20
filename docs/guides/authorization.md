@@ -216,6 +216,18 @@ Workers have no atespace; their permissions come from the global scope.
 | `DrainWorker` | `can_drain`, the worker | Global owner; `ate-controller` |
 | `ListWorkerActorAssignments` | `can_list_actor_assignments`, the worker | Global viewer |
 
+### External volume classes
+
+External volume classes have no atespace; their permissions come from the
+global scope.
+
+| RPC | Permission, on | Allowed for |
+|---|---|---|
+| `CreateExternalVolumeClass` | `can_create_external_volume_class`, global | Global owner |
+| `ListExternalVolumeClasses` | `can_list_external_volume_classes`, global | Global viewer |
+| `GetExternalVolumeClass` | `can_get`, the class | Global viewer |
+| `DeleteExternalVolumeClass` | `can_delete`, the class | Global owner |
+
 ### WorkerService
 
 The interceptor skips these; each handler requires `atelet`'s pod

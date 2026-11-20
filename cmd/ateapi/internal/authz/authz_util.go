@@ -80,6 +80,9 @@ const (
 	RelationCanUseTag               = "can_use_tag"
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
 
+	RelationCanCreateExternalVolumeClass = "can_create_external_volume_class"
+	RelationCanListExternalVolumeClasses = "can_list_external_volume_classes"
+
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
 )
@@ -126,6 +129,12 @@ func AtespaceObject(name string) string {
 // global-scoped.
 func WorkerObject(name string) string {
 	return "worker:" + objectIDReplacer.Replace(name)
+}
+
+// ExternalVolumeClassObject formats an external volume class name as an
+// OpenFGA object string. External volume classes are global-scoped.
+func ExternalVolumeClassObject(name string) string {
+	return "external_volume_class:" + objectIDReplacer.Replace(name)
 }
 
 // ActorObject formats an actor as an OpenFGA object string.
