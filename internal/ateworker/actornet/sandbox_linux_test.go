@@ -508,7 +508,7 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 		{"tap", "dddddddd-0000-0000-0000-00000000000d", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: tc.uid, Veth: tc.veth, EgressPort: testEgressPort, Families: IPv4 | IPv6})
+			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: tc.uid, Veth: tc.veth, EgressPort: testEgressPort, Families: IPv4})
 			if err != nil {
 				t.Fatalf("SetupSandboxNetwork: %v", err)
 			}
@@ -543,16 +543,29 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 				t.Fatal(err)
 			}
 			dropping := map[nftables.TableFamily]bool{}
+			filtering := map[nftables.TableFamily]bool{}
+			redirecting := map[nftables.TableFamily]bool{}
 			for _, ch := range chains {
 				if ch.Hooknum != nil && *ch.Hooknum == *nftables.ChainHookForward &&
 					ch.Policy != nil && *ch.Policy == nftables.ChainPolicyDrop {
 					dropping[ch.Table.Family] = true
 				}
+				filtering[ch.Table.Family] = filtering[ch.Table.Family] || ch.Name == "disallowed-egress"
+				redirecting[ch.Table.Family] = redirecting[ch.Table.Family] || ch.Name == "prerouting"
 			}
 			for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
 				if !dropping[family] {
 					t.Errorf("no forward-hook chain with a drop policy for family %v", family)
 				}
+				if !filtering[family] {
+					t.Errorf("no disallowed-egress chain for family %v", family)
+				}
+			}
+			if !redirecting[nftables.TableFamilyIPv4] {
+				t.Error("no IPv4 egress redirect")
+			}
+			if redirecting[nftables.TableFamilyIPv6] {
+				t.Error("IPv6 egress redirect installed on an IPv4-only worker")
 			}
 		})
 	}
