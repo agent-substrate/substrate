@@ -115,7 +115,7 @@ jobs:
         sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
         hack/test-dynamic-modules.sh
     - name: Save cargo cache
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+      if: ${{ github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
@@ -170,29 +170,27 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: false
-    # mostly the tools verify builds (go tool -n) and golangci-lint results, so
-    # this only needs saving when dependencies change
+    # the tools verify builds (go tool -n) and golangci-lint results
     - name: Restore Go build cache
-      id: verify-cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/go-build
           ~/.cache/golangci-lint
           ~/go/pkg/mod
-        key: verify-go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        key: verify-go-${{ runner.os }}-${{ github.sha }}
         restore-keys: verify-go-${{ runner.os }}-
     - name: verify
       run: hack/verify-all.sh
     - name: Save Go build cache
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.verify-cache.outputs.cache-hit != 'true' }}
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/go-build
           ~/.cache/golangci-lint
           ~/go/pkg/mod
-        key: ${{ steps.verify-cache.outputs.cache-primary-key }}
+        key: verify-go-${{ runner.os }}-${{ github.sha }}
   verify-migrations:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
