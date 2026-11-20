@@ -104,9 +104,10 @@ func (wh *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The actual AdmissionReview GVK will be used to write a typed response in case the
 	// webhook config permits multiple versions, otherwise this response will fail.
 	req := Request{}
-	ar := unversionedAdmissionReview{}
-	// avoid an extra copy
-	ar.Request = &req.AdmissionRequest
+	ar := unversionedAdmissionReview{
+		// avoid an extra copy
+		Request: &req.AdmissionRequest,
+	}
 	ar.SetGroupVersionKind(v1.SchemeGroupVersion.WithKind("AdmissionReview"))
 	_, actualAdmRevGVK, err := admissionCodecs.UniversalDeserializer().Decode(body, nil, &ar)
 	if err != nil {
@@ -151,12 +152,12 @@ func (wh *Webhook) writeAdmissionResponse(w io.Writer, ar v1.AdmissionReview) {
 		// e.g., broken pipe, so we can only write the error response once,
 		// to avoid endless circular calling.
 		serverError := Errored(http.StatusInternalServerError, err)
-		if err = json.NewEncoder(w).Encode(v1.AdmissionReview{Response: &serverError.AdmissionResponse}); err != nil {
+		if err := json.NewEncoder(w).Encode(v1.AdmissionReview{Response: &serverError.AdmissionResponse}); err != nil {
 			wh.getLogger(nil).Error(err, "still unable to encode and write the InternalServerError response")
 		}
 	} else {
-		res := ar.Response
 		if log := wh.getLogger(nil); log.V(5).Enabled() {
+			res := ar.Response
 			if res.Result != nil {
 				log = log.WithValues("code", res.Result.Code, "reason", res.Result.Reason, "message", res.Result.Message)
 			}

@@ -85,25 +85,35 @@ type Options struct {
 	// CertDir is the directory that contains the server key and certificate. Defaults to
 	// <temp-dir>/k8s-metrics-server/serving-certs.
 	//
-	// Note: This option is only used when TLSOpts does not set GetCertificate.
-	// Note: If certificate or key doesn't exist a self-signed certificate will be used.
+	// If both the certificate and key exist when the server starts, they are loaded and
+	// watched for changes. If either file does not exist, a self-signed certificate is
+	// generated instead. To use certificates that are provisioned after the server starts,
+	// set GetCertificate through TLSOpts.
 	CertDir string
 
 	// CertName is the server certificate name. Defaults to tls.crt.
 	//
-	// Note: This option is only used when TLSOpts does not set GetCertificate.
-	// Note: If certificate or key doesn't exist a self-signed certificate will be used.
+	// This option is only used when TLSOpts does not set GetCertificate. If the
+	// certificate or key does not exist when the server starts, a self-signed certificate
+	// will be used.
 	CertName string
 
 	// KeyName is the server key name. Defaults to tls.key.
 	//
-	// Note: This option is only used when TLSOpts does not set GetCertificate.
-	// Note: If certificate or key doesn't exist a self-signed certificate will be used.
+	// This option is only used when TLSOpts does not set GetCertificate. If the
+	// certificate or key does not exist when the server starts, a self-signed certificate
+	// will be used.
 	KeyName string
 
 	// TLSOpts is used to allow configuring the TLS config used for the server.
-	// This also allows providing a certificate via GetCertificate.
+	// If an option sets GetCertificate, it takes precedence over CertDir, CertName, and
+	// KeyName. Use this when certificates are provisioned asynchronously or otherwise
+	// cannot be loaded from the configured files when the server starts.
 	TLSOpts []func(*tls.Config)
+
+	// HandlerOpts is used to allow configuring the promhttp handler used to serve metrics.
+	// These options are applied after the default handler options are set and can override them.
+	HandlerOpts []func(*promhttp.HandlerOpts)
 
 	// ListenConfig contains options for listening to an address on the metric server.
 	ListenConfig net.ListenConfig
@@ -139,9 +149,21 @@ func NewServer(o Options, config *rest.Config, httpClient *http.Client) (Server,
 	}
 
 	return &defaultServer{
-		metricsFilter: metricsFilter,
-		options:       o,
+		metricsFilter:  metricsFilter,
+		options:        o,
+		newCertWatcher: newCertWatcher,
 	}, nil
+}
+
+// certWatcher is the subset of *certwatcher.CertWatcher used by the server.
+type certWatcher interface {
+	GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	Start(ctx context.Context) error
+}
+
+// newCertWatcher creates a certWatcher backed by certwatcher.New.
+func newCertWatcher(certPath, keyPath string) (certWatcher, error) {
+	return certwatcher.New(certPath, keyPath)
 }
 
 // defaultServer is the default implementation used for Server.
@@ -151,6 +173,9 @@ type defaultServer struct {
 	// metricsFilter is a filter which is added around
 	// the metrics and the extra handlers on the metrics server.
 	metricsFilter Filter
+
+	// newCertWatcher creates the certificate watcher. It can be replaced in tests.
+	newCertWatcher func(certPath, keyPath string) (certWatcher, error)
 
 	// mu protects access to the bindAddr field.
 	mu sync.RWMutex
@@ -207,7 +232,10 @@ func (s *defaultServer) AddExtraHandler(path string, handler http.Handler) error
 func (s *defaultServer) Start(ctx context.Context) error {
 	log.Info("Starting metrics server")
 
-	listener, err := s.createListener(ctx, log)
+	// certWatcherErr receives an error if the certificate watcher fails
+	certWatcherErr := make(chan error, 1)
+
+	listener, err := s.createListener(ctx, certWatcherErr, log)
 	if err != nil {
 		return fmt.Errorf("failed to start metrics server: failed to create listener: %w", err)
 	}
@@ -218,9 +246,7 @@ func (s *defaultServer) Start(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 
-	handler := promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{
-		ErrorHandling: promhttp.HTTPErrorOnError,
-	})
+	handler := promhttp.HandlerFor(metrics.Registry, s.handlerOpts())
 	if s.metricsFilter != nil {
 		log := log.WithValues("path", defaultMetricsEndpoint)
 		var err error
@@ -248,9 +274,13 @@ func (s *defaultServer) Start(ctx context.Context) error {
 
 	srv := httpserver.New(ctx, mux)
 
+	var watcherErr error
 	idleConnsClosed := make(chan struct{})
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case watcherErr = <-certWatcherErr:
+		}
 		log.Info("Shutting down metrics server with timeout of 1 minute")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
@@ -267,10 +297,24 @@ func (s *defaultServer) Start(ctx context.Context) error {
 	}
 
 	<-idleConnsClosed
+	if watcherErr != nil {
+		return fmt.Errorf("metrics server shut down: certificate watcher failed: %w", watcherErr)
+	}
 	return nil
 }
 
-func (s *defaultServer) createListener(ctx context.Context, log logr.Logger) (net.Listener, error) {
+func (s *defaultServer) handlerOpts() promhttp.HandlerOpts {
+	handlerOpts := promhttp.HandlerOpts{
+		ErrorHandling:     promhttp.HTTPErrorOnError,
+		EnableOpenMetrics: true,
+	}
+	for _, op := range s.options.HandlerOpts {
+		op(&handlerOpts)
+	}
+	return handlerOpts
+}
+
+func (s *defaultServer) createListener(ctx context.Context, certWatcherErr chan<- error, log logr.Logger) (net.Listener, error) {
 	if !s.options.SecureServing {
 		return s.options.ListenConfig.Listen(ctx, "tcp", s.options.BindAddress)
 	}
@@ -294,7 +338,7 @@ func (s *defaultServer) createListener(ctx context.Context, log logr.Logger) (ne
 		if certExists && keyExists {
 			// Create the certificate watcher and
 			// set the config's GetCertificate on the TLSConfig
-			certWatcher, err := certwatcher.New(certPath, keyPath)
+			certWatcher, err := s.newCertWatcher(certPath, keyPath)
 			if err != nil {
 				return nil, err
 			}
@@ -303,6 +347,10 @@ func (s *defaultServer) createListener(ctx context.Context, log logr.Logger) (ne
 			go func() {
 				if err := certWatcher.Start(ctx); err != nil {
 					log.Error(err, "certificate watcher error")
+					// Errors after ctx is done are part of a normal shutdown.
+					if ctx.Err() == nil {
+						certWatcherErr <- err
+					}
 				}
 			}()
 		}
