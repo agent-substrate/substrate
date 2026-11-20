@@ -47,7 +47,8 @@ checks two envelope health gates:
 ```
 
 - Evaluation, variable and condition names match `^[a-z][a-z0-9_]*$`, at most
-  64 characters, and are unique where they live. CEL itself rejects a
+  64 characters, and are unique where they live. A variable name can't contain
+  `__` or end in `_` (see [Outputs](#outputs)). CEL itself rejects a
   variable named after a CEL type (`int`, `map`) or a keyword (`in`, `true`)
   when a condition compiles. Value names come from the source
   and may be any non-empty string
@@ -87,7 +88,7 @@ A source is a class with three hooks (`sources/base.py`):
 | hook | runs | does |
 |---|---|---|
 | `validate(cfg)`, a classmethod | when the evaluations are loaded | raises `ValueError` for a bad `source_cfg` |
-| `init(run)` | once, when the run starts (its files may not exist yet) | takes the `BenchmarkRunContext`, the run being evaluated: which run it is (`identity`: `uri`, and `test_name`, `tag`, `run_date`, `run_ts` when known), where it is stored, and its stored artifacts (`artifact(name)`, a local path or None); the source chooses what it reads. |
+| `init(run)` | once, when the run starts (its files may not exist yet) | takes the `BenchmarkRunContext`, the run being evaluated: which run it is (`identity`: `uri`, and `test_name`, `tag`, `run_date`, `run_ts` when known), where it is stored, and its stored artifacts (`artifact(name)`, a local path or None); the source chooses what it reads. `run_of(test)` returns the run of another test from the same invocation or raises `LookupError` |
 | `query(cfg)` | after the run, once per distinct `source_cfg` | returns named values (numbers, bools, strings or null), or raises `SourceInvalid(reason, values)` when it can't judge the run |
 
 Value names come from `source_cfg` or are fixed by the source, never from the
@@ -123,9 +124,11 @@ source_cfg:
     cel: "size(trials) > 0 ? dyn(trials[size(trials) - 1].measurements.allocatable_cores) : null"
 ```
 
-- `inputs: [{name: <name>, reader: <reader>, reader_cfg: {...}}, ...]`:
+- `inputs: [{name: <name>, from_test: <test>?, reader: <reader>, reader_cfg: {...}}, ...]`:
   each input names a reader and its `reader_cfg`, and the reader's data
-  from this run becomes the CEL variable `<name>`.
+  becomes the CEL variable `<name>`. By default the reader reads this run. With `from_test:` it
+  reads that test's run from the same invocation (`run_of`), which lets a
+  config compare two runs.
 - `locals: [{name: <name>, cel: <cel>}, ...]`: ordered list of named in-between
   results, such as a filtered list or a median. They are evaluated top to
   bottom, so each local may read inputs and earlier locals by bare name.
@@ -161,7 +164,7 @@ What is checked, when, and what happens on a mismatch:
 | every expression compiles with inferred local types, and value return types can be double, bool, string or null | config load | load error |
 | reader output has its declared `fields`, of their types | run time | `TypeError` makes the variable `invalid` |
 | missing JSON keys inside `lines` or `data` | run time | reading a missing key makes the variable `invalid`, unless guarded with `has()` |
-| a reader can't read its run (absent file, unhashable `unique_by`, `select` eval error) | run time | `invalid`, and the reason names the input |
+| a reader can't read its run (absent file, unhashable `unique_by`, `select` eval error, no run of `from_test`) | run time | `invalid`, and the reason names the input |
 | a local, check or value fails to evaluate, or a value gives another type | run time | `invalid`, and the reason names it |
 
 A reader is a class in `sources/cel/` and a line in `READERS`
@@ -209,6 +212,88 @@ Filtered lines of one of the run's JSON-lines or prefixed-JSON files:
   - `unique_by`: field name; keep only the first selected object per distinct
     value of that field (useful to bound list size before CEL evaluation).
 
+Goodput, as config only: a task is good when it ended in the steady phase,
+didn't fail, woke within limits (slowest resume 1.5 s, slowest time to first
+execute 1 s), and its command time (`cel_ms`) and wall time stayed within 1.5x
+of the 1-user run's medians.
+
+```yaml
+- name: sweperf_astropy_150_users_think
+  # ...
+  evaluations:
+  - name: goodput_strict
+    variables:
+    - name: goodput
+      source: cel
+      source_cfg:
+        inputs:
+          - name: records
+            reader: json_lines
+            reader_cfg:
+              file: logs.txt
+              prefix: "[boomer] "
+              until: "has(line.msg) && line.msg == 'sweperf shutdown started'"
+              select: "has(line.msg) && line.msg == 'sweperf task record' && has(line.v) && line.v == 1.0"
+          - name: failures
+            reader: json_lines
+            reader_cfg:
+              file: logs.txt
+              prefix: "[boomer] "
+              until: "has(line.msg) && line.msg == 'sweperf shutdown started'"
+              select: "has(line.msg) && line.msg in ['ResumeActor failed in step', 'execute steps failed', 'SuspendActor failed', 'SuspendActorAsync failed'] && has(line.actor) && line.actor != ''"
+              unique_by: actor
+          - name: shutdown
+            reader: json_lines
+            reader_cfg:
+              file: logs.txt
+              prefix: "[boomer] "
+              select: "has(line.msg) && line.msg == 'sweperf shutdown started'"
+          - {name: summary, reader: json, reader_cfg: {file: server_summary.json}}
+          - {name: stats, reader: json_lines, reader_cfg: {file: stats.jsonl}}
+          - name: one_user
+            from_test: sweperf_astropy_1_user
+            reader: json_lines
+            reader_cfg:
+              file: logs.txt
+              prefix: "[boomer] "
+              until: "has(line.msg) && line.msg == 'sweperf shutdown started'"
+              select: "has(line.msg) && line.msg == 'sweperf task record' && has(line.v) && line.v == 1.0"
+          - {name: one_user_stats, from_test: sweperf_astropy_1_user, reader: json_lines, reader_cfg: {file: stats.jsonl}}
+        locals:
+        - {name: lo, cel: "timestamp(int(summary.data.metadata.steady_start_ts))"}
+        - {name: steady_end, cel: "timestamp(int(summary.data.metadata.steady_end_ts))"}
+        - {name: stop, cel: "size(shutdown.lines) > 0 ? timestamp(shutdown.lines[0].time) : steady_end"}
+        - {name: hi, cel: "stop < steady_end ? stop : steady_end"}
+        - {name: window_s_raw, cel: "double((hi - lo).getSeconds()) + double((hi - lo).getMilliseconds()) / 1000.0"}
+        - {name: hours, cel: "math.greatest(window_s_raw, 0.0) / 3600.0"}
+        - {name: done, cel: "records.lines.filter(t, timestamp(t.end) >= lo && timestamp(t.end) <= hi)"}
+        - {name: recorded, cel: "records.lines.map(t, t.actor)"}
+        - {name: lost, cel: "failures.lines.filter(f, !(f.actor in recorded) && timestamp(f.time) >= lo && timestamp(f.time) <= hi)"}
+        - {name: ref_cel_ms, cel: "round(percentile(one_user.lines.filter(t, !t.failed).map(t, t.cel_ms), 50.0), 3)"}
+        - {name: ref_wall_ms, cel: "round(percentile(one_user.lines.filter(t, !t.failed).map(t, t.wall_ms), 50.0), 3)"}
+        - {name: trials, cel: "stats.lines.filter(l, l.metric == 'trial_summary')"}
+        - {name: cores, cel: "trials[size(trials) - 1].measurements.allocatable_cores"}
+        - {name: run_async, cel: "stats.lines.exists(l, has(l.metric) && l.metric == 'grpc_SuspendActorAsync')"}
+        - {name: run_sync, cel: "stats.lines.exists(l, has(l.metric) && l.metric == 'grpc_SuspendActor')"}
+        - {name: one_async, cel: "one_user_stats.lines.exists(l, has(l.metric) && l.metric == 'grpc_SuspendActorAsync')"}
+        - {name: one_sync, cel: "one_user_stats.lines.exists(l, has(l.metric) && l.metric == 'grpc_SuspendActor')"}
+        - {name: run_mode, cel: "run_async && run_sync ? 'mixed' : (run_async ? 'async' : (run_sync ? 'sync' : ''))"}
+        - {name: one_mode, cel: "one_async && one_sync ? 'mixed' : (one_async ? 'async' : (one_sync ? 'sync' : ''))"}
+        - {name: good, cel: "done.filter(t, !t.failed && t.resume_max_ms <= 1500.0 && t.ttfe_max_ms <= 1000.0 && t.cel_ms <= 1.5 * ref_cel_ms && t.wall_ms <= 1.5 * ref_wall_ms)"}
+        checks:
+          - {name: has_shutdown, cel: "size(shutdown.lines) > 0"}
+          - {name: same_lifecycle_mode, cel: "'' in [run_mode, one_mode] || run_mode == one_mode"}
+          - {name: one_user_has_clean_tasks, cel: "one_user.lines.exists(t, !t.failed)"}
+          - {name: tasks_in_steady_window, cel: "size(done) + size(lost) > 0"}
+        values:
+          - {name: good, cel: "double(size(good))"}
+          - {name: good_ratio_pct, cel: "round(100.0 * double(size(good)) / double(size(done) + size(lost)), 2)"}
+          - {name: good_per_vcpu_hour, cel: "round(double(size(good)) / hours / cores, 4)"}
+          - {name: cel_ms_ratio_p90, cel: "size(done) > 0 ? dyn(round(percentile(done.map(t, t.cel_ms / ref_cel_ms), 90.0), 3)) : null"}
+    conditions:
+    - {name: good_ratio, cel: "goodput.good_ratio_pct >= 80.0"}
+```
+
 ### `run_results`
 
 The measurements of one `stats.jsonl` row:
@@ -234,6 +319,36 @@ variable with its values (and why it is invalid), and the evaluation as loaded
 (`config`). An evaluation's reason names the conditions that failed, else the
 invalid conditions and variables.
 
+## Outputs
+
+- `evaluation.json`: the `Report` as JSON. When the evaluations failed to
+  load, `error` says why and nothing is judged.
+- `stats.jsonl` rows in the file's usual five keys: one `evaluation_<name>` row
+  per evaluation and one `evaluations` row for the summary. Measurements are
+  strings, or null. An evaluation's row has its `status`, `passed`, `reason`,
+  `failed_conditions` and `invalid_conditions`, and each value as
+  `<variable>__<value name>`. Value names follow the rule in
+  [Sources](#sources), so the keys stay bounded. A variable name can't contain
+  `__` or end in `_`, so no two values share a key.
+
+## In the runner
+
+The orchestrator passes the whole `locust` test entry to `runner.py` as
+`--test-entry` (JSON), and the runner reads its `evaluations`. Before the
+load test, the runner loads them and runs the
+sources' `init`, so a config error is in `logs.txt` from the start. As its
+last step after the run, it runs the queries, writes `evaluation.json` (a
+config error goes there too), uploads it with the run's other files, appends
+the rows to `stats.jsonl`, and logs one line per evaluation. `status.json` and
+the exit code don't change: an evaluation never fails a run.
+
+The runner's `run_of(test)` returns the run of `test` from the same
+invocation: the run under the same `--dest` with the same `--tag` and the
+latest `run_ts`, at most 6 h before this run (`rundir.py`). When both runs record a cluster (`trial_summary`'s
+`metadata_cluster_name`), it must be the same. On a `gs://` `--dest`, this
+needs read access to the bucket (see the
+[automation README](../automation/README.md#iam-prerequisites)).
+
 ## Layout
 
 | file | |
@@ -241,7 +356,10 @@ invalid conditions and variables.
 | `config.py` | loads and validates an `evaluations` block (pydantic models) |
 | `cel_env.py` | shared CEL environment, helpers (`round`, `percentile`), and evaluation |
 | `evaluator.py` | runs the source hooks and judges a run into a `Report` |
+| `outputs.py` | `evaluation.json` and the `stats.jsonl` rows |
 | `sources/` | the hooks (`base.py`) and the sources |
+| `rundir.py` | the runner's storage layout: opening local or `gs://` runs (a `gs://` artifact is downloaded on first use), finding the run of another test from the same invocation |
+| `__init__.py` | `prepare` and `write`, which `runner.py` calls |
 
 ## Tests
 

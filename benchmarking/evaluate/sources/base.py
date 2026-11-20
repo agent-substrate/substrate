@@ -33,7 +33,7 @@ finished, and a re-evaluation of a stored run.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Mapping, Optional, Protocol, TypeVar, Union
+from typing import Annotated, Any, Callable, Mapping, Optional, Protocol, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -66,6 +66,10 @@ def describe(e: ValidationError) -> str:
     return "; ".join(f"{'.'.join(map(str, err['loc']))}: {text(err)}" if err["loc"] else text(err)
                      for err in e.errors())
 
+
+def no_other_runs(test: str) -> "BenchmarkRunContext":
+    """BenchmarkRunContext.run_of of a run that has no other runs to read."""
+    raise LookupError(f"no run of {test}")
 
 
 @dataclass(frozen=True)
@@ -109,9 +113,17 @@ class BenchmarkRunContext:
     (identity.uri, artifacts) and its stored artifacts. Each source chooses
     what it reads: one of the run's artifacts, by name, or another store,
     keyed by the run's identity.
+
+    run_of(test) returns the run of another test from the same invocation
+    (e.g. the suite's 1-user run), with its own identity, or raises
+    LookupError saying why there is none; whoever creates the context says
+    what "the same invocation" means. Call it from query: finding the run may read
+    this run's artifacts. It may be called once per input that reads the
+    other run, so an implementation that is costly to call caches its lookups.
     """
     identity: RunIdentity
     artifacts: ArtifactStore
+    run_of: Callable[[str], "BenchmarkRunContext"] = no_other_runs
 
     def artifact(self, name: str) -> Optional[Path]:
         """The local path of the run's stored artifact name, fetched on first
