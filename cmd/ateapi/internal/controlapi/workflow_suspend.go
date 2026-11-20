@@ -74,7 +74,11 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 // is returned as it is, whatever the mode. Idempotent: a re-entered workflow
 // fast-forwards past the steps a previous attempt completed, deriving
 // progress from the persisted actor alone.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapi.Actor, err error) {
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (*ateapi.Actor, error) {
+	return w.suspendActor(ctx, actorRef, mode, false)
+}
+
+func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, requireLease bool) (_ *ateapi.Actor, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapi.Actor
@@ -95,15 +99,16 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err, attrs...)
 	}()
 
-	// An already suspended actor needs no work, even if atelet is still
-	// uploading its snapshot in the background.
-	observed, err := w.store.GetActor(ctx, actorRef)
-	if err != nil {
-		return nil, err
-	}
-	if observed.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		actor = observed
-		return actor, nil
+	// A worker proposal must lose to an operation that still holds the lease.
+	if !requireLease {
+		observed, err := w.store.GetActor(ctx, actorRef)
+		if err != nil {
+			return nil, err
+		}
+		if observed.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			actor = observed
+			return actor, nil
+		}
 	}
 
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)

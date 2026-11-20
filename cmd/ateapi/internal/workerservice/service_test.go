@@ -39,8 +39,8 @@ var testAteletSPIFFEID = installdefaults.SPIFFEID(installdefaults.SystemNamespac
 // point of most of the tests: whether the request reached the operation at
 // all.
 type fakeControl struct {
-	calls []*ateapi.SuspendActorRequest
-	resp  *ateapi.SuspendActorResponse
+	calls []resources.ActorRef
+	resp  *ateapi.Actor
 	err   error
 
 	reports    []appliedReport
@@ -49,8 +49,8 @@ type fakeControl struct {
 	crashResp  *ateapi.Actor
 }
 
-func (f *fakeControl) SuspendActor(_ context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
-	f.calls = append(f.calls, req)
+func (f *fakeControl) SuspendActorRequestedByWorker(_ context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
+	f.calls = append(f.calls, actorRef)
 	return f.resp, f.err
 }
 

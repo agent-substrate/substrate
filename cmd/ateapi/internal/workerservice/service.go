@@ -34,9 +34,7 @@ type Server struct {
 	// state every request is authorized against.
 	store store.Interface
 
-	// control runs the operations a Worker asks for through the same entry
-	// points Control uses, so a Worker's request is subject to every
-	// precondition a client's would be.
+	// control runs the actor workflows a Worker requests.
 	control actorControl
 
 	// ateletSPIFFEID is the identity the calling atelet must present.
@@ -54,7 +52,7 @@ type Server struct {
 // actorControl is the in-process slice of the Control service this package
 // drives. *controlapi.RPCService satisfies it.
 type actorControl interface {
-	SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error)
+	SuspendActorRequestedByWorker(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error)
 	ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error
 	CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error)
 }
