@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -29,8 +30,10 @@ import (
 // fakeRunsc stands in for *runsc. containers is the set runsc has a record of;
 // calls logs every command.
 type fakeRunsc struct {
-	containers map[string]bool
-	calls      []string
+	containers          map[string]bool
+	calls               []string
+	deleteErrors        map[string]error
+	removeOnDeleteError bool
 }
 
 func newFakeRunsc(containers ...string) *fakeRunsc {
@@ -42,10 +45,19 @@ func newFakeRunsc(containers ...string) *fakeRunsc {
 }
 
 // cmdDelete succeeds for a container runsc has no record of, as
-// runsc delete -force does.
+// runsc delete -force does. A batch stops at the first failure.
 func (f *fakeRunsc) cmdDelete(_ context.Context, names ...string) error {
 	f.calls = append(f.calls, "delete "+strings.Join(names, " "))
 	for _, name := range names {
+		if !f.containers[name] {
+			continue
+		}
+		if err := f.deleteErrors[name]; err != nil {
+			if f.removeOnDeleteError {
+				delete(f.containers, name)
+			}
+			return err
+		}
 		delete(f.containers, name)
 	}
 	return nil
@@ -90,6 +102,39 @@ func TestCleanupContainers(t *testing.T) {
 			assertCalls(t, f, "delete app _sandbox")
 			if len(f.containers) != 0 {
 				t.Errorf("containers survived cleanup: %v", slices.Sorted(maps.Keys(f.containers)))
+			}
+		})
+	}
+}
+
+func TestCleanupContainers_ContinuesAfterApplicationErrors(t *testing.T) {
+	deleteErr := errors.New("delete failed")
+	containers := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
+	for _, tc := range []struct {
+		name                string
+		removeOnDeleteError bool
+	}{
+		{name: "delete error"},
+		{name: "record removed before delete error", removeOnDeleteError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRunsc("app", "sidecar", "_sandbox")
+			f.deleteErrors = map[string]error{"app": deleteErr}
+			f.removeOnDeleteError = tc.removeOnDeleteError
+			err := cleanupContainers(context.Background(), f, containers)
+			if !errors.Is(err, deleteErr) {
+				t.Errorf("cleanupContainers = %v, want %v", err, deleteErr)
+			}
+			assertCalls(t, f, "delete app sidecar _sandbox", "delete app", "delete sidecar", "delete _sandbox")
+			for _, name := range []string{"sidecar", "_sandbox"} {
+				if f.containers[name] {
+					t.Errorf("%s survived application cleanup error; calls: %v", name, f.calls)
+				}
+			}
+			if tc.removeOnDeleteError {
+				if err := cleanupContainers(context.Background(), f, containers); err != nil {
+					t.Errorf("retry after records were removed: %v", err)
+				}
 			}
 		})
 	}
