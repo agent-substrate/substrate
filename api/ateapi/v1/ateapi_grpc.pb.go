@@ -81,119 +81,195 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Control is the primary RPC interface for Agentic Substrate.
+// Control is the API for managing Substrate resources.
 type ControlClient interface {
-	// Get an Actor.
+	// Get an Actor by Atespace and name.
 	GetActor(ctx context.Context, in *GetActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// Create a new Actor deriving from a given ActorTemplate.
-	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// Update mutable fields on an existing Actor.
-	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker. A SUSPENDED actor is returned as it is.
-	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
-	// Resume an actor from its latest snapshot.
-	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed or running actors, or suspended actors with a node-local
-	// snapshot, can be reverted. A suspended actor without a node-local snapshot
-	// is already at its durable snapshot, so there is nothing to revert.
-	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
-	// Delete an actor. A running actor's workload is terminated, its volumes
-	// detached, and its worker released before the record is removed.
-	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// Get the egress policy resource nested under an Actor.
-	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
-	// Create the egress policy resource nested under an Actor.
-	CreateActorEgressPolicy(ctx context.Context, in *CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
-	// Replace the egress policy resource nested under an Actor.
-	UpdateActorEgressPolicy(ctx context.Context, in *UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
-	// Delete the egress policy resource nested under an Actor.
-	DeleteActorEgressPolicy(ctx context.Context, in *DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
-	// Create a Substrate-issued JWT asserting the actor identity.
+	// Create an Actor in `SUSPENDED` state.
 	//
-	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
+	// Seeds from `source_tag` when set, otherwise from the template's golden
+	// snapshot if ready, or boots from the container image on first resume. Call
+	// ResumeActor to start the Actor.
+	//
+	// Returns `ALREADY_EXISTS` if the name is taken, or `FAILED_PRECONDITION` if
+	// the Atespace, ActorTemplate, or source Tag is missing, deleting, or
+	// incompatible.
+	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Update mutable fields on an Actor.
+	//
+	// Only `actor_template` and `worker_selector` may be modified:
+	//
+	// * `actor_template`: requires the Actor to be `SUSPENDED`
+	//   (`FAILED_PRECONDITION` otherwise). Must match the previous template's
+	//   `volumes` and shared-container `volume_mounts` (if the previous template
+	//   still exists), and must use the same snapshot `storage_location` once the
+	//   Actor owns a snapshot (`FAILED_PRECONDITION` on mismatch). Until the next
+	//   snapshot is taken, ResumeActor restores only `VOLUMES` and cold boots the
+	//   new containers.
+	// * `worker_selector`: allowed in any non-deleting state and takes effect on
+	//   the next ResumeActor call.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch). Returns
+	// `FAILED_PRECONDITION` if the Actor is being deleted.
+	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Checkpoint and stop a running Actor.
+	//
+	// Captures a snapshot at `snapshot_config.preferred_fidelity`, stops the
+	// containers, and releases the Worker. Returns a `SUSPENDED` Actor unchanged.
+	//
+	// Returns `FAILED_PRECONDITION` if the Actor is not `RUNNING`, `SUSPENDING`,
+	// or `SUSPENDED`, or `ABORTED` if another operation is in progress.
+	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
+	// Start a suspended Actor on a Worker.
+	//
+	// Places the Actor onto a matching Worker, restores its latest snapshot (or
+	// boots from the container image on first boot), and waits for wakeup probes
+	// to pass. Returns a `RUNNING` Actor unchanged.
+	//
+	// Returns `FAILED_PRECONDITION` if the Actor is not `SUSPENDED`, `RESUMING`,
+	// or `RUNNING` (call RevertActor to recover from `CRASHED`), `ABORTED` if
+	// another operation is in progress, or `RESOURCE_EXHAUSTED` if no matching
+	// Worker has capacity.
+	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
+	// Revert an Actor to `SUSPENDED` state at its latest durable snapshot.
+	//
+	// Discards active execution and any unuploaded local snapshot, returning the
+	// Actor to its last `COMPLETED` durable snapshot (or to its initial pre-boot
+	// state if none exists). Call RevertActor to recover from `CRASHED` state
+	// before calling ResumeActor.
+	//
+	// Returns `FAILED_PRECONDITION` if the Actor is not `CRASHED`, `RUNNING`,
+	// `REVERTING`, or `SUSPENDED` with a local snapshot, or `ABORTED` if another
+	// operation is in progress.
+	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
+	// Delete an Actor and its owned snapshots and external volumes.
+	//
+	// Stops the Actor if running. Safe to retry if interrupted.
+	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Get the EgressPolicy of an Actor.
+	//
+	// Returns `NOT_FOUND` if the Actor has no EgressPolicy.
+	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Create the EgressPolicy for an Actor.
+	//
+	// Takes effect on running Actors after a brief propagation delay. Returns
+	// `ALREADY_EXISTS` if the policy already exists, or `FAILED_PRECONDITION` if
+	// the Actor does not exist.
+	CreateActorEgressPolicy(ctx context.Context, in *CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Replace the EgressPolicy of an Actor.
+	//
+	// Takes effect on running Actors after a brief propagation delay.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
+	UpdateActorEgressPolicy(ctx context.Context, in *UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Delete the EgressPolicy of an Actor, revoking all outbound rules.
+	//
+	// Takes effect on running Actors after a brief propagation delay.
+	DeleteActorEgressPolicy(ctx context.Context, in *DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Mint a short-lived OIDC JWT asserting an Actor's identity.
 	MintActorJwt(ctx context.Context, in *MintActorJwtRequest, opts ...grpc.CallOption) (*MintActorJwtResponse, error)
-	// Tag the external snapshot a suspended Actor holds. The tag gets its own
-	// copy of that snapshot, so suspending or deleting the Actor afterwards
-	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
-	// atelet uploads it first, so the call can take as long as that upload.
+	// Create a Tag by copying a suspended Actor's latest snapshot.
+	//
+	// Returns `FAILED_PRECONDITION` if `source_actor` does not exist, is not
+	// `SUSPENDED`, or holds no snapshot. Not idempotent: if CreateTag fails after
+	// reserving the name, call DeleteTag before retrying.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag by Atespace and name.
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// List Tags.
+	// List Tags in an Atespace, or across all Atespaces when `atespace` is empty.
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
-	// Publish or unpublish a Tag without changing its address.
+	// Update the visibility `scope` of a Tag.
+	//
+	// Only `scope` may be modified. Returns `FAILED_PRECONDITION` until the Tag's
+	// snapshot reaches `COMPLETED` or once DeleteTag has started.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
 	UpdateTag(ctx context.Context, in *UpdateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Delete a Tag and its snapshot.
+	//
+	// Actors seeded from the Tag reference its snapshot until their first
+	// suspend. Deleting the Tag before then makes those Actors unrecoverable.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
-	// Get a Worker.
+	// Get a Worker by name.
 	GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Register a Worker. Called once its Pod has an IP. A Worker is registered
-	// UNAVAILABLE and takes no Actors until MarkWorkerAvailable.
+	// Create a Worker.
 	CreateWorker(ctx context.Context, in *CreateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Update observed pool state on a Worker.
-	UpdateWorker(ctx context.Context, in *UpdateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Deregister a Worker. Does not cascade: the caller is responsible for
-	// cleaning up related resources first.
-	DeleteWorker(ctx context.Context, in *DeleteWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Mark a Worker as terminating so the scheduler stops routing new Actors to
-	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
-	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
-	// Mark an UNAVAILABLE Worker ACTIVE so the scheduler places Actors on it.
-	// Idempotent. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED
-	// if another write lands on the Worker first; retry.
+	// Update `labels` on a Worker.
 	//
-	// Every Actor placed after this call is stamped with the Worker's epoch as
-	// it stands then, so a caller raises epoch for a restarted the worker first.
+	// Only `labels` may be modified. Requires `metadata.uid` and
+	// `metadata.version` from a prior read (`INVALID_ARGUMENT` if omitted,
+	// `ABORTED` on mismatch).
+	UpdateWorker(ctx context.Context, in *UpdateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Delete a Worker and move any Actors still assigned to it to `CRASHED`
+	// state.
+	DeleteWorker(ctx context.Context, in *DeleteWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Mark a Worker `DRAINING` so no new Actors are scheduled onto it.
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
+	// Mark a Worker `ACTIVE` so Actors can be scheduled onto it.
 	MarkWorkerAvailable(ctx context.Context, in *MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*MarkWorkerAvailableResponse, error)
-	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
-	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
-	// alone. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED if
-	// another write lands on the Worker first; retry.
+	// Mark a Worker `UNAVAILABLE` so no new Actors are scheduled onto it.
 	MarkWorkerUnavailable(ctx context.Context, in *MarkWorkerUnavailableRequest, opts ...grpc.CallOption) (*MarkWorkerUnavailableResponse, error)
-	// List the Actors hosted by a given Worker.
+	// List ActorAssignments on a Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
-	// List Actors.
+	// List Actors in an Atespace, or across all Atespaces when `atespace` is
+	// empty.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
-	// Create a new Atespace. Substrate-native, stored in database.
+	// Create an Atespace.
 	CreateAtespace(ctx context.Context, in *CreateAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	// Get an Atespace by name.
 	GetAtespace(ctx context.Context, in *GetAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	// List Atespaces.
 	ListAtespaces(ctx context.Context, in *ListAtespacesRequest, opts ...grpc.CallOption) (*ListAtespacesResponse, error)
-	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
-	// Tags remain.
+	// Delete an empty Atespace.
+	//
+	// Returns `FAILED_PRECONDITION` if any Actors, ActorTemplates, or Tags remain
+	// in the Atespace.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
+	// Create an immutable ActorTemplate in an Atespace.
+	//
+	// Unless `snapshot_config.golden_snapshot_config.mode` is `DISABLED`, starts
+	// an asynchronous build of a golden snapshot Tag to speed up initial Actor
+	// resumes.
 	CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// Get an ActorTemplate by Atespace and name.
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// List ActorTemplates in an Atespace, or across all Atespaces when `atespace`
+	// is empty.
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
-	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the template's atespace.
+	// Delete an ActorTemplate and its golden snapshot resources.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
-	// Get the deployment-wide global access policy singleton. Returns NotFound
-	// until the policy has been created.
+	// Get the global AccessPolicy.
+	//
+	// Returns `NOT_FOUND` if no global AccessPolicy exists.
 	GetGlobalAccessPolicy(ctx context.Context, in *GetGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
-	// Create the deployment-wide global access policy singleton. The server's
-	// configured bootstrap owners are global owners whether or not this policy
-	// exists, so they can create it.
+	// Create the global AccessPolicy.
 	CreateGlobalAccessPolicy(ctx context.Context, in *CreateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
-	// Replace the deployment-wide global access policy singleton. Empty
-	// bindings revoke every grant held through the policy; bootstrap owners
-	// keep access.
+	// Replace the global AccessPolicy.
+	//
+	// Empty `bindings` revoke all grants from this policy. Bootstrap owners keep
+	// access.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
 	UpdateGlobalAccessPolicy(ctx context.Context, in *UpdateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
-	// Get the access policy resource nested under an Atespace.
+	// Get the AccessPolicy of an Atespace.
+	//
+	// Returns `NOT_FOUND` if the Atespace has no AccessPolicy.
 	GetAtespaceAccessPolicy(ctx context.Context, in *GetAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
-	// Create the access policy resource nested under an Atespace.
+	// Create the AccessPolicy for an Atespace.
 	CreateAtespaceAccessPolicy(ctx context.Context, in *CreateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
-	// Replace the access policy resource nested under an Atespace.
+	// Replace the AccessPolicy of an Atespace.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
 	UpdateAtespaceAccessPolicy(ctx context.Context, in *UpdateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
-	// Delete the access policy resource nested under an Atespace.
+	// Delete the AccessPolicy of an Atespace, revoking all Atespace-level role
+	// grants.
 	DeleteAtespaceAccessPolicy(ctx context.Context, in *DeleteAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
 }
 
@@ -629,119 +705,195 @@ func (c *controlClient) DeleteAtespaceAccessPolicy(ctx context.Context, in *Dele
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
 //
-// Control is the primary RPC interface for Agentic Substrate.
+// Control is the API for managing Substrate resources.
 type ControlServer interface {
-	// Get an Actor.
+	// Get an Actor by Atespace and name.
 	GetActor(context.Context, *GetActorRequest) (*Actor, error)
-	// Create a new Actor deriving from a given ActorTemplate.
-	CreateActor(context.Context, *CreateActorRequest) (*Actor, error)
-	// Update mutable fields on an existing Actor.
-	UpdateActor(context.Context, *UpdateActorRequest) (*Actor, error)
-	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker. A SUSPENDED actor is returned as it is.
-	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
-	// Resume an actor from its latest snapshot.
-	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed or running actors, or suspended actors with a node-local
-	// snapshot, can be reverted. A suspended actor without a node-local snapshot
-	// is already at its durable snapshot, so there is nothing to revert.
-	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
-	// Delete an actor. A running actor's workload is terminated, its volumes
-	// detached, and its worker released before the record is removed.
-	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
-	// Get the egress policy resource nested under an Actor.
-	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
-	// Create the egress policy resource nested under an Actor.
-	CreateActorEgressPolicy(context.Context, *CreateActorEgressPolicyRequest) (*EgressPolicy, error)
-	// Replace the egress policy resource nested under an Actor.
-	UpdateActorEgressPolicy(context.Context, *UpdateActorEgressPolicyRequest) (*EgressPolicy, error)
-	// Delete the egress policy resource nested under an Actor.
-	DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error)
-	// Create a Substrate-issued JWT asserting the actor identity.
+	// Create an Actor in `SUSPENDED` state.
 	//
-	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
+	// Seeds from `source_tag` when set, otherwise from the template's golden
+	// snapshot if ready, or boots from the container image on first resume. Call
+	// ResumeActor to start the Actor.
+	//
+	// Returns `ALREADY_EXISTS` if the name is taken, or `FAILED_PRECONDITION` if
+	// the Atespace, ActorTemplate, or source Tag is missing, deleting, or
+	// incompatible.
+	CreateActor(context.Context, *CreateActorRequest) (*Actor, error)
+	// Update mutable fields on an Actor.
+	//
+	// Only `actor_template` and `worker_selector` may be modified:
+	//
+	// * `actor_template`: requires the Actor to be `SUSPENDED`
+	//   (`FAILED_PRECONDITION` otherwise). Must match the previous template's
+	//   `volumes` and shared-container `volume_mounts` (if the previous template
+	//   still exists), and must use the same snapshot `storage_location` once the
+	//   Actor owns a snapshot (`FAILED_PRECONDITION` on mismatch). Until the next
+	//   snapshot is taken, ResumeActor restores only `VOLUMES` and cold boots the
+	//   new containers.
+	// * `worker_selector`: allowed in any non-deleting state and takes effect on
+	//   the next ResumeActor call.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch). Returns
+	// `FAILED_PRECONDITION` if the Actor is being deleted.
+	UpdateActor(context.Context, *UpdateActorRequest) (*Actor, error)
+	// Checkpoint and stop a running Actor.
+	//
+	// Captures a snapshot at `snapshot_config.preferred_fidelity`, stops the
+	// containers, and releases the Worker. Returns a `SUSPENDED` Actor unchanged.
+	//
+	// Returns `FAILED_PRECONDITION` if the Actor is not `RUNNING`, `SUSPENDING`,
+	// or `SUSPENDED`, or `ABORTED` if another operation is in progress.
+	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
+	// Start a suspended Actor on a Worker.
+	//
+	// Places the Actor onto a matching Worker, restores its latest snapshot (or
+	// boots from the container image on first boot), and waits for wakeup probes
+	// to pass. Returns a `RUNNING` Actor unchanged.
+	//
+	// Returns `FAILED_PRECONDITION` if the Actor is not `SUSPENDED`, `RESUMING`,
+	// or `RUNNING` (call RevertActor to recover from `CRASHED`), `ABORTED` if
+	// another operation is in progress, or `RESOURCE_EXHAUSTED` if no matching
+	// Worker has capacity.
+	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
+	// Revert an Actor to `SUSPENDED` state at its latest durable snapshot.
+	//
+	// Discards active execution and any unuploaded local snapshot, returning the
+	// Actor to its last `COMPLETED` durable snapshot (or to its initial pre-boot
+	// state if none exists). Call RevertActor to recover from `CRASHED` state
+	// before calling ResumeActor.
+	//
+	// Returns `FAILED_PRECONDITION` if the Actor is not `CRASHED`, `RUNNING`,
+	// `REVERTING`, or `SUSPENDED` with a local snapshot, or `ABORTED` if another
+	// operation is in progress.
+	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
+	// Delete an Actor and its owned snapshots and external volumes.
+	//
+	// Stops the Actor if running. Safe to retry if interrupted.
+	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
+	// Get the EgressPolicy of an Actor.
+	//
+	// Returns `NOT_FOUND` if the Actor has no EgressPolicy.
+	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Create the EgressPolicy for an Actor.
+	//
+	// Takes effect on running Actors after a brief propagation delay. Returns
+	// `ALREADY_EXISTS` if the policy already exists, or `FAILED_PRECONDITION` if
+	// the Actor does not exist.
+	CreateActorEgressPolicy(context.Context, *CreateActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Replace the EgressPolicy of an Actor.
+	//
+	// Takes effect on running Actors after a brief propagation delay.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
+	UpdateActorEgressPolicy(context.Context, *UpdateActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Delete the EgressPolicy of an Actor, revoking all outbound rules.
+	//
+	// Takes effect on running Actors after a brief propagation delay.
+	DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Mint a short-lived OIDC JWT asserting an Actor's identity.
 	MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error)
-	// Tag the external snapshot a suspended Actor holds. The tag gets its own
-	// copy of that snapshot, so suspending or deleting the Actor afterwards
-	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
-	// atelet uploads it first, so the call can take as long as that upload.
+	// Create a Tag by copying a suspended Actor's latest snapshot.
+	//
+	// Returns `FAILED_PRECONDITION` if `source_actor` does not exist, is not
+	// `SUSPENDED`, or holds no snapshot. Not idempotent: if CreateTag fails after
+	// reserving the name, call DeleteTag before retrying.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag by Atespace and name.
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
-	// List Tags.
+	// List Tags in an Atespace, or across all Atespaces when `atespace` is empty.
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)
-	// Publish or unpublish a Tag without changing its address.
+	// Update the visibility `scope` of a Tag.
+	//
+	// Only `scope` may be modified. Returns `FAILED_PRECONDITION` until the Tag's
+	// snapshot reaches `COMPLETED` or once DeleteTag has started.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
 	UpdateTag(context.Context, *UpdateTagRequest) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Delete a Tag and its snapshot.
+	//
+	// Actors seeded from the Tag reference its snapshot until their first
+	// suspend. Deleting the Tag before then makes those Actors unrecoverable.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
-	// Get a Worker.
+	// Get a Worker by name.
 	GetWorker(context.Context, *GetWorkerRequest) (*Worker, error)
-	// Register a Worker. Called once its Pod has an IP. A Worker is registered
-	// UNAVAILABLE and takes no Actors until MarkWorkerAvailable.
+	// Create a Worker.
 	CreateWorker(context.Context, *CreateWorkerRequest) (*Worker, error)
-	// Update observed pool state on a Worker.
-	UpdateWorker(context.Context, *UpdateWorkerRequest) (*Worker, error)
-	// Deregister a Worker. Does not cascade: the caller is responsible for
-	// cleaning up related resources first.
-	DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error)
-	// Mark a Worker as terminating so the scheduler stops routing new Actors to
-	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
-	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
-	// Mark an UNAVAILABLE Worker ACTIVE so the scheduler places Actors on it.
-	// Idempotent. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED
-	// if another write lands on the Worker first; retry.
+	// Update `labels` on a Worker.
 	//
-	// Every Actor placed after this call is stamped with the Worker's epoch as
-	// it stands then, so a caller raises epoch for a restarted the worker first.
+	// Only `labels` may be modified. Requires `metadata.uid` and
+	// `metadata.version` from a prior read (`INVALID_ARGUMENT` if omitted,
+	// `ABORTED` on mismatch).
+	UpdateWorker(context.Context, *UpdateWorkerRequest) (*Worker, error)
+	// Delete a Worker and move any Actors still assigned to it to `CRASHED`
+	// state.
+	DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error)
+	// Mark a Worker `DRAINING` so no new Actors are scheduled onto it.
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
+	// Mark a Worker `ACTIVE` so Actors can be scheduled onto it.
 	MarkWorkerAvailable(context.Context, *MarkWorkerAvailableRequest) (*MarkWorkerAvailableResponse, error)
-	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
-	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
-	// alone. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED if
-	// another write lands on the Worker first; retry.
+	// Mark a Worker `UNAVAILABLE` so no new Actors are scheduled onto it.
 	MarkWorkerUnavailable(context.Context, *MarkWorkerUnavailableRequest) (*MarkWorkerUnavailableResponse, error)
-	// List the Actors hosted by a given Worker.
+	// List ActorAssignments on a Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
-	// List Actors.
+	// List Actors in an Atespace, or across all Atespaces when `atespace` is
+	// empty.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
-	// Create a new Atespace. Substrate-native, stored in database.
+	// Create an Atespace.
 	CreateAtespace(context.Context, *CreateAtespaceRequest) (*Atespace, error)
 	// Get an Atespace by name.
 	GetAtespace(context.Context, *GetAtespaceRequest) (*Atespace, error)
 	// List Atespaces.
 	ListAtespaces(context.Context, *ListAtespacesRequest) (*ListAtespacesResponse, error)
-	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
-	// Tags remain.
+	// Delete an empty Atespace.
+	//
+	// Returns `FAILED_PRECONDITION` if any Actors, ActorTemplates, or Tags remain
+	// in the Atespace.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
+	// Create an immutable ActorTemplate in an Atespace.
+	//
+	// Unless `snapshot_config.golden_snapshot_config.mode` is `DISABLED`, starts
+	// an asynchronous build of a golden snapshot Tag to speed up initial Actor
+	// resumes.
 	CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error)
+	// Get an ActorTemplate by Atespace and name.
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
+	// List ActorTemplates in an Atespace, or across all Atespaces when `atespace`
+	// is empty.
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
-	// Delete an ActorTemplate together with its golden actor and golden
-	// tag in the template's atespace.
+	// Delete an ActorTemplate and its golden snapshot resources.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
-	// Get the deployment-wide global access policy singleton. Returns NotFound
-	// until the policy has been created.
+	// Get the global AccessPolicy.
+	//
+	// Returns `NOT_FOUND` if no global AccessPolicy exists.
 	GetGlobalAccessPolicy(context.Context, *GetGlobalAccessPolicyRequest) (*AccessPolicy, error)
-	// Create the deployment-wide global access policy singleton. The server's
-	// configured bootstrap owners are global owners whether or not this policy
-	// exists, so they can create it.
+	// Create the global AccessPolicy.
 	CreateGlobalAccessPolicy(context.Context, *CreateGlobalAccessPolicyRequest) (*AccessPolicy, error)
-	// Replace the deployment-wide global access policy singleton. Empty
-	// bindings revoke every grant held through the policy; bootstrap owners
-	// keep access.
+	// Replace the global AccessPolicy.
+	//
+	// Empty `bindings` revoke all grants from this policy. Bootstrap owners keep
+	// access.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
 	UpdateGlobalAccessPolicy(context.Context, *UpdateGlobalAccessPolicyRequest) (*AccessPolicy, error)
-	// Get the access policy resource nested under an Atespace.
+	// Get the AccessPolicy of an Atespace.
+	//
+	// Returns `NOT_FOUND` if the Atespace has no AccessPolicy.
 	GetAtespaceAccessPolicy(context.Context, *GetAtespaceAccessPolicyRequest) (*AccessPolicy, error)
-	// Create the access policy resource nested under an Atespace.
+	// Create the AccessPolicy for an Atespace.
 	CreateAtespaceAccessPolicy(context.Context, *CreateAtespaceAccessPolicyRequest) (*AccessPolicy, error)
-	// Replace the access policy resource nested under an Atespace.
+	// Replace the AccessPolicy of an Atespace.
+	//
+	// Requires `metadata.uid` and `metadata.version` from a prior read
+	// (`INVALID_ARGUMENT` if omitted, `ABORTED` on mismatch).
 	UpdateAtespaceAccessPolicy(context.Context, *UpdateAtespaceAccessPolicyRequest) (*AccessPolicy, error)
-	// Delete the access policy resource nested under an Atespace.
+	// Delete the AccessPolicy of an Atespace, revoking all Atespace-level role
+	// grants.
 	DeleteAtespaceAccessPolicy(context.Context, *DeleteAtespaceAccessPolicyRequest) (*AccessPolicy, error)
 	mustEmbedUnimplementedControlServer()
 }
@@ -1851,109 +2003,53 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// WorkerService is how a Worker tells the control plane what it observes. It is
-// separate from Control because the two have different callers and different
-// authorization: Control is the client-facing API, while these RPCs are served
-// only to an atelet, and only for the Workers on its own node.
+// WorkerService is the node-facing service for Worker registration, Actor
+// lifecycle reporting, and worker-side certificate and JWT issuance.
 type WorkerServiceClient interface {
-	// AcquireWorkerEpoch hands out a new epoch for a worker process, the first
-	// step of its startup. Nothing becomes active until the process registers
-	// with the epoch through RegisterWorker, so an acquire from a process that
-	// exits before it sees the reply changes nothing the scheduler or the
-	// reconciler acts on.
-	//
-	// atelet calls this with its own client certificate, for a Worker on its own
-	// node. Not idempotent: each call hands out a new epoch.
+	// Allocate a new monotonically increasing epoch for a starting Worker
+	// process. Not idempotent.
 	AcquireWorkerEpoch(ctx context.Context, in *AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*AcquireWorkerEpochResponse, error)
-	// RegisterWorker activates the epoch a worker process acquired and records
-	// its pod IPs and capacity, in one write. A worker process registers once.
-	// The epoch must be one AcquireWorkerEpoch handed out, and higher than the
-	// Worker's registered_epoch; once it is registered, the Actors that ran under
-	// an earlier epoch are crashed, and the Worker takes no Actors until the new
-	// worker process reports its sandbox runtimes. Capacity and IPs are the Worker's to report:
-	// only its node can observe them.
+	// Activate an acquired `epoch` for a Worker process and record its IPs and
+	// capacity.
 	//
-	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Re-sending the registered epoch with the same IPs and capacity is
-	// not a write. An older epoch, one that was never handed out, or the
-	// registered epoch with other IPs or capacity gets FailedPrecondition: an epoch's
-	// registration does not change once made.
+	// `epoch` must be greater than `registered_epoch`. Resending the current
+	// `registered_epoch` with identical IPs and capacity is a no-op, and any
+	// other replay returns `FAILED_PRECONDITION`.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
-	// SetWorkerSandboxRuntimes records the sandbox runtimes a registered worker
-	// process can run. A worker process reports them after it registers, and
-	// again whenever they change. The epoch must be the Worker's registered_epoch,
-	// so a report from a worker process that has since been replaced gets
-	// FailedPrecondition, as does an entry of another class than the one this
-	// worker process reported first.
+	// Record the sandbox classes and runtime versions supported by the registered
+	// Worker process.
 	//
-	// atelet calls this with its own client certificate. Re-sending the same
-	// runtimes is not a write.
+	// `epoch` must match `registered_epoch` (`FAILED_PRECONDITION` otherwise).
 	SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error)
-	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
-	// on behalf of a particular actor.
+	// Mint a short-lived SPIFFE X.509 certificate (`spiffe://<trust-domain>/worker-for-actor/<atespace>/<actor>`)
+	// for a Worker acting on behalf of an assigned Actor.
 	//
-	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
-	//
-	// atelet calls this with its own client certificate, as it does for
-	// RequestActorSuspend, naming the Worker its caller proved itself to be.
-	// The control plane mints only for the Worker that the Actor is assigned
-	// to, and only to an atelet on that Worker's node. A request from any
-	// other node or Worker gets NotFound; one from the assigned Worker with a
-	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a SUSPENDED Actor
-	// gets NotFound, since it has no Worker to bind the certificate to.
+	// Returns `NOT_FOUND` unless the Actor is assigned to the calling Worker in
+	// `RESUMING`, `RUNNING`, or `SUSPENDING` state, or `ABORTED` if `actor_uid`
+	// does not match.
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
-	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
-	// acting on behalf of a particular actor: the JWT counterpart of
-	// MintWorkerActorCertificate. atelet calls it with its own client
-	// certificate and hands the JWT to node-side plugins, which exchange it for
-	// credentials scoped to that actor.
-	//
-	// The token speaks for the worker, not the actor: its subject is
-	// `worker-for-actor/<atespace>/<name>` and its claims sit under
-	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
-	// fixed at one hour.
+	// Mint a 1-hour OIDC JWT (`sub` set to `worker-for-actor/<atespace>/<name>`)
+	// for a node plugin acting on behalf of an Actor hosted on the caller's node.
 	MintWorkerActorJwt(ctx context.Context, in *MintWorkerActorJwtRequest, opts ...grpc.CallOption) (*MintWorkerActorJwtResponse, error)
-	// RequestActorSuspend asks the control plane to suspend an Actor that the
-	// calling Worker hosts. Only the Worker can observe what makes an Actor
-	// worth reclaiming -- whether its workload still has anything to do -- and
-	// only the control plane can decide whether to act on that.
+	// Suspend an Actor currently assigned to the calling Worker.
 	//
-	// This is a request, not a command. It runs the same suspend workflow
-	// Control.SuspendActor runs, behind the same preconditions, so a proposal
-	// that races a resume, suspend, or delete loses to it.
-	//
-	// atelet calls this with its own client certificate, as it does for
-	// RegisterWorker, naming the Worker its caller proved itself to be. The
-	// control plane serves it only for an Actor that is assigned to that Worker.
-	//
-	// Not idempotent, unlike Control.SuspendActor, which reports an
-	// already-suspended Actor as the success it is. A suspend releases the
-	// Worker it ran on, so the second request names an Actor the caller no
-	// longer hosts, and is refused as NotFound like any other. A Worker that
-	// retries a suspend it had already been granted therefore sees a failure
-	// rather than a repeat of its success.
+	// Applies the same workflow and preconditions as SuspendActor, authorized
+	// only while the Actor is assigned to `worker` with matching `actor_uid`
+	// (`NOT_FOUND` otherwise).
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState reports an Actor's snapshot state on the caller's
-	// node. The control plane records two facts from it: an upload finished, and
-	// atelet detached the Actor from the node. Only atelet observes either.
+	// Report an Actor's local and durable snapshot state on its hosting node.
 	//
-	// atelet calls this with its own client certificate, for an Actor on its
-	// node. Each report carries the whole state, so repeating one is safe.
-	// Returns ABORTED while another operation is changing the Actor; retry.
-	// Returns NOT_FOUND once the Actor is gone or no longer on the caller's
-	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
-	// conflicts with the record; don't retry.
+	// Idempotent. Returns `ABORTED` if the Actor is not `SUSPENDED`, `RUNNING`,
+	// or `CRASHED` or if another operation is in progress, `NOT_FOUND` if the
+	// Actor is not associated with the node, or `FAILED_PRECONDITION` or
+	// `INVALID_ARGUMENT` if the report conflicts with stored state.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
-	// ReportActorCrashed tells the control plane that the sandbox of an Actor
-	// the calling Worker hosts died on its own. Nothing else notices: the
-	// control plane only learns of a dead sandbox when an operation on the Actor
-	// fails.
+	// Report that a `RUNNING` Actor's sandbox exited unexpectedly, moving it to
+	// `CRASHED` state and releasing its Worker.
 	//
-	// A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
-	// released. An Actor in any other state is left alone and the report is
-	// refused as FailedPrecondition: an operation in flight owns the Actor and
-	// fails on its own if the sandbox is gone. Authorized like
-	// RequestActorSuspend.
+	// Returns `NOT_FOUND` if the Actor is not assigned to `worker`, `ABORTED` if
+	// another operation is in progress, or `FAILED_PRECONDITION` if the Actor is
+	// not `RUNNING`.
 	ReportActorCrashed(ctx context.Context, in *ReportActorCrashedRequest, opts ...grpc.CallOption) (*ReportActorCrashedResponse, error)
 }
 
@@ -2049,109 +2145,53 @@ func (c *workerServiceClient) ReportActorCrashed(ctx context.Context, in *Report
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
 //
-// WorkerService is how a Worker tells the control plane what it observes. It is
-// separate from Control because the two have different callers and different
-// authorization: Control is the client-facing API, while these RPCs are served
-// only to an atelet, and only for the Workers on its own node.
+// WorkerService is the node-facing service for Worker registration, Actor
+// lifecycle reporting, and worker-side certificate and JWT issuance.
 type WorkerServiceServer interface {
-	// AcquireWorkerEpoch hands out a new epoch for a worker process, the first
-	// step of its startup. Nothing becomes active until the process registers
-	// with the epoch through RegisterWorker, so an acquire from a process that
-	// exits before it sees the reply changes nothing the scheduler or the
-	// reconciler acts on.
-	//
-	// atelet calls this with its own client certificate, for a Worker on its own
-	// node. Not idempotent: each call hands out a new epoch.
+	// Allocate a new monotonically increasing epoch for a starting Worker
+	// process. Not idempotent.
 	AcquireWorkerEpoch(context.Context, *AcquireWorkerEpochRequest) (*AcquireWorkerEpochResponse, error)
-	// RegisterWorker activates the epoch a worker process acquired and records
-	// its pod IPs and capacity, in one write. A worker process registers once.
-	// The epoch must be one AcquireWorkerEpoch handed out, and higher than the
-	// Worker's registered_epoch; once it is registered, the Actors that ran under
-	// an earlier epoch are crashed, and the Worker takes no Actors until the new
-	// worker process reports its sandbox runtimes. Capacity and IPs are the Worker's to report:
-	// only its node can observe them.
+	// Activate an acquired `epoch` for a Worker process and record its IPs and
+	// capacity.
 	//
-	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Re-sending the registered epoch with the same IPs and capacity is
-	// not a write. An older epoch, one that was never handed out, or the
-	// registered epoch with other IPs or capacity gets FailedPrecondition: an epoch's
-	// registration does not change once made.
+	// `epoch` must be greater than `registered_epoch`. Resending the current
+	// `registered_epoch` with identical IPs and capacity is a no-op, and any
+	// other replay returns `FAILED_PRECONDITION`.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
-	// SetWorkerSandboxRuntimes records the sandbox runtimes a registered worker
-	// process can run. A worker process reports them after it registers, and
-	// again whenever they change. The epoch must be the Worker's registered_epoch,
-	// so a report from a worker process that has since been replaced gets
-	// FailedPrecondition, as does an entry of another class than the one this
-	// worker process reported first.
+	// Record the sandbox classes and runtime versions supported by the registered
+	// Worker process.
 	//
-	// atelet calls this with its own client certificate. Re-sending the same
-	// runtimes is not a write.
+	// `epoch` must match `registered_epoch` (`FAILED_PRECONDITION` otherwise).
 	SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error)
-	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
-	// on behalf of a particular actor.
+	// Mint a short-lived SPIFFE X.509 certificate (`spiffe://<trust-domain>/worker-for-actor/<atespace>/<actor>`)
+	// for a Worker acting on behalf of an assigned Actor.
 	//
-	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
-	//
-	// atelet calls this with its own client certificate, as it does for
-	// RequestActorSuspend, naming the Worker its caller proved itself to be.
-	// The control plane mints only for the Worker that the Actor is assigned
-	// to, and only to an atelet on that Worker's node. A request from any
-	// other node or Worker gets NotFound; one from the assigned Worker with a
-	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a SUSPENDED Actor
-	// gets NotFound, since it has no Worker to bind the certificate to.
+	// Returns `NOT_FOUND` unless the Actor is assigned to the calling Worker in
+	// `RESUMING`, `RUNNING`, or `SUSPENDING` state, or `ABORTED` if `actor_uid`
+	// does not match.
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
-	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
-	// acting on behalf of a particular actor: the JWT counterpart of
-	// MintWorkerActorCertificate. atelet calls it with its own client
-	// certificate and hands the JWT to node-side plugins, which exchange it for
-	// credentials scoped to that actor.
-	//
-	// The token speaks for the worker, not the actor: its subject is
-	// `worker-for-actor/<atespace>/<name>` and its claims sit under
-	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
-	// fixed at one hour.
+	// Mint a 1-hour OIDC JWT (`sub` set to `worker-for-actor/<atespace>/<name>`)
+	// for a node plugin acting on behalf of an Actor hosted on the caller's node.
 	MintWorkerActorJwt(context.Context, *MintWorkerActorJwtRequest) (*MintWorkerActorJwtResponse, error)
-	// RequestActorSuspend asks the control plane to suspend an Actor that the
-	// calling Worker hosts. Only the Worker can observe what makes an Actor
-	// worth reclaiming -- whether its workload still has anything to do -- and
-	// only the control plane can decide whether to act on that.
+	// Suspend an Actor currently assigned to the calling Worker.
 	//
-	// This is a request, not a command. It runs the same suspend workflow
-	// Control.SuspendActor runs, behind the same preconditions, so a proposal
-	// that races a resume, suspend, or delete loses to it.
-	//
-	// atelet calls this with its own client certificate, as it does for
-	// RegisterWorker, naming the Worker its caller proved itself to be. The
-	// control plane serves it only for an Actor that is assigned to that Worker.
-	//
-	// Not idempotent, unlike Control.SuspendActor, which reports an
-	// already-suspended Actor as the success it is. A suspend releases the
-	// Worker it ran on, so the second request names an Actor the caller no
-	// longer hosts, and is refused as NotFound like any other. A Worker that
-	// retries a suspend it had already been granted therefore sees a failure
-	// rather than a repeat of its success.
+	// Applies the same workflow and preconditions as SuspendActor, authorized
+	// only while the Actor is assigned to `worker` with matching `actor_uid`
+	// (`NOT_FOUND` otherwise).
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState reports an Actor's snapshot state on the caller's
-	// node. The control plane records two facts from it: an upload finished, and
-	// atelet detached the Actor from the node. Only atelet observes either.
+	// Report an Actor's local and durable snapshot state on its hosting node.
 	//
-	// atelet calls this with its own client certificate, for an Actor on its
-	// node. Each report carries the whole state, so repeating one is safe.
-	// Returns ABORTED while another operation is changing the Actor; retry.
-	// Returns NOT_FOUND once the Actor is gone or no longer on the caller's
-	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
-	// conflicts with the record; don't retry.
+	// Idempotent. Returns `ABORTED` if the Actor is not `SUSPENDED`, `RUNNING`,
+	// or `CRASHED` or if another operation is in progress, `NOT_FOUND` if the
+	// Actor is not associated with the node, or `FAILED_PRECONDITION` or
+	// `INVALID_ARGUMENT` if the report conflicts with stored state.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
-	// ReportActorCrashed tells the control plane that the sandbox of an Actor
-	// the calling Worker hosts died on its own. Nothing else notices: the
-	// control plane only learns of a dead sandbox when an operation on the Actor
-	// fails.
+	// Report that a `RUNNING` Actor's sandbox exited unexpectedly, moving it to
+	// `CRASHED` state and releasing its Worker.
 	//
-	// A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
-	// released. An Actor in any other state is left alone and the report is
-	// refused as FailedPrecondition: an operation in flight owns the Actor and
-	// fails on its own if the sandbox is gone. Authorized like
-	// RequestActorSuspend.
+	// Returns `NOT_FOUND` if the Actor is not assigned to `worker`, `ABORTED` if
+	// another operation is in progress, or `FAILED_PRECONDITION` if the Actor is
+	// not `RUNNING`.
 	ReportActorCrashed(context.Context, *ReportActorCrashedRequest) (*ReportActorCrashedResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
