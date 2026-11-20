@@ -471,6 +471,55 @@ class ParseAndSweepTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(gc_pid, 0)
 
+    def test_run_step_base_exception_terminates_child(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            args = _make_args(dest=str(root / "out"), density_step_duration="1m")
+            logs_path = root / "logs.txt"
+            pid_file = root / "child.pid"
+            child_code = (
+                "import pathlib, os, time; "
+                f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+                "print('ready', flush=True); time.sleep(60)"
+            )
+            hang_cmd = [sys.executable, "-c", child_code]
+            signaler_code = (
+                "import os, pathlib, signal, time; "
+                f"p = pathlib.Path({str(pid_file)!r}); "
+                "deadline = time.monotonic() + 5; "
+                "\nwhile not p.exists() and time.monotonic() < deadline: time.sleep(0.05)\n"
+                f"os.kill({os.getpid()}, signal.SIGTERM)"
+            )
+
+            prev = signal.signal(
+                signal.SIGTERM,
+                lambda _s, _f: (_ for _ in ()).throw(density_runner._SigtermReceived()),
+            )
+            signaler = subprocess.Popen([sys.executable, "-c", signaler_code])
+            try:
+                with (
+                    open(logs_path, "w", encoding="utf-8") as logs,
+                    mock.patch("density_runner.CHILD_TERM_GRACE_S", 0.2),
+                    mock.patch("density_runner.build_step_cmd", return_value=hang_cmd),
+                    mock.patch("builtins.print"),
+                    self.assertRaises(density_runner._SigtermReceived),
+                ):
+                    density_runner.run_step(args, 32, root / "s32", logs, timeout_s=30)
+            finally:
+                signaler.wait(timeout=5)
+                if prev is not None:
+                    signal.signal(signal.SIGTERM, prev)
+
+            child_pid = int(pid_file.read_text(encoding="utf-8"))
+            for _ in range(20):
+                try:
+                    os.kill(child_pid, 0)
+                    time.sleep(0.05)
+                except ProcessLookupError:
+                    break
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+
 
 class _FakeRpcError(grpc.RpcError):
     def __init__(self, code=grpc.StatusCode.UNAVAILABLE, details="unavailable"):
@@ -624,6 +673,7 @@ class FakeStub:
 sys.modules["common.ateapi_pb2"] = types.SimpleNamespace(
     ListActorsRequest=types.SimpleNamespace,
     ListOptions=types.SimpleNamespace,
+    SuspendActorRequest=types.SimpleNamespace,
     DeleteActorRequest=types.SimpleNamespace,
     ObjectRef=types.SimpleNamespace,
 )

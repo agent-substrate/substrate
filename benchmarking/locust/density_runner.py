@@ -435,22 +435,25 @@ def run_step(
     pump = threading.Thread(target=_pump, daemon=True)
     pump.start()
     try:
-        exit_code = proc.wait(timeout=step_timeout)
-    except subprocess.TimeoutExpired:
-        _terminate_child(proc)
+        try:
+            exit_code = proc.wait(timeout=step_timeout)
+        except subprocess.TimeoutExpired:
+            _terminate_child(proc)
+            pump.join(timeout=5)
+            timeout_int = max(1, int(round(step_timeout)))
+            tee(logs, f"Step u={users} timed out after {timeout_int}s; terminated child")
+            return StepResult(
+                users=users,
+                failure_reason=f"step timed out after {timeout_int}s",
+            )
+        except BaseException:
+            _terminate_child(proc)
+            pump.join(timeout=2)
+            raise
         pump.join(timeout=5)
-        timeout_int = max(1, int(round(step_timeout)))
-        tee(logs, f"Step u={users} timed out after {timeout_int}s; terminated child")
-        return StepResult(
-            users=users,
-            failure_reason=f"step timed out after {timeout_int}s",
-        )
-    except BaseException:
-        _terminate_child(proc)
-        pump.join(timeout=2)
-        raise
+    finally:
+        stdout.close()
 
-    pump.join(timeout=5)
     jsonl_path = next(step_dest.rglob("stats.jsonl"), None)
     return parse_step_stats(users, exit_code, jsonl_path)
 
@@ -603,9 +606,15 @@ def run_density_sweep(
             run_start=run_ts,
             run_end=cur_end_ts,
         )
-        with open(jsonl_path, "w", encoding="utf-8") as f:
-            for rec in records:
-                f.write(json.dumps(rec) + "\n")
+        try:
+            with open(jsonl_path, "w", encoding="utf-8") as f:
+                for rec in records:
+                    f.write(json.dumps(rec) + "\n")
+        except OSError as e:
+            if final:
+                raise
+            print(f"Progress write of {jsonl_path} failed: {e}", flush=True)
+            return False
 
         to_upload: list[tuple[Path, str]] = [
             (logs_path, "logs.txt"),
@@ -681,6 +690,11 @@ def run_density_sweep(
             except _SigtermReceived:
                 abort_reason = "received SIGTERM"
                 tee(logs, f"Stopping search: {abort_reason}")
+    except _SigtermReceived:
+        abort_reason = "received SIGTERM"
+    except KeyboardInterrupt:
+        abort_reason = "received SIGINT"
+        raise
     except Exception as e:
         # Marks the published status as failed; the exception still propagates.
         abort_reason = f"density runner error: {e}"
@@ -692,7 +706,7 @@ def run_density_sweep(
             sweep_ok = summarize_sweep(steps)["max_actors"] >= 1 and abort_reason is None
             upload_ok = publish(final=True)
         finally:
-            if on_main_thread:
+            if on_main_thread and prev_sigterm is not None:
                 signal.signal(signal.SIGTERM, prev_sigterm)
 
     if not sweep_ok or not upload_ok:

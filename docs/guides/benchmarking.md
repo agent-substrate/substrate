@@ -587,13 +587,15 @@ passing step so far.
 
 Each step writes its intermediate files to local scratch and uploads updated
 `stats.jsonl` (tagged with `abort_reason: "in progress"`) and `logs.txt` to
-`--dest` after every step so partial progress survives hard kills. `SIGTERM`
-terminates any active child step and flushes the final `logs.txt`,
-`status.json`, and `stats.jsonl`. `stats.jsonl` holds the highest passing step's
-`trial_summary` (with `run_start` and `run_end` spanning the whole search) and
-`server_summary`, a `density_limit` row (`max_actors`, `first_failed_users`,
-`failure_reason`, `abort_reason`), and one `density_step_NNNN` row per step,
-where `NNNN` is the zero-padded user count.
+`--dest` after every step so partial progress survives hard kills. `status.json`
+is uploaded last once the sweep finishes, so a missing `status.json` indicates an
+incomplete or hard-killed run. `SIGTERM` terminates any active child step (or
+cancels actor cleanup) and flushes the final `logs.txt`, `stats.jsonl`, and
+`status.json` within the pod termination grace period. `stats.jsonl` holds the
+highest passing step's `trial_summary` (with `run_start` and `run_end` spanning
+the whole search) and `server_summary`, a `density_limit` row (`max_actors`,
+`first_failed_users`, `failure_reason`, `abort_reason`), and one
+`density_step_NNNN` row per step, where `NNNN` is the zero-padded user count.
 
 ### Spawn Benchmark
 
