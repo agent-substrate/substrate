@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 )
 
-// CheckUpgrade checks an upgrade from one final release to a later release.
+// CheckUpgrade checks an upgrade or redeploy between final releases.
 func CheckUpgrade(from, to string) error {
 	fromVersion, err := parseRelease("source", from)
 	if err != nil {
@@ -39,7 +39,10 @@ func CheckUpgrade(from, to string) error {
 	if fromVersion.Major() != toVersion.Major() {
 		return fmt.Errorf("upgrade from %s to %s changes the major version", from, to)
 	}
-	if !toVersion.GreaterThan(fromVersion) {
+	if toVersion.EqualTo(fromVersion) {
+		return nil
+	}
+	if toVersion.LessThan(fromVersion) {
 		return fmt.Errorf("target release %s must be newer than source release %s", to, from)
 	}
 	if toVersion.Minor() > fromVersion.Minor() && toVersion.Minor()-fromVersion.Minor() > 1 {
