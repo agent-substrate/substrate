@@ -1,0 +1,140 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Enables mutex and block contention profiling alongside components/pprof.
+# Samples 1 in 10 mutex contention events and ~1 blocking event per 1ms
+# (1,000,000ns) spent blocked. Does nothing without components/pprof.
+# Never install this on a cluster that serves real actors.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: ate-api-server
+      namespace: ate-system
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-api-server
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-api-server
+              env:
+              - name: ATE_PPROF_MUTEX_FRACTION
+                value: "10"
+              - name: ATE_PPROF_BLOCK_RATE
+                value: "1000000"
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: atelet
+      namespace: ate-system
+      labelSelector: ate.dev/fake-atelet notin (true)
+    patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: atelet
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: atelet
+              env:
+              - name: ATE_PPROF_MUTEX_FRACTION
+                value: "10"
+              - name: ATE_PPROF_BLOCK_RATE
+                value: "1000000"
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: ate-controller
+      namespace: ate-system
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-controller
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-controller
+              env:
+              - name: ATE_PPROF_MUTEX_FRACTION
+                value: "10"
+              - name: ATE_PPROF_BLOCK_RATE
+                value: "1000000"
+              - name: ATE_WORKER_PPROF_MUTEX_FRACTION
+                value: "10"
+              - name: ATE_WORKER_PPROF_BLOCK_RATE
+                value: "1000000"
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-router
+      namespace: ate-system
+      labelSelector: ate.dev/dataplane notin (agentgateway)
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: atenet-router
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: atenet-router
+              env:
+              - name: ATE_PPROF_MUTEX_FRACTION
+                value: "10"
+              - name: ATE_PPROF_BLOCK_RATE
+                value: "1000000"
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+      labelSelector: ate.dev/dataplane notin (agentgateway)
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: atenet-egress
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ext-proc
+              env:
+              - name: ATE_PPROF_MUTEX_FRACTION
+                value: "10"
+              - name: ATE_PPROF_BLOCK_RATE
+                value: "1000000"
