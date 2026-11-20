@@ -165,6 +165,16 @@ func (e *Env) koRunner() (*ko.Runner, error) {
 	return runner, nil
 }
 
+// requireEnvoyDataplaneBuild checks for docker buildx before a deploy changes
+// the cluster, when the deploy will build envoy-dataplane from source. A
+// pre-built install and the agentgateway dataplane build nothing with docker.
+func (e *Env) requireEnvoyDataplaneBuild(ctx context.Context) error {
+	if e.Cfg.Images.IsPrebuilt() || e.Cfg.Router == config.RouterAgentgateway {
+		return nil
+	}
+	return images.CheckBuildx(ctx)
+}
+
 // dockerfileImage returns the reference to install an image built from a
 // Dockerfile rather than with ko, such as envoy-dataplane.
 //
