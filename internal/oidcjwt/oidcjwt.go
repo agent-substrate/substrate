@@ -140,7 +140,7 @@ var (
 	permittedSkew            = 5 * time.Minute
 	jwksRefreshInterval      = 5 * time.Minute
 	jwksRefreshRetryInterval = time.Minute
-	defaultHTTPClient        = &http.Client{Timeout: 10 * time.Second}
+	defaultHTTPClient        = &http.Client{Timeout: httpClientTimeout}
 )
 
 // ErrSigningKeysUnavailable is wrapped by Verify errors that come from not
@@ -604,12 +604,7 @@ type jwkT struct {
 }
 
 func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer string) ([]*KeyAndID, error) {
-	var discoveryDocURL string
-	if strings.HasSuffix(issuer, "/") {
-		discoveryDocURL = issuer + ".well-known/openid-configuration"
-	} else {
-		discoveryDocURL = issuer + "/.well-known/openid-configuration"
-	}
+	discoveryDocURL := strings.TrimSuffix(issuer, "/") + oidcDiscoveryPath
 
 	oidcConfig, err := fetchJSON[oidcConfigT](ctx, httpClient, discoveryDocURL)
 	if err != nil {
