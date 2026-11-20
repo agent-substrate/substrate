@@ -31,12 +31,12 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// sandboxExitTimeout bounds the wait for a checkpointed sandbox to go away.
+// sandboxExitTimeout bounds the wait for a checkpointed sandbox to exit.
 const sandboxExitTimeout = 10 * time.Second
 
 // sandboxProcess is the runsc sandbox across a checkpoint, which stops it.
-// runsc treats a sandbox as live while its pid exists, zombie included, so a
-// delete issued before the sandbox is reaped fails.
+// The sandbox exits shortly after the checkpoint returns, and cleanup must wait
+// for that.
 type sandboxProcess struct {
 	pid   int
 	pidfd int
@@ -79,24 +79,28 @@ func (p *sandboxProcess) Close() {
 	_ = unix.Close(p.pidfd)
 }
 
-// waitGone blocks until the sandbox has exited and been reaped.
-func (p *sandboxProcess) waitGone(timeout time.Duration) error {
+// waitExited blocks until the sandbox has exited.
+func (p *sandboxProcess) waitExited(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	// usually gone within a few milliseconds of the checkpoint returning
-	backoff := time.Millisecond
 	for {
-		// ESRCH only once the process is reaped. EPERM still means it exists.
-		err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0)
-		if err == unix.ESRCH {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return fmt.Errorf("sandbox %d still running after %v", p.pid, timeout)
+		}
+		// the pidfd turns readable once the process exits, zombie included
+		fds := []unix.PollFd{{Fd: int32(p.pidfd), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds, int(left.Milliseconds())+1)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("polling sandbox %d: %w", p.pid, err)
+		}
+		if n > 0 {
+			if fds[0].Revents&unix.POLLNVAL != 0 {
+				return fmt.Errorf("polling sandbox %d: invalid pidfd", p.pid)
+			}
 			return nil
 		}
-		if err != nil && err != unix.EPERM {
-			return fmt.Errorf("signaling sandbox %d: %w", p.pid, err)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("sandbox %d still present after %v", p.pid, timeout)
-		}
-		time.Sleep(backoff)
-		backoff = min(backoff*2, 50*time.Millisecond)
 	}
 }

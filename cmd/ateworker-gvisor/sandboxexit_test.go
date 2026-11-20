@@ -17,6 +17,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -56,47 +57,54 @@ func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 	return cmd, p
 }
 
-func TestWaitSandboxGoneReturnsFalseWhenReapUnconfirmed(t *testing.T) {
+func TestWaitSandboxExitedReturnsFalseWhenExitUnconfirmed(t *testing.T) {
 	tests := []struct {
 		name    string
 		sandbox *sandboxProcess
 	}{
 		{name: "missing sandbox"},
-		{name: "invalid pidfd", sandbox: &sandboxProcess{pidfd: -1}},
+		// no process can have this descriptor open
+		{name: "invalid pidfd", sandbox: &sandboxProcess{pidfd: math.MaxInt32}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if waitSandboxGone(t.Context(), tc.sandbox) {
-				t.Fatal("waitSandboxGone = true, want false")
+			if waitSandboxExited(t.Context(), tc.sandbox) {
+				t.Fatal("waitSandboxExited = true, want false")
 			}
 		})
 	}
 }
 
-func TestSandboxWaitGoneAfterReap(t *testing.T) {
-	cmd, p := startFakeSandbox(t)
-	_ = cmd.Process.Kill()
-	go func() { _, _ = cmd.Process.Wait() }()
-	if err := p.waitGone(5 * time.Second); err != nil {
-		t.Fatalf("waitGone = %v, want nil", err)
-	}
-}
-
-func TestSandboxWaitGoneWaitsForReap(t *testing.T) {
-	cmd, p := startFakeSandbox(t)
-	// a zombie: killed, but nothing reaps it until cleanup
-	_ = cmd.Process.Kill()
-	err := p.waitGone(100 * time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "still present") {
-		t.Fatalf("waitGone = %v, want a still present error", err)
-	}
-}
-
-func TestSandboxWaitGoneTimesOutWhileRunning(t *testing.T) {
-	_, p := startFakeSandbox(t)
-	err := p.waitGone(10 * time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "still present") {
-		t.Fatalf("waitGone = %v, want a still present error", err)
+func TestSandboxWaitExited(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kill    bool
+		reap    bool
+		timeout time.Duration
+		wantErr bool
+	}{
+		{name: "reaped", kill: true, reap: true, timeout: 5 * time.Second},
+		// nothing reaps it until cleanup
+		{name: "zombie", kill: true, timeout: 5 * time.Second},
+		{name: "running", timeout: 10 * time.Millisecond, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, p := startFakeSandbox(t)
+			if tc.kill {
+				_ = cmd.Process.Kill()
+			}
+			if tc.reap {
+				go func() { _, _ = cmd.Process.Wait() }()
+			}
+			err := p.waitExited(tc.timeout)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "still running") {
+					t.Fatalf("waitExited = %v, want a still running error", err)
+				}
+			} else if err != nil {
+				t.Fatalf("waitExited = %v, want nil", err)
+			}
+		})
 	}
 }
 
@@ -119,7 +127,7 @@ func TestSandboxExited(t *testing.T) {
 	}
 	// the watch uses its own copy, so the sandbox's pidfd still works
 	go func() { _, _ = cmd.Process.Wait() }()
-	if err := p.waitGone(5 * time.Second); err != nil {
-		t.Fatalf("waitGone after the watch = %v", err)
+	if err := p.waitExited(5 * time.Second); err != nil {
+		t.Fatalf("waitExited after the watch = %v", err)
 	}
 }
