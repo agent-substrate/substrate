@@ -38,7 +38,7 @@ type commandFlags struct {
 	// "--cpu-num-from-quota", "-allow-connected-on-save").
 	GlobalFlags []string `json:"globalFlags,omitempty"`
 	// SubcommandFlags are passed after the command name (e.g.
-	// "-background", "-detach", "-force", "-quiet").
+	// "-background", "-detach", "-force").
 	SubcommandFlags []string `json:"subcommandFlags,omitempty"`
 }
 

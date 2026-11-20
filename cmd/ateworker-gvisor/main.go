@@ -532,9 +532,7 @@ var containerKillTimeout = 5 * time.Second
 type containerRuntime interface {
 	cmdKill(ctx context.Context, containerName, signal string) error
 	cmdWait(ctx context.Context, containerName string) error
-	cmdState(ctx context.Context, containerName string) error
-	cmdDelete(ctx context.Context, containerName string) error
-	cmdList(ctx context.Context) ([]string, error)
+	cmdDelete(ctx context.Context, containerNames ...string) error
 }
 
 // killContainer stops a container by sending SIGTERM, waiting until deadline, and
@@ -1070,42 +1068,11 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 	}
 	names = append(names, ocispec.SandboxID)
 
-	// Check state of all containers to mimic containerd.
-	// Without this, `runsc delete` occasionally throws an error.
-	present := make([]string, 0, len(names))
-	for _, name := range names {
-		if err := rcmd.cmdState(ctx, name); err != nil {
-			err = fmt.Errorf("while checking state of %q container: %w", name, err)
-			gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
-			if listErr != nil {
-				return errors.Join(err, listErr)
-			}
-			if gone {
-				slog.InfoContext(ctx, "runsc container already destroyed, skipping its cleanup", slog.String("container", name))
-				continue
-			}
-			return err
-		}
-		present = append(present, name)
-	}
-
-	for _, name := range present {
-		if err := rcmd.cmdDelete(ctx, name); err != nil {
-			return fmt.Errorf("while deleting %q container: %w", name, err)
-		}
+	if err := rcmd.cmdDelete(ctx, names...); err != nil {
+		return fmt.Errorf("while deleting containers %q: %w", names, err)
 	}
 
 	return nil
-}
-
-// isContainerAlreadyGone reports whether runsc no longer has a record of the
-// container.
-func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name string) (bool, error) {
-	ids, err := rcmd.cmdList(ctx)
-	if err != nil {
-		return false, err
-	}
-	return !slices.Contains(ids, name), nil
 }
 
 func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {

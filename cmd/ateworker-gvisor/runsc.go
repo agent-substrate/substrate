@@ -17,7 +17,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -258,8 +257,10 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	return nil
 }
 
-func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
-	cmd := r.command(ctx, r.buildArgs("delete", containerName))
+// cmdDelete deletes the containers in the given order with one runsc
+// execution. runsc stops at the first container it fails to delete.
+func (r *runsc) cmdDelete(ctx context.Context, containerNames ...string) error {
+	cmd := r.command(ctx, r.buildArgs("delete", "", containerNames...))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -267,28 +268,6 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 		return fmt.Errorf("while running `runsc delete`: %w", err)
 	}
 	return nil
-}
-
-func (r *runsc) cmdState(ctx context.Context, containerName string) error {
-	cmd := r.command(ctx, r.buildArgs("state", containerName))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("while running `runsc state`: %w", err)
-	}
-	return nil
-}
-
-// cmdList returns the container IDs runsc has a record of.
-func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
-	cmd := r.command(ctx, r.buildArgs("list", ""))
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("while running `runsc list`: %w", err)
-	}
-	return strings.Fields(out.String()), nil
 }
 
 // cmdKill sends signal to the given container's process(es) inside the gVisor
