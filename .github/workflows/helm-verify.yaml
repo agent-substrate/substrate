@@ -32,4 +32,4 @@ jobs:
       - name: Install helm-unittest
         run: .github/scripts/helm-verify/install-helm-unittest.sh
       - name: Run the chart unit tests
-        run: helm unittest charts/substrate charts/substrate-atelet
+        run: helm unittest charts/substrate charts/substrate-crds charts/substrate-podcert charts/substrate-atelet

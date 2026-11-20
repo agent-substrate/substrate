@@ -1,0 +1,131 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+suite: Certificate controller
+templates:
+- pod-certificate-controller.yaml
+release:
+  name: certificates
+  namespace: certificate-system
+tests:
+- it: keeps a created namespace and its CA pools on uninstall
+  set:
+    createNamespace: true
+  documentSelector:
+    path: kind
+    value: Namespace
+  asserts:
+  - equal:
+      path: metadata.name
+      value: certificate-system
+  - equal:
+      path: metadata.annotations["helm.sh/resource-policy"]
+      value: keep
+- it: binds the signer role to the prefixed controller service account
+  documentSelector:
+    path: kind
+    value: ClusterRoleBinding
+  asserts:
+  - equal:
+      path: subjects
+      value:
+      - kind: ServiceAccount
+        namespace: certificate-system
+        name: certificates-podcertificate-controller
+- it: authorizes the API server service account for PostgreSQL logins by default
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-client-namespace=ate-system
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-client-service-account=ate-api-server
+- it: authorizes the configured PostgreSQL clients
+  set:
+    postgresClientNamespace: application-system
+    postgresClientServiceAccount: application-api
+    postgresClients:
+    - jobs/migrator=substrate_owner_user
+    - jobs/reader=substrate_readwrite_user
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-client-namespace=application-system
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-client-service-account=application-api
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-client=jobs/migrator=substrate_owner_user
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --postgres-client=jobs/reader=substrate_readwrite_user
+- it: pulls the controller image from the global registry
+  set:
+    global.imageRegistry: mirror.example
+    image.tag: test
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - equal:
+      path: spec.template.spec.containers[0].image
+      value: mirror.example/agent-substrate/substrate/podcertcontroller:test
+- it: rejects a registry that carries a path
+  set:
+    image.registry: ghcr.io/agent-substrate
+  asserts:
+  - failedTemplate:
+      errorMessage: image.registry must contain only the registry host; put the path in image.repository
+- it: loads the CA pools only from Secrets
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - lengthEqual:
+      path: spec.template.spec.volumes[0].projected.sources
+      count: 3
+  - exists:
+      path: spec.template.spec.volumes[0].projected.sources[0].secret
+  - exists:
+      path: spec.template.spec.volumes[0].projected.sources[1].secret
+  - exists:
+      path: spec.template.spec.volumes[0].projected.sources[2].secret
+- it: sizes the controller from resources
+  set:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - equal:
+      path: spec.template.spec.containers[0].resources
+      value:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi

@@ -15,6 +15,7 @@
 suite: Release namespace
 templates:
 - role.yaml
+- namespace.yaml
 release:
   namespace: custom-namespace
 tests:
@@ -25,3 +26,14 @@ tests:
   - equal:
       path: metadata.namespace
       value: custom-namespace
+- it: keeps a created namespace and its key pools on uninstall
+  template: namespace.yaml
+  set:
+    createNamespace: true
+  asserts:
+  - equal:
+      path: metadata.name
+      value: custom-namespace
+  - equal:
+      path: metadata.annotations["helm.sh/resource-policy"]
+      value: keep

@@ -32,8 +32,10 @@ cp "${CHART_TEMPLATES_DIR}/"ate.dev_*.yaml "${TMP_DIR}/chart/"
 # The generated CRDs start with a leading document separator after the
 # boilerplate header. In chart templates that separator renders as a
 # comment-only YAML document, so the chart copies intentionally omit it.
+# The chart copies also carry the helm.sh/resource-policy: keep annotation, so
+# an uninstall keeps the CRDs and the custom resources.
 for file in "${TMP_DIR}/generated/"*.yaml; do
-  awk 'BEGIN { removed = 0 } /^---$/ && removed == 0 { removed = 1; next } { print }' "${file}" > "${file}.tmp"
+  awk 'BEGIN { removed = 0 } /^---$/ && removed == 0 { removed = 1; next } { print } /^  annotations:$/ { print "    helm.sh/resource-policy: keep" }' "${file}" > "${file}.tmp"
   mv "${file}.tmp" "${file}"
 done
 
@@ -46,7 +48,8 @@ cp charts/substrate/templates/role.yaml "${TMP_DIR}/chart/role.yaml"
 
 if ! diff -ruN "${TMP_DIR}/generated" "${TMP_DIR}/chart" >/dev/null 2>&1; then
   echo "The chart copies are out of sync with ${GENERATED_DIR}." >&2
-  echo "Copy updated CRDs into charts/substrate-crds/templates, and role.yaml into" >&2
+  echo "Copy updated CRDs into charts/substrate-crds/templates and keep their" >&2
+  echo "helm.sh/resource-policy: keep annotation. Copy role.yaml into" >&2
   echo "charts/substrate/templates with the name and namespace templated." >&2
   diff -ruN "${TMP_DIR}/generated" "${TMP_DIR}/chart" | head -80 >&2 || true
   exit 1
