@@ -76,6 +76,7 @@ require (
 	k8s.io/kubelet v0.38.0-beta.0
 	k8s.io/metrics v0.38.0-beta.0
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
+	// TODO(#3821): move to a tagged release once one supports Kubernetes 1.38.
 	sigs.k8s.io/controller-runtime v0.25.1-0.20261119155835-be0153ca8953
 	sigs.k8s.io/kustomize/api v0.21.1
 	sigs.k8s.io/kustomize/kyaml v0.21.1
