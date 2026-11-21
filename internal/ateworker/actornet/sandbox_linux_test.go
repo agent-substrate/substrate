@@ -240,15 +240,19 @@ func TestSetupSandboxNetworkWithoutVeth(t *testing.T) {
 		t.Errorf("got a second namespace (%v vs %v); this shape needs one", n.GatewayNetNS, n.RuntimeNetNS)
 	}
 
-	// No veth was built, so nothing but lo is here until the tap arrives.
+	// Only lo should be up before the tap arrives. The kernel may add
+	// fallback tunnels to a new namespace and leave them down.
 	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 		links, err := netlink.LinkList()
 		if err != nil {
 			return err
 		}
 		for _, l := range links {
-			if l.Attrs().Name != "lo" {
-				t.Errorf("unexpected interface %q in the actor namespace", l.Attrs().Name)
+			if l.Attrs().Name == "lo" {
+				continue
+			}
+			if l.Type() == "veth" || l.Attrs().Flags&net.FlagUp != 0 {
+				t.Errorf("unexpected interface %q (type %s, flags %v) in the actor namespace", l.Attrs().Name, l.Type(), l.Attrs().Flags)
 			}
 		}
 		return nil
@@ -540,22 +544,20 @@ func TestSandboxNamespacesDoNotInheritNodeSettings(t *testing.T) {
 				t.Fatalf("adding a late link: %v", err)
 			}
 
-			for _, ns := range []netns.Handle{n.RuntimeNetNS, n.GatewayNetNS} {
+			linksByNamespace := map[netns.Handle][]string{
+				n.GatewayNetNS: {"late0", "late1"},
+			}
+			if tc.veth {
+				linksByNamespace[n.RuntimeNetNS] = []string{ActorVethName}
+				linksByNamespace[n.GatewayNetNS] = append(linksByNamespace[n.GatewayNetNS], gatewayVethName)
+			}
+			for ns, links := range linksByNamespace {
 				if err := netns.Do(ctx, ns, func(context.Context) error {
 					want := map[string]string{}
 					for _, s := range sandboxSysctls {
 						want[s.Key] = s.Value
 					}
-					links, err := netlink.LinkList()
-					if err != nil {
-						return err
-					}
-					for _, l := range links {
-						name := l.Attrs().Name
-						// lo predates the sysctls.
-						if l.Attrs().Flags&net.FlagLoopback != 0 {
-							continue
-						}
+					for _, name := range links {
 						for key, value := range perLink {
 							want["net/ipv4/conf/"+name+"/"+key] = value
 						}
