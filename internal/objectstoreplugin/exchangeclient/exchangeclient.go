@@ -26,11 +26,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
+	htransport "google.golang.org/api/transport/http"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -48,6 +51,11 @@ import (
 // is one per actor the node transferred for within a JWT lifetime. Eviction
 // only costs the next transfer an exchange and a new client.
 const defaultCacheSize = 1_000
+
+// transportPoolSize is how many HTTP/2 transports Source shares across actor
+// clients on a node, sized so concurrent ranged restores across several actors
+// do not bottleneck on a single transfer's 8-stream width.
+const transportPoolSize = 32
 
 // Config is how the exchange is reached.
 type Config struct {
@@ -69,7 +77,7 @@ type Source struct {
 	// cache maps an actor JWT to its entry: the token the exchange returned
 	// for that JWT and the storage client built with the token. Nothing
 	// closes a client that leaves the cache. A transfer still using it
-	// finishes on it, and its connections close on their own once idle.
+	// finishes on the shared transport pool.
 	cache *lru.Cache
 }
 
@@ -94,7 +102,7 @@ func New(cfg Config) (*Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("exchangeclient: while creating the exchange client: %w", err)
 	}
-	s := newSource(exchangepb.NewCredentialExchangeClient(conn), newGCSClient)
+	s := newPoolSource(exchangepb.NewCredentialExchangeClient(conn), http.DefaultTransport.(*http.Transport))
 	s.conn = conn
 	return s, nil
 }
@@ -103,12 +111,52 @@ func newSource(exchange exchangepb.CredentialExchangeClient, newClient func(cont
 	return &Source{exchange: exchange, newClient: newClient, now: time.Now, cache: lru.New(defaultCacheSize)}
 }
 
-// newGCSClient builds a client that authenticates with tok alone. It outlives
-// the request that built it, so it must not carry that request's
+func newPoolSource(exchange exchangepb.CredentialExchangeClient, base *http.Transport) *Source {
+	return newSource(exchange, newTransportPool(base).newClient)
+}
+
+// transportPool spreads GCS requests round-robin across a fixed set of
+// HTTP/2 transports shared by every actor client built from a Source.
+type transportPool struct {
+	transports []*http.Transport
+	next       atomic.Uint64
+}
+
+func newTransportPool(base *http.Transport) *transportPool {
+	transports := make([]*http.Transport, transportPoolSize)
+	for i := range transports {
+		t := base.Clone()
+		// WithHTTPClient skips google.golang.org/api/transport/http's
+		// defaultBaseTransport, so apply its idle pool and HTTP/2 ping defaults
+		// here.
+		t.MaxIdleConnsPerHost = 100
+		if t.HTTP2 == nil {
+			t.HTTP2 = &http.HTTP2Config{}
+		}
+		t.HTTP2.SendPingTimeout = 31 * time.Second
+		transports[i] = t
+	}
+	return &transportPool{transports: transports}
+}
+
+func (p *transportPool) RoundTrip(req *http.Request) (*http.Response, error) {
+	i := (p.next.Add(1) - 1) % uint64(len(p.transports))
+	return p.transports[i].RoundTrip(req)
+}
+
+// newClient builds a client that authenticates with tok alone over p. It
+// outlives the request that built it, so it must not carry that request's
 // cancellation.
-func newGCSClient(ctx context.Context, tok credential.Token) (objectstorage.ObjectStorage, error) {
+func (p *transportPool) newClient(ctx context.Context, tok credential.Token) (objectstorage.ObjectStorage, error) {
+	bg := context.WithoutCancel(ctx)
 	source := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry})
-	return objectstorage.NewGCSClient(context.WithoutCancel(ctx), option.WithTokenSource(source))
+	rt, err := htransport.NewTransport(bg, p, option.WithTokenSource(source))
+	if err != nil {
+		return nil, err
+	}
+	// rt already attaches tok. WithoutAuthentication keeps storage.NewClient
+	// from probing ambient credentials that WithHTTPClient ignores.
+	return objectstorage.NewGCSClient(bg, option.WithoutAuthentication(), option.WithHTTPClient(&http.Client{Transport: rt}))
 }
 
 // Close closes the connection to the exchange.
