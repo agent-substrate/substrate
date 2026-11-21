@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"google.golang.org/protobuf/proto"
@@ -97,6 +98,79 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 		if _, err := tx.Exec(ctx, `INSERT INTO worker_outbox (payload) VALUES ($1)`, payload); err != nil {
 			return nil, fmt.Errorf("appending worker outbox: %w", err)
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing transaction: %w", err)
+	}
+	if payload != nil {
+		p.publishLocally(ctx, payload)
+	}
+	return worker, nil
+}
+
+// writes collects the statements that end a transaction, so they go to the
+// server in one round trip instead of one per statement. A row lock the
+// transaction holds is held that much shorter.
+type writes struct {
+	batch  pgx.Batch
+	checks []func(pgconn.CommandTag) error
+}
+
+// exec queues sql. check, if not nil, reads its command tag once the batch
+// has run; a statement whose row count the caller does not care about passes
+// nil.
+func (w *writes) exec(sql string, args []any, check func(pgconn.CommandTag) error) {
+	w.batch.Queue(sql, args...)
+	w.checks = append(w.checks, check)
+}
+
+// send runs the queued statements on tx and returns the first error, from the
+// server or from a check. The server stops at the first failing statement
+// and the transaction is left aborted, so the caller rolls back.
+func (w *writes) send(ctx context.Context, tx pgx.Tx) error {
+	results := tx.SendBatch(ctx, &w.batch)
+	defer results.Close()
+	for _, check := range w.checks {
+		tag, err := results.Exec()
+		if err != nil {
+			return err
+		}
+		if check != nil {
+			if err := check(tag); err != nil {
+				return err
+			}
+		}
+	}
+	return results.Close()
+}
+
+// writeAndAppendEventBatched is writeAndAppendEvent for a fn that reads
+// through tx and queues its writes on w instead of running them. The outbox
+// row is queued after fn's writes and the batch is sent once, before commit.
+func (p *Persistence) writeAndAppendEventBatched(ctx context.Context, eventType store.WorkerEventType, fn func(ctx context.Context, tx pgx.Tx, w *writes) (*ateapi.Worker, error)) (*ateapi.Worker, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	var w writes
+	worker, err := fn(ctx, tx, &w)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload []byte
+	if worker != nil {
+		payload, err = marshalWorkerEvent(eventType, worker)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling worker event: %w", err)
+		}
+		w.exec(`INSERT INTO worker_outbox (payload) VALUES ($1)`, []any{payload}, nil)
+	}
+	if err := w.send(ctx, tx); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {

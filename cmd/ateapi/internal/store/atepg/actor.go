@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
@@ -93,37 +94,84 @@ func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resourc
 // updateActor applies mutate to the stored actor through q, which is the pool
 // or a transaction the write must commit with.
 func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
-	atespace, name := actorRef.Atespace, actorRef.Name
-	var currentUID string
-	var currentVersion int64
-	var currentBytes []byte
-	if err := q.QueryRow(ctx, `
-			SELECT uid, version, proto FROM actors
-			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
+	current, err := readActorForUpdate(q.QueryRow(ctx, actorForUpdateSQL, actorRef.Atespace, actorRef.Name), actorRef)
+	if err != nil {
+		return nil, err
 	}
+	next, err := current.apply(actorRef, precondition, mutate, markForDeletion)
+	if err != nil {
+		return nil, err
+	}
+	commandTag, err := q.Exec(ctx, updateActorSQL, next.args(actorRef)...)
+	if err != nil {
+		return nil, fmt.Errorf("updating actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
+	}
+	if err := next.check(actorRef, commandTag); err != nil {
+		return nil, err
+	}
+	return next.actor, nil
+}
 
-	dbActor := &ateapi.Actor{}
-	if err := unmarshalStored(currentBytes, dbActor); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
+const (
+	actorForUpdateSQL = `
+			SELECT uid, version, proto FROM actors
+			WHERE atespace = $1 AND name = $2`
+	updateActorSQL = `
+			UPDATE actors
+			SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`
+)
+
+// readActor is the row an update starts from: the columns the UPDATE matches
+// on and the decoded proto mutate runs against.
+type readActor struct {
+	uid     string
+	version int64
+	actor   *ateapi.Actor
+}
+
+// readActorForUpdate scans row, a result of actorForUpdateSQL.
+func readActorForUpdate(row pgx.Row, actorRef resources.ActorRef) (readActor, error) {
+	var current readActor
+	var currentBytes []byte
+	if err := row.Scan(&current.uid, &current.version, &currentBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return readActor{}, store.ErrNotFound
+		}
+		return readActor{}, fmt.Errorf("getting actor %s/%s for update: %w", actorRef.Atespace, actorRef.Name, err)
 	}
-	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
-		return nil, err
+	current.actor = &ateapi.Actor{}
+	if err := unmarshalStored(currentBytes, current.actor); err != nil {
+		return readActor{}, fmt.Errorf("unmarshaling actor for update: %w", err)
 	}
+	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), current.actor.GetMetadata(), current.uid, current.version); err != nil {
+		return readActor{}, err
+	}
+	return current, nil
+}
+
+// actorUpdate is the write an update ends with: the next revision and the
+// row it replaces.
+type actorUpdate struct {
+	read  readActor
+	actor *ateapi.Actor
+	bytes []byte
+}
+
+// apply checks precondition against the row read and runs mutate on it.
+func (current readActor) apply(actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, markForDeletion bool) (actorUpdate, error) {
+	dbActor := current.actor
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
-		return nil, err
+		return actorUpdate{}, err
 	}
 	oldMeta := proto.CloneOf(dbActor.Metadata)
 	if mutate != nil {
 		if err := mutate(dbActor); err != nil {
-			return nil, err
+			return actorUpdate{}, err
 		}
 	}
 	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
-		return nil, err
+		return actorUpdate{}, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
@@ -131,26 +179,28 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if markForDeletion && dbActor.Metadata.DeleteTime == nil {
 		dbActor.Metadata.DeleteTime = proto.CloneOf(dbActor.Metadata.UpdateTime)
 	}
-
 	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling actor: %w", err)
+		return actorUpdate{}, fmt.Errorf("marshaling actor: %w", err)
 	}
-	commandTag, err := q.Exec(ctx, `
-			UPDATE actors
-			SET version = $1, proto = $2
-			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
-		dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
-	if err != nil {
-		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
-	}
+	return actorUpdate{read: current, actor: dbActor, bytes: updatedBytes}, nil
+}
+
+// args are the arguments of updateActorSQL.
+func (u actorUpdate) args(actorRef resources.ActorRef) []any {
+	return []any{u.actor.GetMetadata().GetVersion(), u.bytes, actorRef.Atespace, actorRef.Name, u.read.uid, u.read.version}
+}
+
+// check reads the UPDATE's command tag: no row means the row moved on since
+// it was read.
+func (u actorUpdate) check(actorRef resources.ActorRef, commandTag pgconn.CommandTag) error {
 	if commandTag.RowsAffected() == 0 {
-		return nil, store.ErrVersionConflict
+		return store.ErrVersionConflict
 	}
 	if commandTag.RowsAffected() != 1 {
-		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
+		return fmt.Errorf("updating actor %s/%s affected %d rows, want 1", actorRef.Atespace, actorRef.Name, commandTag.RowsAffected())
 	}
-	return dbActor, nil
+	return nil
 }
 
 func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (*ateapi.Actor, error) {
