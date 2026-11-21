@@ -15,7 +15,9 @@
 package config
 
 import (
+	"maps"
 	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 )
@@ -53,28 +55,42 @@ func TestEveryConfigFieldIsFedBySomeSetting(t *testing.T) {
 			env[s.Env] = "7"
 		case KindDuration:
 			env[s.Env] = "7m0s"
+		case KindPathList:
+			env[s.Env] = writeComponent(t, t.TempDir(), "Component")
 		default:
 			env[s.Env] = valueFor(s.Key)
 		}
 	}
 
-	r, err := Resolve(nil, ResolveOptions{Env: env})
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	cfg, err := buildConfig(t.TempDir(), env, r)
-	if err != nil {
-		t.Fatalf("buildConfig() error = %v", err)
+	// The microVM asset location applies only to the external backend, which
+	// refuses the fake data plane, so a second pass covers it.
+	delete(env, "MICROVM_ASSET_LOCATION")
+	external := maps.Clone(env)
+	external["STORAGE_BACKEND"] = StorageBackendExternal
+	external["ATE_INSTALL_FAKE_DATA_PLANE"] = "false"
+	external["MICROVM_ASSET_LOCATION"] = "az://acct/assets"
+
+	var passes []reflect.Value
+	for _, env := range []map[string]string{env, external} {
+		r, err := Resolve(nil, ResolveOptions{Env: env})
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+		cfg, err := buildConfig(t.TempDir(), env, r)
+		if err != nil {
+			t.Fatalf("buildConfig() error = %v", err)
+		}
+		passes = append(passes, reflect.ValueOf(*cfg))
 	}
 
-	v := reflect.ValueOf(*cfg)
-	for i := range v.NumField() {
-		name := v.Type().Field(i).Name
-		if !v.Type().Field(i).IsExported() || notFromASetting[name] {
+	typ := passes[0].Type()
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		if !typ.Field(i).IsExported() || notFromASetting[name] {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			if v.Field(i).IsZero() {
+			if !slices.ContainsFunc(passes, func(v reflect.Value) bool { return !v.Field(i).IsZero() }) {
 				t.Errorf("Config.%s is zero with every setting supplied; "+
 					"no registry entry feeds it, so it can never be configured", name)
 			}
@@ -88,6 +104,8 @@ func valueFor(key string) string {
 	switch key {
 	case "atenet.dataplane":
 		return RouterEnvoy
+	case "storage.backend":
+		return StorageBackendGCS
 	case "clusterSize":
 		return ClusterSizeSize0
 	case "ingressAllowedSPIFFEIDs", "ateapi.authz.egressGatewayExtraSPIFFEIDs":
