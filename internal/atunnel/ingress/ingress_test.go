@@ -38,6 +38,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.ate.dev/substrate/internal/resources"
@@ -158,7 +159,7 @@ func TestRelayWithHalfClose(t *testing.T) {
 	var downstreamOutput bytes.Buffer
 	done := make(chan struct{})
 	go func() {
-		relayWithHalfClose(context.Background(), slog.New(slog.DiscardHandler), upstream, downstreamReader, &downstreamOutput, downstreamReader)
+		relayWithHalfClose(context.Background(), slog.New(slog.DiscardHandler), upstream, downstreamReader, &downstreamOutput, downstreamReader, func() {})
 		close(done)
 	}()
 
@@ -207,7 +208,7 @@ func TestRelayIngressClosesDownstreamWhenActorCloses(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	done := make(chan struct{})
 	go func() {
-		relayWithHalfClose(context.Background(), log, upstream, downstreamReader, &downstreamOutput, downstreamReader)
+		relayWithHalfClose(context.Background(), log, upstream, downstreamReader, &downstreamOutput, downstreamReader, func() {})
 		close(done)
 	}()
 
@@ -243,7 +244,7 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	done := make(chan struct{})
 	go func() {
-		relayWithHalfClose(ctx, log, upstream, downstreamReader, io.Discard, downstreamReader)
+		relayWithHalfClose(ctx, log, upstream, downstreamReader, io.Discard, downstreamReader, func() {})
 		close(done)
 	}()
 
@@ -265,6 +266,62 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 		t.Errorf("relay logs = %q, want a line containing %q", logs.String(), want)
 	}
 }
+
+// The relay must not return while its actor-to-router copy is inside a Write:
+// an HTTP/2 ResponseWriter panics when used after its handler returned. On
+// cancel the relay aborts the downstream, which is what makes such a Write
+// return, and waits for the copy.
+func TestRelayIngressCancellationWaitsForActorCopy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		upstream, actor := net.Pipe()
+		defer actor.Close()
+		downstreamReader, downstreamInput := io.Pipe()
+		defer downstreamInput.Close()
+		writer := &blockingWriter{entered: make(chan struct{}), release: make(chan struct{}), aborted: make(chan struct{})}
+		// A copy left inside Write would deadlock the bubble on a failure.
+		defer writer.unblock()
+		ctx, cancel := context.WithCancelCause(context.Background())
+		done := make(chan struct{})
+		go func() {
+			relayWithHalfClose(ctx, slog.New(slog.DiscardHandler), upstream, downstreamReader, writer, downstreamReader, writer.abort)
+			close(done)
+		}()
+
+		go func() { _, _ = actor.Write([]byte("x")) }()
+		<-writer.entered
+		cancel(errActorDeactivated)
+		synctest.Wait()
+		select {
+		case <-writer.aborted:
+		default:
+			t.Fatal("relay did not abort the downstream")
+		}
+		select {
+		case <-done:
+			t.Fatal("relay returned while the actor copy was inside Write")
+		default:
+		}
+		writer.unblock()
+		<-done
+	})
+}
+
+// blockingWriter stays inside Write until released, like an HTTP/2 write on
+// an exhausted flow-control window.
+type blockingWriter struct {
+	entered, release, aborted chan struct{}
+	enterOnce, releaseOnce    sync.Once
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	w.enterOnce.Do(func() { close(w.entered) })
+	<-w.release
+	return len(p), nil
+}
+
+func (w *blockingWriter) abort() { close(w.aborted) }
+
+func (w *blockingWriter) unblock() { w.releaseOnce.Do(func() { close(w.release) }) }
 
 // syncBuffer collects logs from the relay's goroutines.
 type syncBuffer struct {
@@ -1272,6 +1329,255 @@ func TestServeConnectHTTPDialsTheSandbox(t *testing.T) {
 		t.Errorf("dialed %q through the sandbox dialer, want %q", dialed, want)
 	}
 }
+
+// A router that stops reading leaves the actor-to-router copy blocked on the
+// HTTP/2 flow-control window. Deactivate must still return: the relay resets
+// the stream and waits for the copy instead of leaving it to write into a
+// finished handler.
+func TestServeH2ConnectDeactivateResetsStalledTunnel(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, upstreamURL)
+	upstream, actor := net.Pipe()
+	defer actor.Close()
+	dial := func(context.Context, string, string) (net.Conn, error) { return upstream, nil }
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", dial); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(s.serveConnectHTTP))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	// The router's stream window is set here, so the test knows when the
+	// actor has used it up.
+	const window = 64 << 10
+	srv.Client().Transport.(*http.Transport).HTTP2 = &http.HTTP2Config{MaxReceiveBufferPerStream: window}
+
+	routerInput, routerOutput := io.Pipe()
+	defer routerOutput.Close()
+	req, err := http.NewRequest(http.MethodConnect, srv.URL, routerInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev:9090"
+	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.Proto != "HTTP/2.0" || res.StatusCode != http.StatusOK {
+		t.Fatalf("tunnel opened as %s %d, want HTTP/2.0 200", res.Proto, res.StatusCode)
+	}
+
+	// The router reads nothing. The actor fills the stream window, and the
+	// copy of one more byte cannot finish.
+	if _, err := actor.Write(make([]byte, window)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := actor.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Deactivate(ctx, "team-a", "actor-1", "uid-actor-1"); err != nil {
+		t.Fatalf("Deactivate with a stalled router: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, res.Body); err == nil {
+		t.Error("the stalled tunnel ended cleanly, want a stream reset")
+	}
+}
+
+// A stream the router ended is closed already, so the relay resets only a
+// stream that is still open.
+func TestServeH2ConnectResetsOnlyOpenStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		routerEnded bool
+		wantResets  int
+	}{
+		{name: "actor deactivated", wantResets: 1},
+		{name: "router ended the stream", routerEnded: true, wantResets: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream, actor := net.Pipe()
+			defer actor.Close()
+			streamCtx, endStream := context.WithCancel(context.Background())
+			defer endStream()
+			if tc.routerEnded {
+				endStream()
+			}
+			relayCtx, cancel := context.WithCancel(streamCtx)
+			cancel()
+			r, err := http.NewRequestWithContext(streamCtx, http.MethodConnect, "https://actor:9090", http.NoBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+			new(Server).serveH2Connect(w, r, upstream, relayCtx, slog.New(slog.DiscardHandler))
+			if w.deadlines != tc.wantResets {
+				t.Errorf("stream resets = %d, want %d", w.deadlines, tc.wantResets)
+			}
+		})
+	}
+}
+
+// deadlineRecorder counts write deadlines, which is how the relay resets an
+// HTTP/2 stream.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlines int
+}
+
+func (w *deadlineRecorder) SetWriteDeadline(time.Time) error {
+	w.deadlines++
+	return nil
+}
+
+// A router that stops reading the connection leaves a frame write blocked,
+// and the stream reset queues behind it. The server's write timeout closes
+// the connection, so the relay's copy ends and Deactivate returns.
+func TestServeConnectDeactivateClosesStalledConnection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const routerID = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+		dir := t.TempDir()
+		ca := newTestCA(t)
+		bundlePath := filepath.Join(dir, "server.pem")
+		trustPath := filepath.Join(dir, "trust.pem")
+		writeCredentialBundle(t, bundlePath, ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}))
+		if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		upstreamURL, err := url.Parse("http://actor.internal:80")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := NewServer(Config{
+			CredentialBundlePath: bundlePath,
+			TrustBundlePath:      trustPath,
+			AllowedClientID:      routerID,
+			Upstream:             upstreamURL,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstream, actor := net.Pipe()
+		defer actor.Close()
+		dial := func(context.Context, string, string) (net.Conn, error) { return upstream, nil }
+		if err := s.Activate("team-a", "actor-1", "uid-actor-1", dial); err != nil {
+			t.Fatal(err)
+		}
+
+		// One in-memory connection. A write on it blocks until the other end
+		// reads, so a router that stops reading stalls the worker at once.
+		routerEnd, workerEnd := net.Pipe()
+		router := &stallableConn{Conn: routerEnd, stalled: make(chan struct{}), closed: make(chan struct{})}
+		defer router.Close()
+		lis := &pipeListener{conn: make(chan net.Conn, 1), closed: make(chan struct{})}
+		lis.conn <- workerEnd
+		serveCtx, stopServing := context.WithCancel(context.Background())
+		served := make(chan error, 1)
+		go func() { served <- s.ServeConnect(serveCtx, lis) }()
+		defer func() {
+			stopServing()
+			if err := <-served; err != nil {
+				t.Errorf("ServeConnect: %v", err)
+			}
+		}()
+
+		transport := &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) { return router, nil },
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, // The handshake checks live in TestMutualTLSClientAuthentication.
+				Certificates:       []tls.Certificate{ca.issue(t, routerID, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})},
+			},
+			ForceAttemptHTTP2: true,
+		}
+		routerInput, routerOutput := io.Pipe()
+		defer routerOutput.Close()
+		req, err := http.NewRequest(http.MethodConnect, "https://worker.internal", routerInput)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev:9090"
+		req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+		res, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.Proto != "HTTP/2.0" || res.StatusCode != http.StatusOK {
+			t.Fatalf("tunnel opened as %s %d, want HTTP/2.0 200", res.Proto, res.StatusCode)
+		}
+
+		close(router.stalled)
+		go func() {
+			chunk := make([]byte, 64<<10)
+			for {
+				if _, err := actor.Write(chunk); err != nil {
+					return
+				}
+			}
+		}()
+		synctest.Wait()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := s.Deactivate(ctx, "team-a", "actor-1", "uid-actor-1"); err != nil {
+			t.Fatalf("Deactivate with a stalled connection: %v", err)
+		}
+	})
+}
+
+// stallableConn is a connection that can stop reading, like a router that no
+// longer takes bytes from the worker.
+type stallableConn struct {
+	net.Conn
+	stalled, closed chan struct{}
+	closeOnce       sync.Once
+}
+
+func (c *stallableConn) Read(p []byte) (int, error) {
+	select {
+	case <-c.stalled:
+		<-c.closed
+		return 0, net.ErrClosed
+	default:
+		return c.Conn.Read(p)
+	}
+}
+
+func (c *stallableConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// pipeListener serves the in-memory connections put on conn.
+type pipeListener struct {
+	conn      chan net.Conn
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-l.conn:
+		return conn, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *pipeListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr { return &net.TCPAddr{} }
 
 // A worker hosts several actors at once. They share one listener and one
 // address, so the request's actor header picks between them and each is reached
