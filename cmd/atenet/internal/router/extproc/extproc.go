@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"time"
 
+	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -86,6 +87,8 @@ func (s *Server) NewGRPCServer() *grpc.Server {
 }
 
 func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
+	// A stream carries one HTTP request, so this is the routed request's hook.
+	var onResponseHeaders func(*RequestMetadata) *extprocv3.ProcessingResponse
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -99,7 +102,21 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
-			resp = s.processRequestHeaders(stream.Context(), req, reqType.RequestHeaders)
+			resp, onResponseHeaders = s.processRequestHeaders(stream.Context(), req, reqType.RequestHeaders)
+
+		case *extprocv3.ProcessingRequest_ResponseHeaders:
+			if onResponseHeaders != nil {
+				resp = onResponseHeaders(NewRequestMetadata(reqType.ResponseHeaders.GetHeaders().GetHeaders(), req.GetAttributes()))
+			}
+			if resp == nil {
+				resp = &extprocv3.ProcessingResponse{
+					Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+						ResponseHeaders: &extprocv3.HeadersResponse{
+							Response: &extprocv3.CommonResponse{},
+						},
+					},
+				}
+			}
 
 		default:
 			// No modification for other processing states, but log because this should
@@ -121,12 +138,13 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 }
 
 // processRequestHeaders runs one RequestHeaders callback through the handler
-// for its direction, and records the latency and outcome either way.
+// for its direction, and records the latency and outcome either way. It also
+// returns the handler's Result.OnResponseHeaders, nil when the request failed.
 func (s *Server) processRequestHeaders(
 	ctx context.Context,
 	req *extprocv3.ProcessingRequest,
 	reqHeaders *extprocv3.HttpHeaders,
-) *extprocv3.ProcessingResponse {
+) (*extprocv3.ProcessingResponse, func(*RequestMetadata) *extprocv3.ProcessingResponse) {
 	start := time.Now()
 	md := NewRequestMetadata(reqHeaders.GetHeaders().GetHeaders(), req.GetAttributes())
 
@@ -162,14 +180,24 @@ func (s *Server) processRequestHeaders(
 
 		var reqErr *ReqError
 		if errors.As(err, &reqErr) {
-			return ImmediateResponse(envoy_type.StatusCode(reqErr.StatusCode), reqErr.Error())
+			return ImmediateResponse(envoy_type.StatusCode(reqErr.StatusCode), reqErr.Error()), nil
 		}
-		return ImmediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
+		return ImmediateResponse(envoy_type.StatusCode_InternalServerError, err.Error()), nil
 	}
 
 	s.recorder.AddRouterRequest(start, elapsed, "Route ok", res.Target, md)
-	return &extprocv3.ProcessingResponse{
+	procResp := &extprocv3.ProcessingResponse{
 		Response:        &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: res.Response},
 		DynamicMetadata: res.DynamicMetadata,
 	}
+	if res.OnResponseHeaders != nil {
+		procResp.ModeOverride = &extprocv3filter.ProcessingMode{
+			ResponseHeaderMode:  extprocv3filter.ProcessingMode_SEND,
+			RequestBodyMode:     extprocv3filter.ProcessingMode_NONE,
+			ResponseBodyMode:    extprocv3filter.ProcessingMode_NONE,
+			RequestTrailerMode:  extprocv3filter.ProcessingMode_SKIP,
+			ResponseTrailerMode: extprocv3filter.ProcessingMode_SKIP,
+		}
+	}
+	return procResp, res.OnResponseHeaders
 }

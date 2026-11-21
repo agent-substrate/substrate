@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -716,6 +717,244 @@ func TestActorResumer_Parking(t *testing.T) {
 // context.Canceled (classified as the `canceled` outcome) WITHOUT aborting the
 // shared in-flight resume, which keeps running and serves a later caller from
 // the same single RPC.
+// warmRouteTestActor is an actor the warm route cache accepts.
+func warmRouteTestActor() *ateapi.Actor {
+	return &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Name: "actor", Uid: "uid-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl"},
+		Status: &ateapi.ActorStatus{
+			State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{"10.0.0.11"}, WorkerSpiffeId: "spiffe://cluster.local/ns/workers/sa/worker"},
+		},
+	}
+}
+
+// TestActorResumer_WarmRouteCache resumes the same actor twice and counts how
+// often ateapi is asked.
+func TestActorResumer_WarmRouteCache(t *testing.T) {
+	const ttl = 30 * time.Second
+	tests := []struct {
+		name string
+		ttl  time.Duration
+		// mutate changes the actor ateapi answers with.
+		mutate func(*ateapi.Actor)
+		// wait is the time between the two calls.
+		wait      time.Duration
+		wantCalls int32
+	}{
+		{name: "running actor is served from the cache", ttl: ttl, wait: ttl - time.Second, wantCalls: 1},
+		{name: "entry expires after the TTL", ttl: ttl, wait: ttl + time.Second, wantCalls: 2},
+		{name: "cache off", ttl: 0, wantCalls: 2},
+		{
+			name:      "actor that is not running is not cached",
+			ttl:       ttl,
+			mutate:    func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING },
+			wantCalls: 2,
+		},
+		{
+			name:      "actor without a worker is not cached",
+			ttl:       ttl,
+			mutate:    func(a *ateapi.Actor) { a.Status.WorkerAssignment = nil },
+			wantCalls: 2,
+		},
+		{
+			name:      "actor without a UID is not cached",
+			ttl:       ttl,
+			mutate:    func(a *ateapi.Actor) { a.Metadata.Uid = "" },
+			wantCalls: 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				actor := warmRouteTestActor()
+				if tc.mutate != nil {
+					tc.mutate(actor)
+				}
+				var calls atomic.Int32
+				mock := &resumerMockClient{
+					resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+						calls.Add(1)
+						return &ateapi.ResumeActorResponse{Actor: actor}, nil
+					},
+				}
+				resumer := NewActorResumer(mock, withWarmRouteCache(tc.ttl))
+				ref := resources.ActorRef{Atespace: "team-a", Name: "actor"}
+
+				if _, _, err := resumer.ResumeActor(t.Context(), ref); err != nil {
+					t.Fatalf("first ResumeActor: %v", err)
+				}
+				time.Sleep(tc.wait)
+				got, outcome, err := resumer.ResumeActor(t.Context(), ref)
+				if err != nil {
+					t.Fatalf("second ResumeActor: %v", err)
+				}
+				if got := calls.Load(); got != tc.wantCalls {
+					t.Fatalf("ateapi ResumeActor calls = %d, want %d", got, tc.wantCalls)
+				}
+				wantOutcome := ResumeOutcomeNone
+				if tc.wantCalls == 1 {
+					wantOutcome = ResumeOutcomeCached
+				}
+				if outcome != wantOutcome {
+					t.Errorf("outcome = %q, want %q", outcome, wantOutcome)
+				}
+				// A cached route must carry everything the handler routes by.
+				for name, field := range map[string]func(*ateapi.Actor) string{
+					"UID":      func(a *ateapi.Actor) string { return a.GetMetadata().GetUid() },
+					"template": func(a *ateapi.Actor) string { return a.GetActorTemplate().GetName() },
+					"worker IP": func(a *ateapi.Actor) string {
+						return strings.Join(a.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), ",")
+					},
+					"worker SPIFFE ID": func(a *ateapi.Actor) string { return a.GetStatus().GetWorkerAssignment().GetWorkerSpiffeId() },
+				} {
+					if got, want := field(got), field(actor); got != want {
+						t.Errorf("%s = %q, want %q", name, got, want)
+					}
+				}
+			})
+		})
+	}
+}
+
+// A flight still running when its placement is invalidated must not re-cache
+// that same dead placement, while a late invalidation for an older placement
+// must neither evict a newer cached placement nor drop an in-flight resume.
+func TestActorResumer_InvalidatedFlightIsNotCached(t *testing.T) {
+	ref := resources.ActorRef{Atespace: "team-a", Name: "actor"}
+	actorV1 := warmRouteTestActor()
+	actorV2 := warmRouteTestActor()
+	actorV2.Metadata.Uid = "uid-2"
+	actorV2.Status.WorkerAssignment.WorkerPodIps = []string{"10.0.0.53"}
+
+	t.Run("same dead placement is not cached", func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var calls atomic.Int32
+		mock := &resumerMockClient{
+			resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+				if calls.Add(1) == 1 {
+					close(started)
+					<-release
+				}
+				return &ateapi.ResumeActorResponse{Actor: actorV1}, nil
+			},
+		}
+		resumer := NewActorResumer(mock, withWarmRouteCache(30*time.Second))
+
+		first := make(chan error, 1)
+		go func() {
+			_, _, err := resumer.ResumeActor(t.Context(), ref)
+			first <- err
+		}()
+		<-started
+		resumer.invalidateRoute(ref.String(), placementOf(actorV1))
+		close(release)
+		if err := <-first; err != nil {
+			t.Fatalf("first ResumeActor: %v", err)
+		}
+
+		if _, _, err := resumer.ResumeActor(t.Context(), ref); err != nil {
+			t.Fatalf("second ResumeActor: %v", err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Errorf("ateapi ResumeActor calls = %d, want 2: the invalidated placement was cached", got)
+		}
+	})
+
+	t.Run("stale invalidation keeps newer cached placement", func(t *testing.T) {
+		var calls atomic.Int32
+		mock := &resumerMockClient{
+			resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+				calls.Add(1)
+				return &ateapi.ResumeActorResponse{Actor: actorV2}, nil
+			},
+		}
+		resumer := NewActorResumer(mock, withWarmRouteCache(30*time.Second))
+
+		if _, _, err := resumer.ResumeActor(t.Context(), ref); err != nil {
+			t.Fatalf("first ResumeActor: %v", err)
+		}
+		// A late failure from actorV1 must not evict actorV2.
+		resumer.invalidateRoute(ref.String(), placementOf(actorV1))
+
+		got, outcome, err := resumer.ResumeActor(t.Context(), ref)
+		if err != nil {
+			t.Fatalf("second ResumeActor: %v", err)
+		}
+		if calls.Load() != 1 {
+			t.Errorf("ateapi ResumeActor calls = %d, want 1: stale invalidation evicted newer placement", calls.Load())
+		}
+		if outcome != ResumeOutcomeCached {
+			t.Errorf("outcome = %q, want %q", outcome, ResumeOutcomeCached)
+		}
+		if got.GetMetadata().GetUid() != "uid-2" {
+			t.Errorf("cached UID = %q, want %q", got.GetMetadata().GetUid(), "uid-2")
+		}
+	})
+
+	t.Run("stale invalidation does not drop in-flight resume for newer placement", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var calls atomic.Int32
+			mock := &resumerMockClient{
+				resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					if calls.Add(1) == 1 {
+						close(started)
+						<-release
+					}
+					return &ateapi.ResumeActorResponse{Actor: actorV2, Resumed: true}, nil
+				},
+			}
+			resumer := NewActorResumer(mock, withWarmRouteCache(30*time.Second))
+
+			first := make(chan error, 1)
+			go func() {
+				_, _, err := resumer.ResumeActor(t.Context(), ref)
+				first <- err
+			}()
+			<-started
+
+			// A late failure from actorV1 must not remove the active flight
+			// from r.flights, so a concurrent caller still joins it instead of
+			// starting a duplicate cold resume.
+			resumer.invalidateRoute(ref.String(), placementOf(actorV1))
+
+			joiner := make(chan ResumeOutcome, 1)
+			go func() {
+				_, outcome, err := resumer.ResumeActor(t.Context(), ref)
+				if err != nil {
+					t.Errorf("joiner ResumeActor: %v", err)
+				}
+				joiner <- outcome
+			}()
+			synctest.Wait()
+			close(release)
+
+			if err := <-first; err != nil {
+				t.Fatalf("first ResumeActor: %v", err)
+			}
+			if got := <-joiner; got != ResumeOutcomeJoined {
+				t.Errorf("joiner outcome = %q, want %q", got, ResumeOutcomeJoined)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("ateapi ResumeActor calls = %d, want 1: late invalidation forced a duplicate resume", calls.Load())
+			}
+
+			// actorV2 != actorV1, so the flight's result is cached.
+			got, outcome, err := resumer.ResumeActor(t.Context(), ref)
+			if err != nil {
+				t.Fatalf("post-flight ResumeActor: %v", err)
+			}
+			if calls.Load() != 1 || outcome != ResumeOutcomeCached || got.GetMetadata().GetUid() != "uid-2" {
+				t.Errorf("post-flight = (calls=%d, outcome=%q, uid=%q), want (1, %q, uid-2)",
+					calls.Load(), outcome, got.GetMetadata().GetUid(), ResumeOutcomeCached)
+			}
+		})
+	})
+}
+
 func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	synctest.Test(t, testCallerCancelDoesNotAbortFlight)
 }

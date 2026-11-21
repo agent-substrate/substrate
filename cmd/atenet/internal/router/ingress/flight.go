@@ -15,6 +15,7 @@
 package ingress
 
 import (
+	"slices"
 	"sync/atomic"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -32,6 +33,11 @@ import (
 //     enter the parking lot in this state.
 //   - done: closed when the flight is finished and result is set.
 type resumeActorFlight struct {
+	// invalidatedPlacements records placements invalidated while this flight
+	// was running, under ActorResumer.mu, so publish will not re-cache a dead
+	// placement while still caching a newer one.
+	invalidatedPlacements []routePlacement
+
 	retrying chan struct{}
 	// retryingSignaled guards the single close of retrying; only the flight
 	// goroutine touches it.
@@ -107,7 +113,12 @@ func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapi.Actor, ResumeOut
 func (r *ActorResumer) publish(f *resumeActorFlight, key string, result *resumeCallResult) {
 	f.result = result
 	r.mu.Lock()
-	delete(r.flights, key)
+	if route := warmRoute(result.actor); r.routes != nil && route != nil && result.err == nil && !slices.Contains(f.invalidatedPlacements, placementOf(route)) {
+		r.routes.Add(key, route, r.routeTTL)
+	}
+	if r.flights[key] == f {
+		delete(r.flights, key)
+	}
 	r.mu.Unlock()
 	close(f.done)
 }

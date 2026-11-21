@@ -938,3 +938,152 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleRequestHeaders_ResponseHeadersDropWarmRoute routes a request, feeds
+// the handler a response for it, and routes again to see whether the cached
+// route survived.
+func TestHandleRequestHeaders_ResponseHeadersDropWarmRoute(t *testing.T) {
+	const localReply = "upstream_reset_before_response_started{connection_failure}"
+	tests := []struct {
+		name            string
+		upstreamConnect bool
+		status          string
+		staleMarker     bool
+		codeDetails     string
+		wantDropped     bool
+		// wantStatus is the status the handler answers with in the response's
+		// place; 0 means the response goes through.
+		wantStatus envoy_type.StatusCode
+	}{
+		{name: "actor response", status: "200", codeDetails: "via_upstream"},
+		{name: "actor error", status: "503", codeDetails: "via_upstream"},
+		{name: "actor's own 421", status: "421", codeDetails: "via_upstream"},
+		{name: "worker refused the request", status: "421", staleMarker: true, codeDetails: "via_upstream", wantDropped: true, wantStatus: envoy_type.StatusCode_ServiceUnavailable},
+		{name: "worker refused the request, no attributes", status: "421", staleMarker: true, wantDropped: true, wantStatus: envoy_type.StatusCode_ServiceUnavailable},
+		{name: "marked 421 from inside a tunnel is the actor's", upstreamConnect: true, status: "421", staleMarker: true, codeDetails: "via_upstream"},
+		{name: "Envoy could not reach the worker", upstreamConnect: true, status: "503", codeDetails: localReply, wantDropped: true},
+		{name: "Envoy could not reach the worker, direct", status: "503", codeDetails: localReply, wantDropped: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			mock := &mockClient{
+				resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					calls.Add(1)
+					return &ateapi.ResumeActorResponse{Actor: warmRouteTestActor()}, nil
+				},
+			}
+			h := New(mock, DefaultParkedRequestConfig(), nil, WithUpstreamConnect(tc.upstreamConnect), WithWarmRouteCacheTTL(30*time.Second))
+			route := func() extproc.Result {
+				t.Helper()
+				res, err := h.HandleRequestHeaders(t.Context(), extproc.NewRequestMetadata([]*corev3.HeaderValue{
+					{Key: atenet.TargetActorHeader, RawValue: []byte("team-a/actor")},
+				}, nil))
+				if err != nil {
+					t.Fatalf("HandleRequestHeaders: %v", err)
+				}
+				return res
+			}
+
+			// First call populates the cache via ateapi; fresh resolves skip
+			// response-header inspection to avoid an extra ext_proc round trip.
+			first := route()
+			if first.Resume != string(ResumeOutcomeNone) {
+				t.Errorf("first Resume = %q, want %q", first.Resume, ResumeOutcomeNone)
+			}
+			if first.OnResponseHeaders != nil {
+				t.Error("fresh resolve set OnResponseHeaders, want nil")
+			}
+
+			// Second call is served from the warm route cache and installs the
+			// response-header eviction hook.
+			res := route()
+			if res.Resume != string(ResumeOutcomeCached) {
+				t.Errorf("cached Resume = %q, want %q", res.Resume, ResumeOutcomeCached)
+			}
+			if res.OnResponseHeaders == nil {
+				t.Fatal("cached hit OnResponseHeaders = nil, want hook")
+			}
+			uid := res.DynamicMetadata.GetFields()[OriginalDstMetadataKey].GetStructValue().GetFields()[ActorUIDMetadataKey].GetStringValue()
+			if uid != "uid-1" {
+				t.Errorf("dynamic metadata actor UID = %q, want %q", uid, "uid-1")
+			}
+
+			headers := []*corev3.HeaderValue{{Key: ":status", RawValue: []byte(tc.status)}}
+			if tc.staleMarker {
+				headers = append(headers, &corev3.HeaderValue{Key: atenet.StaleAssignmentHeader, RawValue: []byte("true")})
+			}
+			var attrs map[string]*structpb.Struct
+			if tc.codeDetails != "" {
+				attrs = map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
+					ResponseCodeDetailsAttribute: structpb.NewStringValue(tc.codeDetails),
+				}}}
+			}
+			answer := res.OnResponseHeaders(extproc.NewRequestMetadata(headers, attrs))
+			if got := answer.GetImmediateResponse().GetStatus().GetCode(); got != tc.wantStatus {
+				t.Errorf("answered with status %v, want %v", got, tc.wantStatus)
+			}
+
+			route()
+			if got, want := calls.Load() == 2, tc.wantDropped; got != want {
+				t.Errorf("route dropped = %t, want %t (ateapi ResumeActor calls = %d)", got, want, calls.Load())
+			}
+		})
+	}
+}
+
+func TestHandleRequestHeaders_StaleResponseDoesNotDropNewerPlacement(t *testing.T) {
+	var calls atomic.Int32
+	mock := &mockClient{
+		resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			actor := warmRouteTestActor()
+			if calls.Add(1) >= 2 {
+				actor.Metadata.Uid = "uid-2"
+				actor.Status.WorkerAssignment.WorkerPodIps = []string{"10.0.0.53"}
+			}
+			return &ateapi.ResumeActorResponse{Actor: actor}, nil
+		},
+	}
+	h := New(mock, DefaultParkedRequestConfig(), nil, WithWarmRouteCacheTTL(30*time.Second))
+	route := func() extproc.Result {
+		t.Helper()
+		res, err := h.HandleRequestHeaders(t.Context(), extproc.NewRequestMetadata([]*corev3.HeaderValue{
+			{Key: atenet.TargetActorHeader, RawValue: []byte("team-a/actor")},
+		}, nil))
+		if err != nil {
+			t.Fatalf("HandleRequestHeaders: %v", err)
+		}
+		return res
+	}
+	localReply := extproc.NewRequestMetadata(
+		[]*corev3.HeaderValue{{Key: ":status", RawValue: []byte("503")}},
+		map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
+			ResponseCodeDetailsAttribute: structpb.NewStringValue("upstream_reset_before_response_started{connection_failure}"),
+		}}},
+	)
+
+	// Populate uid-1, grab two cached hits referencing uid-1.
+	route()
+	hit1 := route()
+	lateHit1 := route()
+
+	// hit1 fails and evicts uid-1; next route resolves and caches uid-2.
+	hit1.OnResponseHeaders(localReply)
+	route()
+	if calls.Load() != 2 {
+		t.Fatalf("calls after re-resolve = %d, want 2", calls.Load())
+	}
+
+	// Late failure for uid-1 must leave uid-2 in the cache.
+	lateHit1.OnResponseHeaders(localReply)
+	after := route()
+	if calls.Load() != 2 {
+		t.Errorf("calls = %d, want 2: late failure for uid-1 evicted uid-2", calls.Load())
+	}
+	if after.Resume != string(ResumeOutcomeCached) {
+		t.Errorf("Resume = %q, want %q", after.Resume, ResumeOutcomeCached)
+	}
+	if got := dynamicMetadataTarget(after.DynamicMetadata); got != "10.0.0.53:443" {
+		t.Errorf("target = %q, want 10.0.0.53:443", got)
+	}
+}
