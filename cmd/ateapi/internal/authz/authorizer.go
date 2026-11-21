@@ -22,6 +22,7 @@ import (
 	"github.com/openfga/openfga/pkg/server"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Authorizer is the read-only policy decision point that evaluates runtime
@@ -49,6 +50,10 @@ type Authorizer struct {
 	// tuple can't match a JWT subject, and AccessPolicy reconciliation
 	// limited to its own relations, so it doesn't delete them.
 	systemPrincipals map[string][]string
+
+	// shortCircuit holds the immutable allow-table compiled from model.fga for
+	// bootstrapOwners and mTLS systemPrincipals.
+	shortCircuit shortCircuitTable
 }
 
 // Check verifies that the principal in ctx has relation on object.
@@ -69,6 +74,9 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 		return apierror.Unauthenticated("unauthenticated: missing principal in context")
 	}
 	user := formatUser(p.ID)
+	if ctx.Err() == nil && a.canShortCircuitInGo(p.Kind, user, relation, object) {
+		return nil
+	}
 	var grants []*openfgav1.TupleKey
 	if p.Kind == principal.KindMTLS {
 		for _, role := range a.systemPrincipals[user] {
@@ -123,6 +131,24 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 	return resp.GetAllowed(), nil
 }
 
+// structuralParent describes the deterministic parent link that
+// contextualTuples synthesizes for an object type. One table drives
+// contextualTuples, compileShortCircuitTable and validateStructuralObject so
+// the short-circuit evaluator and OpenFGA cannot drift apart.
+type structuralParent struct {
+	relation   string // tupleset relation on the child (e.g. "parent_global")
+	parentType string // parent's object type (e.g. "global")
+	scoped     bool   // true for "<atespace>/<name>" IDs whose parent is "<parentType>:<atespace>"
+}
+
+var structuralHierarchy = map[string]structuralParent{
+	"atespace":       {relation: "parent_global", parentType: "global"},
+	"worker":         {relation: "parent_global", parentType: "global"},
+	"actor":          {relation: "parent_atespace", parentType: "atespace", scoped: true},
+	"actor_template": {relation: "parent_atespace", parentType: "atespace", scoped: true},
+	"tag":            {relation: "parent_atespace", parentType: "atespace", scoped: true},
+}
+
 // contextualTuples synthesizes the invariant structural hierarchy tuples for an
 // object so OpenFGA can traverse parent-child inheritance (e.g. `owner from parent_global`
 // in model.fga) in memory during Check evaluation without persisting structural
@@ -141,30 +167,200 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 //     opening an OpenFGA write transaction just to link the parent.
 func contextualTuples(object string) []*openfgav1.TupleKey {
 	objectType, id, _ := strings.Cut(object, ":")
-	switch objectType {
-	case "atespace", "worker":
-		return []*openfgav1.TupleKey{parentGlobalTuple(object)}
-	case "actor", "actor_template", "tag":
-		atespace, _, ok := strings.Cut(id, "/")
-		if !ok {
+	spec, ok := structuralHierarchy[objectType]
+	if !ok {
+		return nil
+	}
+	if !spec.scoped {
+		if spec.parentType != "global" {
 			return nil
 		}
-		// atespacedID escapes the atespace the same way AtespaceObject does.
-		parent := "atespace:" + atespace
 		return []*openfgav1.TupleKey{
-			{User: parent, Relation: "parent_atespace", Object: object},
-			parentGlobalTuple(parent),
+			{User: GlobalRootObject, Relation: spec.relation, Object: object},
 		}
 	}
-	return nil
+	atespace, _, ok := strings.Cut(id, "/")
+	if !ok {
+		return nil
+	}
+	// atespacedID escapes the atespace the same way AtespaceObject does.
+	parent := spec.parentType + ":" + atespace
+	tuples := []*openfgav1.TupleKey{
+		{User: parent, Relation: spec.relation, Object: object},
+	}
+	if parentSpec, ok := structuralHierarchy[spec.parentType]; ok && !parentSpec.scoped && parentSpec.parentType == "global" {
+		tuples = append(tuples, &openfgav1.TupleKey{
+			User:     GlobalRootObject,
+			Relation: parentSpec.relation,
+			Object:   parent,
+		})
+	}
+	return tuples
 }
 
-// parentGlobalTuple links a global-scoped object (an atespace or a worker) to
-// global:root.
-func parentGlobalTuple(object string) *openfgav1.TupleKey {
-	return &openfgav1.TupleKey{
-		User:     GlobalRootObject,
-		Relation: "parent_global",
-		Object:   object,
+type objectTypeRel struct {
+	objectType string
+	relation   string
+}
+
+// shortCircuitTable maps a global:root role to the (objectType, relation)
+// pairs that a contextual grant of that role provably implies under any set of
+// stored AccessPolicy tuples.
+type shortCircuitTable map[string]map[objectTypeRel]bool
+
+// shortCircuitRoles are the roles Check grants on global:root through
+// contextual tuples: RoleOwner to bootstrap owners, the rest to mTLS system
+// principals.
+var shortCircuitRoles = []string{
+	RoleOwner,
+	RoleController,
+	RoleEgressGateway,
+	RoleIngressRouter,
+	RoleAtelet,
+	RoleAPIServerSidecar,
+}
+
+// compileShortCircuitTable derives a sound lower-bound lookup table directly
+// from model.fga's AuthorizationModel AST.
+//
+// Soundness guarantee: an entry (objectType, relation) is included for a
+// global:root contextual role only when the contextual tuple
+// (user, role, global:root) plus contextualTuples' deterministic structural
+// parent edges unconditionally imply it regardless of any stored tuples.
+// Non-monotonic exclusions (`but not`), intersections (`and`), conditional
+// relations, and unknown rewrite variants always evaluate to false so those
+// checks fall through to OpenFGA.
+func compileShortCircuitTable(model *openfgav1.AuthorizationModel) shortCircuitTable {
+	table := make(shortCircuitTable, len(shortCircuitRoles))
+	for _, role := range shortCircuitRoles {
+		table[role] = compileRoleAllowed(model, role)
 	}
+	return table
+}
+
+func compileRoleAllowed(model *openfgav1.AuthorizationModel, globalRole string) map[objectTypeRel]bool {
+	allowed := make(map[objectTypeRel]bool)
+	for {
+		changed := false
+		for _, td := range model.GetTypeDefinitions() {
+			for rel, userset := range td.GetRelations() {
+				key := objectTypeRel{objectType: td.GetType(), relation: rel}
+				if !allowed[key] && evalUsersetLowerBound(td, rel, userset, globalRole, allowed) {
+					allowed[key] = true
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return allowed
+}
+
+func evalUsersetLowerBound(td *openfgav1.TypeDefinition, rel string, u *openfgav1.Userset, globalRole string, allowed map[objectTypeRel]bool) bool {
+	if u == nil {
+		return false
+	}
+	switch v := u.GetUserset().(type) {
+	case *openfgav1.Userset_This:
+		return td.GetType() == "global" && rel == globalRole && directlyAllowsUnconditionalType(td, rel, "user")
+	case *openfgav1.Userset_ComputedUserset:
+		cu := v.ComputedUserset
+		if cu.GetObject() != "" {
+			return false
+		}
+		return allowed[objectTypeRel{objectType: td.GetType(), relation: cu.GetRelation()}]
+	case *openfgav1.Userset_TupleToUserset:
+		ttu := v.TupleToUserset
+		ts := ttu.GetTupleset()
+		cu := ttu.GetComputedUserset()
+		if ts.GetObject() != "" || cu.GetObject() != "" {
+			return false
+		}
+		tsRel := ts.GetRelation()
+		spec, ok := structuralHierarchy[td.GetType()]
+		if !ok || spec.relation != tsRel {
+			return false
+		}
+		if _, isDirect := td.GetRelations()[tsRel].GetUserset().(*openfgav1.Userset_This); !isDirect || !directlyAllowsUnconditionalType(td, tsRel, spec.parentType) {
+			return false
+		}
+		return allowed[objectTypeRel{objectType: spec.parentType, relation: cu.GetRelation()}]
+	case *openfgav1.Userset_Union:
+		for _, child := range v.Union.GetChild() {
+			if evalUsersetLowerBound(td, rel, child, globalRole, allowed) {
+				return true
+			}
+		}
+		return false
+	default:
+		// Fail closed on intersections (`and`), exclusions (`but not`) and
+		// any rewrite added to OpenFGA later.
+		return false
+	}
+}
+
+func directlyAllowsUnconditionalType(td *openfgav1.TypeDefinition, rel, targetType string) bool {
+	relMeta := td.GetMetadata().GetRelations()[rel]
+	if relMeta == nil {
+		return false
+	}
+	for _, ref := range relMeta.GetDirectlyRelatedUserTypes() {
+		if ref.GetType() == targetType && ref.GetRelationOrWildcard() == nil && ref.GetCondition() == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func validateStructuralObject(object string) (string, bool) {
+	objectType, id, ok := strings.Cut(object, ":")
+	if !ok || id == "" {
+		return "", false
+	}
+	if objectType == "global" {
+		if id == "root" {
+			return objectType, true
+		}
+		return "", false
+	}
+	spec, ok := structuralHierarchy[objectType]
+	if !ok {
+		return "", false
+	}
+	if !spec.scoped {
+		if resources.IsValidResourceName(id) {
+			return objectType, true
+		}
+		return "", false
+	}
+	atespace, name, ok := strings.Cut(id, "/")
+	if !ok || !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(name) {
+		return "", false
+	}
+	return objectType, true
+}
+
+// canShortCircuitInGo evaluates immutable in-memory contextual-tuple grants
+// (bootstrap global owners and mTLS system roles) directly in Go using the
+// table compiled from model.fga, avoiding OpenFGA/PostgreSQL round-trips with
+// zero cache state or TTL staleness.
+func (a *Authorizer) canShortCircuitInGo(kind, user, relation, object string) bool {
+	objectType, ok := validateStructuralObject(object)
+	if !ok {
+		return false
+	}
+	key := objectTypeRel{objectType: objectType, relation: relation}
+	if _, ok := a.bootstrapOwners[user]; ok && a.shortCircuit[RoleOwner][key] {
+		return true
+	}
+	if kind == principal.KindMTLS {
+		for _, role := range a.systemPrincipals[user] {
+			if a.shortCircuit[role][key] {
+				return true
+			}
+		}
+	}
+	return false
 }
