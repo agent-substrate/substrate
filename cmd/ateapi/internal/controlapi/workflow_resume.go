@@ -377,7 +377,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, apierror.Aborted("actor %s has moved off worker %s since it was read", actorRef, worker.GetMetadata().GetName())
 	}
 	constraints := schedulingConstraints(actor, actorTemplate)
-	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
+	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// The crash releases the worker, e.g. one whose pool the actor's
 		// worker_selector no longer matches after the failed attempt.
@@ -424,13 +424,8 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	constraints := schedulingConstraints(actor, actorTemplate)
 	snapRuntime := constraints.SnapshotRuntime
 	class = constraints.SandboxClass
-	relaxable := canRelaxRuntime(actor, constraints)
 
 	assignedWorker, err := w.scheduler.Schedule(ctx, constraints)
-	if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-		constraints.RequiredRuntime = hardware.Requirement{}
-		assignedWorker, err = w.scheduler.Schedule(ctx, constraints)
-	}
 	if err != nil {
 		// Return FailedPrecondition only when we fail to schedule an actor
 		// that could resume on any node, but doesn't fit any of them.
@@ -471,10 +466,19 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// longer eligible. The store re-asks under the Worker's row lock, where the
 	// answer holds until the bind commits, so nothing here needs a fresh read
 	// and two claims for the last place cannot both be admitted.
+	//
+	// admit holds the bind to the tier Schedule picked the worker at. A worker
+	// that lost the snapshot's runtime since the cache saw it fails admit, and
+	// the retry schedules again.
+	floor := constraints.EffectiveMinFidelity()
+	atPicked := constraints
+	if _, picked := snapRuntime.BestRuntime(assignedWorker.GetStatus(), floor); picked > floor {
+		atPicked.MinFidelity = picked
+	}
 	// The bind evaluates the fresh row; record the assignment from the same view.
 	bound := assignedWorker
 	admit := func(fresh *ateapi.Worker) error {
-		if !w.scheduler.Applies(fresh, constraints) || !w.scheduler.HasRoom(fresh, constraints) {
+		if !w.scheduler.Applies(fresh, atPicked) || !w.scheduler.HasRoom(fresh, constraints) {
 			return errWorkerFilledUp
 		}
 		// The Worker re-registered with a different overhead since the cache
@@ -585,14 +589,16 @@ func schedulingConstraints(actor *ateapi.Actor, tmpl *ateapi.ActorTemplate) sche
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
-	required := hardware.NewRequirement(requiredSnapshotRuntime(snap, tmpl))
+	required := requiredSnapshotRuntime(snap, tmpl)
 	c := scheduling.Constraints{
 		SandboxClass:    snap.GetSandboxRuntime().GetSandboxClass(),
-		RequiredRuntime: required,
-		SnapshotRuntime: required,
+		SnapshotRuntime: hardware.NewRequirement(required),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
 		Limits:          tmpl.GetResources().GetLimits(),
+	}
+	if canRelaxRuntime(actor, snap, required) {
+		c.MinFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
@@ -627,9 +633,10 @@ func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) 
 	return snap.GetSandboxRuntime()
 }
 
-// canRelaxRuntime reports whether scheduling may drop its runtime requirement.
-func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bool {
-	if constraints.RequiredRuntime.Runtime() == nil {
+// canRelaxRuntime reports whether scheduling may accept a worker that
+// restores snap without its memory state.
+func canRelaxRuntime(actor *ateapi.Actor, snap *ateapi.Snapshot, required *ateapi.ActorSandboxRuntime) bool {
+	if required == nil {
 		return false
 	}
 	status := actor.GetStatus()
@@ -638,7 +645,6 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 	if status.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
 		return false
 	}
-	snap := snapshotToResume(status)
 	if snap.GetLocality() == "" {
 		return true
 	}
@@ -648,17 +654,6 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 		return true
 	}
 	return snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
-}
-
-// appliesWithFallback reports whether worker satisfies constraints, or — when
-// relaxable — satisfies constraints with RequiredRuntime relaxed.
-func (w *ActorWorkflow) appliesWithFallback(worker *ateapi.Worker, constraints scheduling.Constraints, relaxable bool) bool {
-	relaxed := constraints
-	relaxed.RequiredRuntime = hardware.Requirement{}
-	if !w.scheduler.Applies(worker, relaxed) {
-		return false
-	}
-	return relaxable || constraints.RequiredRuntime.WorkerMatches(worker.GetStatus())
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
