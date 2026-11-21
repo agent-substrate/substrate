@@ -23,8 +23,8 @@ asset set is four files per architecture (`amd64` and `arm64`):
 
 - `cloud-hypervisor` — the VMM binary (from its release)
 - `virtiofsd` — the virtio-fs daemon serving the read-only lower (from `kata-static`)
-- `vmlinux` — the guest kernel (from `kata-static`)
-- `rootfs.img` — the guest rootfs image (from `kata-static`)
+- `vmlinux` — the guest kernel (from `kata-static-substrate`)
+- `rootfs.img` — the guest rootfs image (from `kata-static-substrate`)
 
 `go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
 assembles the guest assets into `bin/microvm-assets/<arch>/` (the host

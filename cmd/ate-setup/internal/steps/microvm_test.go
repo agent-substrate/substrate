@@ -29,6 +29,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -36,6 +37,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -133,7 +135,7 @@ func TestVerifyMicroVMAssetDigests(t *testing.T) {
 
 func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 	stamp := microvmAssetStamp("amd64", defaultKataVersion, defaultCloudHypervisorVersion)
-	const wantStamp = "arch=amd64\nkata=4.3.1\ncloud-hypervisor=v53.0\n"
+	const wantStamp = "arch=amd64\nkata=4.4.0\ncloud-hypervisor=v53.0\n"
 	if stamp != wantStamp {
 		t.Fatalf("microvmAssetStamp() =\n%q\nwant\n%q", stamp, wantStamp)
 	}
@@ -252,11 +254,12 @@ func buildKataTarZst(t *testing.T, entries []tarTestEntry) []byte {
 	return buf.Bytes()
 }
 
-func validKataArchive(t *testing.T, virtiofsdScript string) []byte {
+func validKataSubstrateArchive(t *testing.T) []byte {
 	t.Helper()
-	// Match the ./-prefixed paths and directory entries in the real kata-static
-	// release archive, and place the vmlinux.container symlink BEFORE its target
-	// file to verify extraction does not depend on entry order.
+	// Match the ./-prefixed paths and directory entries in the real
+	// kata-static-substrate release archive, and place the vmlinux.container
+	// symlink BEFORE its target file to verify extraction does not depend on
+	// entry order.
 	return buildKataTarZst(t, []tarTestEntry{
 		{
 			name:     "./opt/kata/share/kata-containers/",
@@ -266,22 +269,28 @@ func validKataArchive(t *testing.T, virtiofsdScript string) []byte {
 		{
 			name:     "./opt/kata/share/kata-containers/vmlinux.container",
 			typeflag: tar.TypeSymlink,
-			linkname: "vmlinux-6.12.47-173",
+			linkname: "vmlinux-6.18.62-211",
 		},
 		{
-			name:     "./opt/kata/share/kata-containers/vmlinux-6.12.47-173",
+			name:     "./opt/kata/share/kata-containers/vmlinux-6.18.62-211",
 			typeflag: tar.TypeReg,
 			body:     "fake-kernel-bytes",
 		},
 		{
-			name:     "./opt/kata/share/kata-containers/kata-containers-ubuntu.img",
+			name:     "./opt/kata/share/kata-containers/kata-containers-substrate.img",
 			typeflag: tar.TypeReg,
 			body:     "fake-rootfs-bytes",
 		},
+	})
+}
+
+func validKataStaticArchive(t *testing.T, virtiofsdScript string) []byte {
+	t.Helper()
+	return buildKataTarZst(t, []tarTestEntry{
 		{
-			name:     "./opt/kata/share/kata-containers/kata-containers.img",
-			typeflag: tar.TypeSymlink,
-			linkname: "kata-containers-ubuntu.img",
+			name:     "./opt/kata/bin/qemu-system-x86_64",
+			typeflag: tar.TypeReg,
+			body:     "ignored-qemu-binary",
 		},
 		{
 			name:     "./opt/kata/libexec/virtiofsd",
@@ -290,19 +299,21 @@ func validKataArchive(t *testing.T, virtiofsdScript string) []byte {
 			mode:     0o755,
 		},
 		{
-			name:     "./opt/kata/bin/qemu-system-x86_64",
+			name:     "./opt/kata/share/kata-containers/kata-containers.img",
 			typeflag: tar.TypeReg,
-			body:     "ignored-qemu-binary",
+			body:     "ignored-erofs-image",
 		},
 	})
 }
 
-func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool) string {
+func serveFakeReleases(t *testing.T, substrateArchive, staticArchive []byte, chBody string, failCH bool) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/kata-containers/kata-containers/releases/download/4.3.1/kata-static-4.3.1-amd64.tar.zst":
-			_, _ = w.Write(archive)
+		case "/kata-containers/kata-containers/releases/download/4.4.0/kata-static-substrate-4.4.0-amd64.tar.zst":
+			_, _ = w.Write(substrateArchive)
+		case "/kata-containers/kata-containers/releases/download/4.4.0/kata-static-4.4.0-amd64.tar.zst":
+			_, _ = w.Write(staticArchive)
 		case "/cloud-hypervisor/cloud-hypervisor/releases/download/v53.0/cloud-hypervisor-static":
 			if failCH {
 				w.Header().Set("Content-Length", "100")
@@ -333,10 +344,10 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 		"rootfs.img":       sha256HexString("fake-rootfs-bytes"),
 	}
 
-	baseURL := serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
+	baseURL := serveFakeReleases(t, validKataSubstrateArchive(t), validKataStaticArchive(t, virtiofsdBody), chBody, false)
 
 	outDir := t.TempDir()
-	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", digests); err != nil {
+	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.4.0", "v53.0", digests); err != nil {
 		t.Fatalf("assembleMicroVMAssets() = %v", err)
 	}
 
@@ -369,7 +380,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading %s: %v", assetStampFile, err)
 	}
-	if want := microvmAssetStamp("amd64", "4.3.1", "v53.0"); string(stamp) != want {
+	if want := microvmAssetStamp("amd64", "4.4.0", "v53.0"); string(stamp) != want {
 		t.Errorf("stamp = %q, want %q", stamp, want)
 	}
 }
@@ -377,7 +388,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 	silenceStepLog(t)
 
-	baseURL := serveFakeReleases(t, validKataArchive(t, "fake-virtiofsd-binary"), "", true)
+	baseURL := serveFakeReleases(t, validKataSubstrateArchive(t), validKataStaticArchive(t, "fake-virtiofsd-binary"), "", true)
 
 	outDir := t.TempDir()
 	stampPath := filepath.Join(outDir, assetStampFile)
@@ -385,7 +396,7 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", testAssetDigests()); err == nil {
+	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.4.0", "v53.0", testAssetDigests()); err == nil {
 		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download aborted mid-stream")
 	}
 	if _, err := os.Stat(stampPath); !errors.Is(err, os.ErrNotExist) {
@@ -399,15 +410,60 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 func TestAssembleMicroVMAssetsRejectsDigestMismatchBeforeStamping(t *testing.T) {
 	silenceStepLog(t)
 
-	baseURL := serveFakeReleases(t, validKataArchive(t, "bad-virtiofsd-bytes"), "ch", false)
+	baseURL := serveFakeReleases(t, validKataSubstrateArchive(t), validKataStaticArchive(t, "bad-virtiofsd-bytes"), "ch", false)
 
 	outDir := t.TempDir()
-	err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", testAssetDigests())
+	err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.4.0", "v53.0", testAssetDigests())
 	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 		t.Fatalf("assembleMicroVMAssets() = %v, want sha256 mismatch error", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outDir, assetStampFile)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("stamp written despite digest mismatch: %v", statErr)
+	}
+}
+
+type failOnRead struct{ called atomic.Bool }
+
+func (r *failOnRead) Read([]byte) (int, error) {
+	r.called.Store(true)
+	return 0, errors.New("read past virtiofsd block")
+}
+
+func TestExtractKataVirtiofsdStopsAfterTarget(t *testing.T) {
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(zw)
+	const body = "vfsd-bin"
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "./opt/kata/libexec/virtiofsd",
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(body)),
+		Mode:     0o644,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	// Flush without closing zw so the zstd frame stays open; async read-ahead
+	// or reading past virtiofsd will pull from tail.
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	tail := &failOnRead{}
+	dst := filepath.Join(t.TempDir(), "virtiofsd")
+	if err := extractKataVirtiofsd(t.Context(), io.MultiReader(&buf, tail), dst); err != nil {
+		t.Fatalf("extractKataVirtiofsd() = %v", err)
+	}
+	if tail.called.Load() {
+		t.Fatal("extractKataVirtiofsd() read past the flushed virtiofsd block")
 	}
 }
 
@@ -514,7 +570,133 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 			}
 			wantGVK := atev1.GroupVersion.WithKind("SandboxConfig")
 			if len(objs) != 1 || objs[0].GroupVersionKind() != wantGVK || objs[0].GetName() != microvmSandboxConfigName {
-				t.Errorf("decoded objects = %v, want single %v/%s", objs, wantGVK, microvmSandboxConfigName)
+				t.Fatalf("decoded objects = %v, want single %v/%s", objs, wantGVK, microvmSandboxConfigName)
+			}
+			var sc atev1.SandboxConfig
+			if err := k8sruntime.DefaultUnstructuredConverter.FromUnstructured(objs[0].Object, &sc); err != nil {
+				t.Fatalf("FromUnstructured() = %v", err)
+			}
+			defaultVer, ok := sc.Spec.DefaultVersionConfig()
+			if !ok || defaultVer.Name != "v3" || defaultVer.Assets["amd64"]["kata-image"].SHA256 != digests["amd64"]["rootfs.img"] {
+				t.Errorf("defaultVersion = (%+v, %v), want v3 matching loadMicroVMAssetDigests", defaultVer, ok)
+			}
+		})
+	}
+}
+
+func TestFilterMicroVMSandboxConfigVersions(t *testing.T) {
+	tmplPath := filepath.Join(repoRoot(t), microvmSandboxConfigTemplate)
+	v2Existing := func(t *testing.T, mutate func(*atev1.SandboxVersionConfig)) *atev1.SandboxConfig {
+		t.Helper()
+		_, sc, err := renderMicroVMSandboxConfig(tmplPath, "gs", "my-bucket-assets")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range sc.Spec.Versions {
+			if v.Name == "v2" {
+				if mutate != nil {
+					mutate(&v)
+				}
+				return &atev1.SandboxConfig{Spec: atev1.SandboxConfigSpec{
+					DefaultVersion: "v2",
+					Versions:       []atev1.SandboxVersionConfig{v},
+				}}
+			}
+		}
+		t.Fatal("version v2 not found in template")
+		return nil
+	}
+
+	type wantVer struct {
+		name  string
+		state atev1.SandboxVersionState
+	}
+	disabled := atev1.SandboxVersionStateDisabled
+	for _, tc := range []struct {
+		name     string
+		existing *atev1.SandboxConfig
+		arches   []string
+		want     []wantVer
+	}{
+		{
+			name:   "fresh cluster keeps default version only",
+			arches: microvmArches,
+			want:   []wantVer{{name: "v3", state: atev1.SandboxVersionStateEnabled}},
+		},
+		{
+			name:     "upgrade from v2 keeps v2 alongside v3",
+			existing: v2Existing(t, nil),
+			arches:   microvmArches,
+			want: []wantVer{
+				{name: "v2", state: atev1.SandboxVersionStateEnabled},
+				{name: "v3", state: atev1.SandboxVersionStateEnabled},
+			},
+		},
+		{
+			name:     "disabled v2 stays disabled",
+			existing: v2Existing(t, func(v *atev1.SandboxVersionConfig) { v.State = &disabled }),
+			arches:   microvmArches,
+			want: []wantVer{
+				{name: "v2", state: atev1.SandboxVersionStateDisabled},
+				{name: "v3", state: atev1.SandboxVersionStateEnabled},
+			},
+		},
+		{
+			name: "mismatched v2 url is dropped",
+			existing: v2Existing(t, func(v *atev1.SandboxVersionConfig) {
+				af := v.Assets["arm64"]["kata-image"]
+				af.URL = "gs://other-bucket/kata-image"
+				v.Assets["arm64"]["kata-image"] = af
+			}),
+			arches: microvmArches,
+			want:   []wantVer{{name: "v3", state: atev1.SandboxVersionStateEnabled}},
+		},
+		{
+			name: "mismatched v2 sha256 is dropped",
+			existing: v2Existing(t, func(v *atev1.SandboxVersionConfig) {
+				af := v.Assets["amd64"]["kata-kernel"]
+				af.SHA256 = strings.Repeat("0", 64)
+				v.Assets["amd64"]["kata-kernel"] = af
+			}),
+			arches: microvmArches,
+			want:   []wantVer{{name: "v3", state: atev1.SandboxVersionStateEnabled}},
+		},
+		{
+			name: "single-arch Kind checks only requested arch",
+			existing: v2Existing(t, func(v *atev1.SandboxVersionConfig) {
+				delete(v.Assets, "arm64")
+			}),
+			arches: []string{"amd64"},
+			want: []wantVer{
+				{name: "v2", state: atev1.SandboxVersionStateEnabled},
+				{name: "v3", state: atev1.SandboxVersionStateEnabled},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj, sc, err := renderMicroVMSandboxConfig(tmplPath, "gs", "my-bucket-assets")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := filterMicroVMSandboxConfigVersions(obj, sc, tc.existing, tc.arches); err != nil {
+				t.Fatalf("filterMicroVMSandboxConfigVersions() = %v", err)
+			}
+			var got atev1.SandboxConfig
+			if err := k8sruntime.DefaultUnstructuredConverter.FromUnstructured(obj.DeepCopy().Object, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Spec.DefaultVersion != "v3" || len(got.Spec.Versions) != len(tc.want) {
+				t.Fatalf("got defaultVersion=%q versions=%+v, want v3 and %+v", got.Spec.DefaultVersion, got.Spec.Versions, tc.want)
+			}
+			for i, w := range tc.want {
+				v := got.Spec.Versions[i]
+				state := atev1.SandboxVersionStateEnabled
+				if v.State != nil {
+					state = *v.State
+				}
+				if v.Name != w.name || state != w.state {
+					t.Errorf("version[%d] = (%q, %q), want (%q, %q)", i, v.Name, state, w.name, w.state)
+				}
 			}
 		})
 	}
