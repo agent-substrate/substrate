@@ -22,14 +22,17 @@ import (
 
 func TestParseTextProto(t *testing.T) {
 	testCases := []struct {
-		name    string
-		content string
-		wantErr bool
+		name                 string
+		content              string
+		wantErr              bool
+		wantIncludeDebugInfo bool
 	}{
 		{name: "debug", content: `logging { level: "debug" }`},
 		{name: "info", content: `logging { level: "info" }`},
 		{name: "warn", content: `logging { level: "warn" }`},
 		{name: "error", content: `logging { level: "error" }`},
+		{name: "include_error_debug_info true", content: "logging { level: \"info\" }\ninclude_error_debug_info: true", wantIncludeDebugInfo: true},
+		{name: "include_error_debug_info false", content: "logging { level: \"info\" }\ninclude_error_debug_info: false", wantIncludeDebugInfo: false},
 		{name: "invalid level", content: `logging { level: "verbose" }`, wantErr: true},
 		{name: "missing level", content: ``, wantErr: true},
 		{name: "unknown field", content: "logging { level: \"info\" }\nfuture_field: true", wantErr: true},
@@ -37,9 +40,12 @@ func TestParseTextProto(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseTextProto([]byte(tc.content))
+			cfg, err := ParseTextProto([]byte(tc.content))
 			if gotErr := err != nil; gotErr != tc.wantErr {
 				t.Errorf("ParseTextProto() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && cfg.GetIncludeErrorDebugInfo() != tc.wantIncludeDebugInfo {
+				t.Errorf("GetIncludeErrorDebugInfo() = %v, want %v", cfg.GetIncludeErrorDebugInfo(), tc.wantIncludeDebugInfo)
 			}
 		})
 	}

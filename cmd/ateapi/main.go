@@ -379,7 +379,7 @@ func main() {
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-		ateinterceptors.ServerUnaryInterceptor,
+		ateinterceptors.NewServerUnaryInterceptor(config.GetIncludeErrorDebugInfo()),
 		authz.UnaryServerInterceptor(authorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		preview.UnaryServerInterceptor,
