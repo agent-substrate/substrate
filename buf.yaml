@@ -25,3 +25,11 @@ modules:
 breaking:
   use:
     - PACKAGE
+  # Temporary: the preview-gated ExternalVolumes / ExternalVolumeStatus messages are
+  # renamed to ActorExternalVolumes / ActorExternalVolumeStatus. Remove these two
+  # entries in the next PR to merge after this one.
+  ignore_only:
+    PACKAGE_MESSAGE_NO_DELETE:
+      - api/ateapi/v1/ateapi.proto
+    FIELD_SAME_TYPE:
+      - api/ateapi/v1/ateapi.proto

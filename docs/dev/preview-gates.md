@@ -71,6 +71,10 @@ and `apivalidation.MakeUpdateOp(ctx)`. Every `Validate*` wrapper must build its
 Unchanged values are not re-validated on update, so an object created while a
 gate was on stays usable after the gate is turned off.
 
+A preview-gated message or field may be renamed before it goes GA with a
+temporary `ignore_only` entry in `buf.yaml` for the `hack/verify/proto-breaking.sh`
+rules the rename trips, which the next PR to merge removes.
+
 **Do not gate fields the server writes**, such as `status`. The server writes
 them while doing system work, such as deleting an actor, and gating them can
 leave objects that cannot be cleaned up after a gate is turned off.  This is
