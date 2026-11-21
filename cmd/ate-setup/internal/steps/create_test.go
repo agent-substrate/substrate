@@ -59,50 +59,104 @@ func TestBuildAPIServerEnvVars(t *testing.T) {
 // The expected strings are the whole rendered file, so a regression shows up
 // as a diff rather than as an apiserver that silently trusts the wrong issuer.
 func TestBuildAuthenticationConfig(t *testing.T) {
+	const apiServerURL = "https://192.0.2.10:6443"
+	const withCreds = "jwtProviders:\n" +
+		"- audiences:\n" +
+		"  - api.ate-system.svc\n" +
+		"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
+		"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n"
+	const withoutCreds = "jwtProviders:\n" +
+		"- audiences:\n" +
+		"  - api.ate-system.svc\n"
+
 	for _, tc := range []struct {
-		name   string
-		issuer string
-		want   string
+		name         string
+		issuer       string
+		apiServerURL string
+		want         string
 	}{
 		{
 			name:   "external issuer needs no discovery credentials",
 			issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
-			want: "jwtProviders:\n" +
-				"- audiences:\n" +
-				"  - api.ate-system.svc\n" +
+			want: withoutCreds +
+				"  issuer: https://container.googleapis.com/v1/projects/p/locations/l/clusters/c\n" +
+				"  name: kubernetes",
+		},
+		{
+			name:         "GKE issuer still needs no credentials when the API server URL is set",
+			issuer:       "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
+			apiServerURL: apiServerURL,
+			want: withoutCreds +
 				"  issuer: https://container.googleapis.com/v1/projects/p/locations/l/clusters/c\n" +
 				"  name: kubernetes",
 		},
 		{
 			name:   "in-cluster issuer projects the service account CA and token",
 			issuer: inClusterIssuer,
-			want: "jwtProviders:\n" +
-				"- audiences:\n" +
-				"  - api.ate-system.svc\n" +
-				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n" +
+			want: withCreds +
 				"  issuer: https://kubernetes.default.svc\n" +
 				"  name: kubernetes",
 		},
 		{
 			name:   "cluster.local form is treated as in-cluster too",
 			issuer: inClusterIssuer + ".cluster.local",
-			want: "jwtProviders:\n" +
-				"- audiences:\n" +
-				"  - api.ate-system.svc\n" +
-				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n" +
+			want: withCreds +
 				"  issuer: https://kubernetes.default.svc.cluster.local\n" +
+				"  name: kubernetes",
+		},
+		{
+			name:         "issuer equal to the API server URL projects the CA and token",
+			issuer:       apiServerURL,
+			apiServerURL: apiServerURL,
+			want: withCreds +
+				"  issuer: https://192.0.2.10:6443\n" +
+				"  name: kubernetes",
+		},
+		{
+			name:         "explicit issuer flag value matching the API server URL projects the CA and token",
+			issuer:       apiServerURL,
+			apiServerURL: "192.0.2.10:6443",
+			want: withCreds +
+				"  issuer: https://192.0.2.10:6443\n" +
 				"  name: kubernetes",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildAuthenticationConfig(tc.issuer)
+			got, err := buildAuthenticationConfig(tc.issuer, tc.apiServerURL)
 			if err != nil {
-				t.Fatalf("buildAuthenticationConfig(%q) error = %v", tc.issuer, err)
+				t.Fatalf("buildAuthenticationConfig(%q, %q) error = %v", tc.issuer, tc.apiServerURL, err)
 			}
 			if got != tc.want {
-				t.Errorf("buildAuthenticationConfig(%q) =\n%q\nwant\n%q", tc.issuer, got, tc.want)
+				t.Errorf("buildAuthenticationConfig(%q, %q) =\n%q\nwant\n%q", tc.issuer, tc.apiServerURL, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIssuerNeedsInClusterDiscovery(t *testing.T) {
+	const apiServerURL = "https://192.0.2.10:6443"
+	for _, tc := range []struct {
+		name         string
+		issuer       string
+		apiServerURL string
+		want         bool
+	}{
+		{name: "default in-cluster name", issuer: inClusterIssuer, want: true},
+		{name: "cluster.local name", issuer: inClusterIssuer + ".cluster.local", want: true},
+		{name: "default name still matches when an API server URL is set", issuer: inClusterIssuer, apiServerURL: apiServerURL, want: true},
+		{name: "API server URL issuer", issuer: apiServerURL, apiServerURL: apiServerURL, want: true},
+		{name: "scheme-less rest.Config Host", issuer: apiServerURL, apiServerURL: "192.0.2.10:6443", want: true},
+		{name: "default https port", issuer: "https://apiserver.example", apiServerURL: "https://apiserver.example:443", want: true},
+		{name: "IPv6 API server URL", issuer: "https://[2001:db8::10]:6443", apiServerURL: "https://[2001:db8::10]:6443", want: true},
+		{name: "GKE issuer", issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c", apiServerURL: apiServerURL, want: false},
+		{name: "unrelated external issuer", issuer: "https://custom-issuer.example.com", apiServerURL: apiServerURL, want: false},
+		{name: "API server URL issuer without a URL to compare", issuer: apiServerURL, want: false},
+		{name: "different port", issuer: "https://192.0.2.10:6443", apiServerURL: "https://192.0.2.10:443", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := issuerNeedsInClusterDiscovery(tc.issuer, tc.apiServerURL)
+			if got != tc.want {
+				t.Errorf("issuerNeedsInClusterDiscovery(%q, %q) = %v, want %v", tc.issuer, tc.apiServerURL, got, tc.want)
 			}
 		})
 	}
