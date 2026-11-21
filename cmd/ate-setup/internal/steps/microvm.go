@@ -57,7 +57,7 @@ const (
 	// and Kata 4.1.0 is the first release with virtiofsd v1.14.0's vhost-user
 	// snapshot-restore (REPLY_ACK) fix.
 	defaultKataVersion            = "4.3.1"
-	defaultCloudHypervisorVersion = "v53.0"
+	defaultCloudHypervisorVersion = "v53.1"
 	defaultMicroVMReleaseBaseURL  = "https://github.com"
 
 	assetStampFile               = ".asset-versions"
