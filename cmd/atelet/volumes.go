@@ -25,11 +25,15 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+	// Each mount is a round trip to the storage backend, so mount an actor's
+	// volumes concurrently.
+	var g errgroup.Group
 	for _, vol := range volumes {
 		// Given that external volumes has been in the codebase for a while and
 		// its preview-ness is solely around the API, and that the impact of
@@ -41,24 +45,27 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 			continue
 		}
 		hostPath := ateletpath.ExternalVolumeHostPath(actorUID, vol.GetName())
-		if err := os.MkdirAll(hostPath, 0o750); err != nil {
-			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
-		}
-		slog.InfoContext(ctx, "Mounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
-		plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
-		if err != nil {
-			return fmt.Errorf("failed to get volume plugin for %q: %w", ext.GetVolumeType(), err)
-		}
-		if err := plugin.MountVolume(ctx, volume.MountVolumeRequest{
-			VolumeID:       ext.GetStorageVolumeId(),
-			TargetPath:     hostPath,
-			VolumeContext:  ext.GetVolumeContext(),
-			PublishContext: ext.GetPublishContext(),
-		}); err != nil {
-			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
-		}
+		g.Go(func() error {
+			if err := os.MkdirAll(hostPath, 0o750); err != nil {
+				return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
+			}
+			slog.InfoContext(ctx, "Mounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
+			plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
+			if err != nil {
+				return fmt.Errorf("failed to get volume plugin for %q: %w", ext.GetVolumeType(), err)
+			}
+			if err := plugin.MountVolume(ctx, volume.MountVolumeRequest{
+				VolumeID:       ext.GetStorageVolumeId(),
+				TargetPath:     hostPath,
+				VolumeContext:  ext.GetVolumeContext(),
+				PublishContext: ext.GetPublishContext(),
+			}); err != nil {
+				return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
+			}
+			return nil
+		})
 	}
-	return nil
+	return g.Wait()
 }
 
 func (s *Atelet) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
