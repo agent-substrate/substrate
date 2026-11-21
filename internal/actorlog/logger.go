@@ -150,7 +150,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttributi
 					break
 				}
 			}
-			al.logLine(line[:n], a, containerName, false)
+			al.logLine(line[:n], a, containerName, false, true)
 			line = line[:copy(line, line[n:])]
 			split = true
 		}
@@ -158,7 +158,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttributi
 		end := err != nil && !errors.Is(err, bufio.ErrBufferFull)
 		if eol || end {
 			if len(line) > 0 {
-				al.logLine(line, a, containerName, !split)
+				al.logLine(line, a, containerName, !split, false)
 			}
 			line, split = line[:0], false
 		}
@@ -168,9 +168,9 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttributi
 	}
 }
 
-// logLine logs one line. With parse set, a line holding a JSON object is merged
-// into the record; any other line becomes its message.
-func (al *ActorLogger) logLine(line []byte, a resources.ActorAttribution, containerName string, parse bool) {
+// logLine merges a JSON object into the record when parse is set. Otherwise it
+// writes the line as text. If partial is set, more chunks follow for this line.
+func (al *ActorLogger) logLine(line []byte, a resources.ActorAttribution, containerName string, parse, partial bool) {
 	var m map[string]any
 	if parse {
 		m = parseJSONObject(line)
@@ -200,6 +200,9 @@ func (al *ActorLogger) logLine(line []byte, a resources.ActorAttribution, contai
 		envelope = m
 	}
 
+	if partial {
+		envelope["ate.log.partial"] = true
+	}
 	al.write(envelope)
 }
 

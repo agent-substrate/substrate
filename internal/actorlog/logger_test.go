@@ -229,6 +229,7 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 // other ate.* key that would read as platform-issued attribution downstream.
 func TestWrapContainerLogs_ReservedNamespace(t *testing.T) {
 	input := `{"level":"info","msg":"App log","` + actorNameLabel + `":"top-level-forgery","ate.tenant":"forged",` +
+		`"ate.log.partial":true,"partial":true,` +
 		`"labels":{"` + actorNameLabel + `":"malicious-name","` + actorUIDLabel + `":"malicious-uid","ate.tenant":"forged","app":"my-app"}}` + "\n"
 
 	var buf bytes.Buffer
@@ -236,10 +237,13 @@ func TestWrapContainerLogs_ReservedNamespace(t *testing.T) {
 	al.WrapContainerLogs(strings.NewReader(input), testAttribution, testContainer)
 
 	m := decodeLine(t, &buf)
-	for _, k := range []string{actorNameLabel, "ate.tenant"} {
+	for _, k := range []string{actorNameLabel, "ate.tenant", "ate.log.partial"} {
 		if v, ok := m[k]; ok {
 			t.Errorf("reserved top-level key %s survived with value %v", k, v)
 		}
+	}
+	if m["partial"] != true {
+		t.Errorf("actor field partial = %v, want true", m["partial"])
 	}
 
 	labels := labelGroup(t, al, m)
@@ -358,6 +362,7 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 		slow  bool
 		want  []string
 		field string
+		more  []int // indexes of non-final chunks
 	}
 	tests := []testCase{
 		{
@@ -381,27 +386,38 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 			name:  "one byte over the cap splits",
 			input: long(maxLineBytes+1) + "\n",
 			want:  []string{long(maxLineBytes), "a"},
+			more:  []int{0},
 		},
 		{
 			name:  "newline-free stream ending at EOF",
 			input: long(2*maxLineBytes + 10),
 			want:  []string{long(maxLineBytes), long(maxLineBytes), long(10)},
+			more:  []int{0, 1},
+		},
+		{
+			name:  "final chunk at the cap ends the line",
+			input: long(maxLineBytes) + cappedJSON + "\n",
+			want:  []string{long(maxLineBytes), cappedJSON},
+			more:  []int{0},
 		},
 		{
 			name:  "short lines around a long one are untouched",
 			input: "before\n" + long(maxLineBytes+5) + "\nafter\n",
 			want:  []string{"before", long(maxLineBytes), long(5), "after"},
+			more:  []int{1},
 		},
 		{
 			name:  "small reads accumulate up to the cap",
 			input: long(maxLineBytes+5) + "\nafter\n",
 			slow:  true,
 			want:  []string{long(maxLineBytes), long(5), "after"},
+			more:  []int{0},
 		},
 		{
 			name:  "oversized JSON is logged as text chunks",
 			input: longJSON + "\n",
 			want:  []string{longJSON[:maxLineBytes], longJSON[maxLineBytes:]},
+			more:  []int{0},
 		},
 	}
 	for _, text := range []string{"é", "界", "😀"} {
@@ -412,6 +428,7 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 				input: prefix + text + "\nafter\n",
 				slow:  true,
 				want:  []string{prefix, text, "after"},
+				more:  []int{0},
 			})
 		}
 	}
@@ -429,7 +446,7 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 			al.WrapContainerLogs(r, testAttribution, testContainer)
 
 			var got []string
-			for _, rec := range bytes.Split(bytes.TrimSuffix(buf.Bytes(), []byte("\n")), []byte("\n")) {
+			for i, rec := range bytes.Split(bytes.TrimSuffix(buf.Bytes(), []byte("\n")), []byte("\n")) {
 				var m map[string]any
 				if err := json.Unmarshal(rec, &m); err != nil {
 					t.Fatalf("record is not JSON: %v", err)
@@ -439,6 +456,14 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 					t.Fatalf("record has no %s: %.100s", tt.field, rec)
 				}
 				assertLabels(t, labelGroup(t, al, m), identityLabels())
+				partial, ok := m["ate.log.partial"]
+				if slices.Contains(tt.more, i) {
+					if partial != true {
+						t.Errorf("record %d: ate.log.partial = %v, want true", i, partial)
+					}
+				} else if ok {
+					t.Errorf("record %d: ate.log.partial = %v, want field omitted", i, partial)
+				}
 				got = append(got, msg)
 			}
 			if !slices.Equal(got, tt.want) {

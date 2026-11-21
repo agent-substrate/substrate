@@ -32,7 +32,7 @@ Currently, Agent Substrate automatically wraps container output and injects thes
 
 Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
 
-Container log lines longer than 64 KiB are split into plain-text `message` chunks of at most 64 KiB. Chunk boundaries preserve valid UTF-8 characters. Each chunk carries the container's identity labels, but its contents are not parsed as JSON. Structured fields such as severity and trace IDs remain text inside the chunks and cannot be queried as top-level fields. This limits the worker's log buffering even when a container writes continuously without a newline.
+Container log lines longer than 64 KiB are split into plain-text `message` chunks of at most 64 KiB. Each chunk carries the container's identity labels, and chunk boundaries preserve valid UTF-8 characters. The top-level field `ate.log.partial` is `true` on each chunk that has another chunk of the same line after it. The final chunk omits the field. Structured fields such as severity and trace IDs remain text inside the chunks. The size limit bounds the worker's log buffering even when a container writes continuously without a newline.
 
 ### Active Actor Inspection via CLI
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
