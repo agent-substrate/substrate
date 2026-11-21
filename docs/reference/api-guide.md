@@ -624,7 +624,7 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v7
+  defaultVersion: v8
   versions:
   - name: v6
     state: Enabled
@@ -648,6 +648,17 @@ spec:
         gvisor:
           url: "gs://gvisor/releases/release/20261102.0/aarch64/gvisor.tar.zstd"
           sha256: "f702ae92ad7a0c4134be34ca23f52966dbb696db0c0f5b8ec439210ab2cd7c6a"
+  - name: v8
+    state: Enabled
+    assets:
+      amd64:
+        gvisor:
+          url: "gs://gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd"
+          sha256: "4eb0475337f119ae7411c1d99d3acd727f1278a0286a244dee8dac91c6db5355"
+      arm64:
+        gvisor:
+          url: "gs://gvisor/releases/release/20261116.0/aarch64/gvisor.tar.zstd"
+          sha256: "399835d261b2b08fa82fef9c907f44e9563a5bfec8a692a1704085b041bdc06d"
 ```
 
 ### MicroVM SandboxConfig
