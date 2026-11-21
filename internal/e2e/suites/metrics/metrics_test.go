@@ -23,6 +23,8 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,6 +137,13 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 			strings.Contains(scrape, "controller_runtime_")
 
 		if len(missing) == 0 && workerSeen && controllerSeen && egressSeen && routeDurationSeen && lifecycleSeen {
+			// Save the metrics to artifacts, if enabled.
+			if p := artifactPath(t, "metrics.prom"); p != "" {
+				if err := os.WriteFile(p, []byte(scrape), 0o644); err != nil {
+					t.Fatalf("writing %s: %v", p, err)
+				}
+			}
+
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -410,4 +419,39 @@ func extractLabelValue(line, labelName string) string {
 		return ""
 	}
 	return line[start : start+end]
+}
+
+// artifactPath returns the path to write an artifact file, if we are collecting artifacts.
+// The value is ${ARTIFACTS}/tests/<test name>/<name>.
+// A subtest gets a nested directory; we normalize non-alphanumeric characters.
+// Directories are created.
+// If artifacts are not enabled, we return the empty string.
+func artifactPath(t *testing.T, filename string) string {
+	artifacts := os.Getenv("ARTIFACTS")
+	if artifacts == "" {
+		// We are not collecting artifacts
+		return ""
+	}
+
+	// normalizeFileName ensures the string is a valid directory or file name
+	normalizeFileName := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '_'
+		}, s)
+	}
+
+	elems := []string{artifacts, "tests"}
+	for elem := range strings.SplitSeq(t.Name(), "/") {
+		elems = append(elems, normalizeFileName(elem))
+	}
+
+	dir := filepath.Join(elems...)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating artifact directory %q: %v", dir, err)
+	}
+
+	return filepath.Join(dir, filename)
 }
