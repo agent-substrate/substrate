@@ -113,9 +113,8 @@ func redactBadValues(errs field.ErrorList) field.ErrorList {
 	return out
 }
 
-// DeepEqual compares two values of any type, using proto.Equal if both are
-// proto messages, and reflect.DeepEqual otherwise. Declarative validation's
-// generated code reaches it through each generating package's ateDeepEqual.
+// DeepEqual compares protobuf messages with proto.Equal and other values with
+// reflect.DeepEqual. Nil and empty maps or slices are equal, as in protobuf.
 func DeepEqual[T any](a, b T) bool {
 	asProto := func(x any) proto.Message {
 		pm, ok := x.(proto.Message)
@@ -127,6 +126,15 @@ func DeepEqual[T any](a, b T) bool {
 
 	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
 		return proto.Equal(pa, pb)
+	}
+	left, right := reflect.ValueOf(a), reflect.ValueOf(b)
+	if left.IsValid() && right.IsValid() && left.Type() == right.Type() {
+		switch left.Kind() {
+		case reflect.Map, reflect.Slice:
+			if left.Len() == 0 && right.Len() == 0 {
+				return true
+			}
+		}
 	}
 	return reflect.DeepEqual(a, b)
 }

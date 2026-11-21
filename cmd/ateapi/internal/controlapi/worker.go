@@ -145,7 +145,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapi.Worker)
 }
 
 // UpdateWorker replaces the stored Worker with the one the request carries.
-// Only labels are the caller's to change; a request that alters an
+// Only Worker.labels are the caller's to change; a request that alters an
 // immutable field — including by leaving it unset, which would clear it — is
 // rejected.
 // The service layer enforces that with declarative validation against the
@@ -164,8 +164,9 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapi.UpdateWorkerR
 	}
 
 	return s.mutateWorker(ctx, inWorker.GetMetadata().GetName(), store.PreconditionFrom(inWorker), func(toUpdate *ateapi.Worker) error {
-		// Status and metadata are server-owned fields.
+		// Status and metadata timestamps are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
+		metadata.Labels = inWorker.GetMetadata().GetLabels()
 		// Reset + merge from the input worker.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, inWorker)
