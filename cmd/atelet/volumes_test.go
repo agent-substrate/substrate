@@ -37,6 +37,11 @@ type mountCall struct {
 	volumeID   string
 	targetPath string
 	attributes map[string]string
+	// targetExisted records whether the mount target path already existed
+	// when the plugin was called. The CSI spec forbids atelet (the CO) from
+	// creating target_path: doing so breaks drivers that reject an existing
+	// target, so tests assert this stayed false.
+	targetExisted bool
 }
 
 type fakeWorkerPlugin struct {
@@ -49,11 +54,18 @@ type fakeWorkerPlugin struct {
 }
 
 func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
+	_, statErr := os.Stat(req.TargetPath)
 	f.mountCalls = append(f.mountCalls, mountCall{
-		volumeID:   req.VolumeID,
-		targetPath: req.TargetPath,
-		attributes: req.VolumeContext,
+		volumeID:      req.VolumeID,
+		targetPath:    req.TargetPath,
+		attributes:    req.VolumeContext,
+		targetExisted: statErr == nil,
 	})
+	// Creation of target_path is the storage provider's responsibility per
+	// the CSI spec; simulate that here the way a real driver would.
+	if err := os.MkdirAll(req.TargetPath, 0o755); err != nil {
+		return fmt.Errorf("simulated driver failed to create target %q: %w", req.TargetPath, err)
+	}
 	if f.mountErrs != nil {
 		if err, ok := f.mountErrs[req.VolumeID]; ok {
 			return err
@@ -179,7 +191,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		DurableDir: &ateletpb.DurableDirVolumeSource{},
 	}
 
-	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
+	t.Run("success mounts external volumes without pre-creating mount directories", func(t *testing.T) {
 		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
@@ -201,6 +213,17 @@ func TestMountExternalVolumes(t *testing.T) {
 		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 
+		// atelet must hand the plugin a target path that does not exist yet:
+		// per the CSI spec, creating target_path is the storage provider's
+		// responsibility, and spec-strict drivers fail NodePublishVolume if
+		// the target already exists.
+		for _, call := range fake.mountCalls {
+			if call.targetExisted {
+				t.Errorf("target path %q already existed when the plugin was called; atelet must not create the mount target", call.targetPath)
+			}
+		}
+
+		// The plugin (simulated storage provider) created the targets.
 		for _, path := range []string{expectedPath1, expectedPath2} {
 			info, err := os.Stat(path)
 			if err != nil {
@@ -208,9 +231,6 @@ func TestMountExternalVolumes(t *testing.T) {
 			}
 			if !info.IsDir() {
 				t.Errorf("%q is not a directory", path)
-			}
-			if perm := info.Mode().Perm(); perm != 0o750 {
-				t.Errorf("perm for %q = %o, want 750", path, perm)
 			}
 		}
 
@@ -244,6 +264,11 @@ func TestMountExternalVolumes(t *testing.T) {
 		}
 		if len(fake.mountCalls) != 1 || fake.mountCalls[0].targetPath != expectedPath {
 			t.Errorf("mountCalls = %v, want 1 call for %q", fake.mountCalls, expectedPath)
+		}
+		// Republishing onto a leftover mount point (e.g. after a failed
+		// attempt) sees the target already there and does not fail.
+		if !fake.mountCalls[0].targetExisted {
+			t.Errorf("targetExisted for %q = false, want true", expectedPath)
 		}
 	})
 
@@ -356,7 +381,8 @@ func TestMountExternalVolumes(t *testing.T) {
 			t.Errorf("stat vol-1 mount path %q: %v", expectedPath1, err)
 		}
 
-		// Verify host mount directory for vol-2 was also created prior to MountVolume call.
+		// Verify the mount directory for vol-2, created by the (failing)
+		// publish attempt, is also left in place for a later unmount/reset.
 		if _, err := os.Stat(expectedPath2); err != nil {
 			t.Errorf("stat vol-2 mount path %q: %v", expectedPath2, err)
 		}
