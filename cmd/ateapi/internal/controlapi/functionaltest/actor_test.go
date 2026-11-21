@@ -3273,8 +3273,15 @@ func TestResumeActor(t *testing.T) {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 
-	if !tc.fakeAtelet.RestoreCalled {
+	tc.fakeAtelet.Lock.Lock()
+	restoreCalled := tc.fakeAtelet.RestoreCalled
+	executionUID := tc.fakeAtelet.RestoreRequest.GetExecutionUid()
+	tc.fakeAtelet.Lock.Unlock()
+	if !restoreCalled {
 		t.Errorf("expected Restore to be called")
+	}
+	if executionUID == "" {
+		t.Fatal("expected Restore to receive an execution UID")
 	}
 
 	getResp, err := tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{
@@ -3302,6 +3309,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
 				WorkerEpoch:     reportedEpoch,
+				ExecutionUid:    executionUID,
 				SandboxRuntime:  defaultWorkerRuntime("gvisor"),
 			},
 		},

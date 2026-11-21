@@ -122,6 +122,9 @@ type FakeAteletServer struct {
 	RunRequest *ateletpb.RunRequest
 	FailRun    error
 
+	// FailExecutionResponse loses the reply after the fake accepts a start.
+	FailExecutionResponse error
+
 	CheckpointCalled    bool
 	CheckpointRequest   *ateletpb.CheckpointRequest
 	FailCheckpoint      error
@@ -183,6 +186,7 @@ func (f *FakeAteletServer) Reset() {
 	f.RunCalled = false
 	f.RunRequest = nil
 	f.FailRun = nil
+	f.FailExecutionResponse = nil
 
 	f.CheckpointCalled = false
 	f.CheckpointRequest = nil
@@ -265,6 +269,9 @@ func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*
 	}
 
 	// The worker process every test Worker registers, see reportWorkerCapacity.
+	if f.FailExecutionResponse != nil {
+		return nil, f.FailExecutionResponse
+	}
 	return &ateletpb.RunResponse{WorkerEpoch: reportedEpoch}, nil
 }
 
@@ -314,6 +321,9 @@ func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreReq
 	}
 	if f.RestoreWorkerEpoch != nil {
 		return &ateletpb.RestoreResponse{WorkerEpoch: f.RestoreWorkerEpoch()}, nil
+	}
+	if f.FailExecutionResponse != nil {
+		return nil, f.FailExecutionResponse
 	}
 	return &ateletpb.RestoreResponse{WorkerEpoch: reportedEpoch}, nil
 }

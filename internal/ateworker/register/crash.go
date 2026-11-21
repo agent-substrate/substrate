@@ -51,26 +51,26 @@ func NewCrashReporter(cfg ReportConfig) (*CrashReporter, error) {
 	return &CrashReporter{socketPath: cfg.SocketPath, tlsConfig: tlsConfig}, nil
 }
 
-// ReportCrashed reports that actor's sandbox died, retrying until the control
-// plane answers or ctx ends. A crash stays true, so unlike a suspend request it
-// is worth retrying for as long as the caller allows. A refusal, the actor
-// having moved on or an operation in flight owning it, is an answer and is
+// ReportCrashed reports that executionUID died, retrying until the control
+// plane answers or ctx ends. The report keeps that execution's identity across
+// retries. A refusal means the actor moved on or an operation owns it, and is
 // logged rather than returned.
-func (r *CrashReporter) ReportCrashed(ctx context.Context, actor resources.ActorAttribution, message string) error {
+func (r *CrashReporter) ReportCrashed(ctx context.Context, actor resources.ActorAttribution, executionUID, message string) error {
 	conn, err := ateletdial.Dial(r.socketPath, r.tlsConfig)
 	if err != nil {
 		return fmt.Errorf("dial atelet: %w", err)
 	}
 	defer conn.Close()
-	return reportCrashedWithRetry(ctx, conn, actor, message, initialReportBackoff)
+	return reportCrashedWithRetry(ctx, conn, actor, executionUID, message, initialReportBackoff)
 }
 
-func reportCrashedWithRetry(ctx context.Context, conn grpc.ClientConnInterface, actor resources.ActorAttribution, message string, backoff time.Duration) error {
+func reportCrashedWithRetry(ctx context.Context, conn grpc.ClientConnInterface, actor resources.ActorAttribution, executionUID, message string, backoff time.Duration) error {
 	req := &ateletpb.ReportActorCrashedRequest{
 		ActorAtespace: actor.Ref.Atespace,
 		ActorName:     actor.Ref.Name,
 		ActorUid:      actor.UID,
 		Message:       truncateMessage(message),
+		ExecutionUid:  executionUID,
 	}
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
