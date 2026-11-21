@@ -95,10 +95,13 @@ jobs:
           cmd/dataplane/envoy/dynamic-modules/target
         key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/Cargo.lock') }}
         restore-keys: cargo-${{ runner.os }}-
+    # the runner image already has clang and libclang, apt-get can stall for minutes
     - name: dynamic module tests
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
+        if ! compgen -G '/usr/lib/llvm-*/lib/libclang-*.so.*' >/dev/null || ! command -v clang >/dev/null; then
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
+        fi
         hack/test-dynamic-modules.sh
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
