@@ -304,6 +304,10 @@ func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handl
 		Handler:           handler,
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Close a connection the router stopped reading. A stream reset
+		// queues behind the blocked write, and a relay that waits for its
+		// copy would wait with it.
+		HTTP2: &http.HTTP2Config{WriteByteTimeout: 10 * time.Second},
 	}
 	done := make(chan struct{})
 	go func() {
@@ -400,8 +404,13 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 
 	// A write deadline in the past resets the stream, so a copy blocked on
 	// the router's flow-control window returns and the relay can finish
-	// before this handler does.
-	abort := func() { _ = rc.SetWriteDeadline(time.Now()) }
+	// before this handler does. A stream the router ended is closed already
+	// and its writes fail, so it gets no second reset.
+	abort := func() {
+		if r.Context().Err() == nil {
+			_ = rc.SetWriteDeadline(time.Now())
+		}
+	}
 	relayWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body, abort)
 }
 
