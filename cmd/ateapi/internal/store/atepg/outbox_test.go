@@ -63,6 +63,19 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 	if got := p.ownerPool.Config().MaxConns; got != ownerPoolMaxConns {
 		t.Fatalf("owner pool MaxConns = %d, want %d", got, ownerPoolMaxConns)
 	}
+	var watchSeqScan, watchBitmapScan, mainSeqScan string
+	if err := p.watchPool.QueryRow(ctx, `SELECT current_setting('enable_seqscan'), current_setting('enable_bitmapscan')`).Scan(&watchSeqScan, &watchBitmapScan); err != nil {
+		t.Fatalf("reading watchPool planner settings: %v", err)
+	}
+	if watchSeqScan != "off" || watchBitmapScan != "off" {
+		t.Fatalf("watchPool enable_seqscan=%q enable_bitmapscan=%q, want both off", watchSeqScan, watchBitmapScan)
+	}
+	if err := p.pool.QueryRow(ctx, `SELECT current_setting('enable_seqscan')`).Scan(&mainSeqScan); err != nil {
+		t.Fatalf("reading main pool planner setting: %v", err)
+	}
+	if mainSeqScan != "on" {
+		t.Fatalf("main pool enable_seqscan=%q, want on", mainSeqScan)
+	}
 
 	clearAll(t, p)
 	watch, err := p.WatchWorkers(ctx)
@@ -1157,5 +1170,124 @@ func TestLocalPublishSurvivesWatchClose(t *testing.T) {
 			t.Fatalf("DeleteWorker failed: %v", err)
 		}
 		<-done
+	}
+}
+
+// TestPollQueryPlan_WatchPoolStaysOnIndexWithZeroStatsPartitions reproduces
+// the production autovacuum_enabled=off state: an empty partition is analyzed
+// (relpages=0, reltuples=0) and then receives thousands of rows without
+// autoanalyze running. On the dedicated watchPool, pollWorkerOutboxSQL must
+// still plan an index-ordered Merge Append with a scalar InitPlan for
+// pg_snapshot_xmin rather than falling back to Sort + Seq/Bitmap scan.
+func TestPollQueryPlan_WatchPoolStaysOnIndexWithZeroStatsPartitions(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, testConnectConfig("public"))
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	// ANALYZE while every outbox partition is empty stamps relpages=0,
+	// reltuples=0, matching freshly rotated autovacuum_enabled=off partitions.
+	if _, err := p.pool.Exec(ctx, `ANALYZE worker_outbox`); err != nil {
+		t.Fatalf("empty ANALYZE failed: %v", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO worker_outbox (payload) SELECT 'x'::bytea FROM generate_series(1, 3000)`); err != nil {
+		t.Fatalf("seeding un-analyzed outbox rows failed: %v", err)
+	}
+
+	rows, err := p.watchPool.Query(ctx, "EXPLAIN "+pollWorkerOutboxSQL, "100", outboxBatch)
+	if err != nil {
+		t.Fatalf("EXPLAIN on watchPool failed: %v", err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scanning plan line: %v", err)
+		}
+		plan.WriteString(line)
+		plan.WriteString("\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading plan rows: %v", err)
+	}
+	got := plan.String()
+	if !strings.Contains(got, "Merge Append") {
+		t.Errorf("watchPool poll plan on zero-stats partitions is not Merge Append:\n%s", got)
+	}
+	if strings.Contains(got, "Seq Scan") || strings.Contains(got, "Bitmap Heap Scan") || strings.Contains(got, "->  Sort") {
+		t.Errorf("watchPool poll plan fell back to non-index scan or explicit Sort:\n%s", got)
+	}
+}
+
+// TestCreateWorkerOutboxPartitions_SkipsParentLockWhenPresent verifies that
+// steady-state maintenance ticks do not take ACCESS EXCLUSIVE on worker_outbox
+// when the lead partitions are already attached.
+func TestCreateWorkerOutboxPartitions_SkipsParentLockWhenPresent(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	now, err := s.outboxNow(ctx)
+	if err != nil {
+		t.Fatalf("outboxNow failed: %v", err)
+	}
+	if err := s.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(now)...); err != nil {
+		t.Fatalf("initial createWorkerOutboxPartitions failed: %v", err)
+	}
+
+	// Hold SHARE UPDATE EXCLUSIVE on worker_outbox, which allows writers
+	// (ROW EXCLUSIVE) and readers (ACCESS SHARE) but conflicts with
+	// ACCESS EXCLUSIVE (CREATE ... PARTITION OF worker_outbox).
+	blocker, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin blocker failed: %v", err)
+	}
+	defer blocker.Rollback(ctx) //nolint:errcheck // cleaned up on exit
+	if _, err := blocker.Exec(ctx, `LOCK TABLE worker_outbox IN SHARE UPDATE EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("locking worker_outbox failed: %v", err)
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := s.createWorkerOutboxPartitions(callCtx, outboxPartitionLeadTimes(now)...); err != nil {
+		t.Fatalf("createWorkerOutboxPartitions attempted parent DDL despite all lead partitions existing: %v", err)
+	}
+}
+
+// TestCreateWorkerOutboxPartitions_BoundsLockWaitWhenParentBusy verifies that
+// when a genuinely new partition must be attached while worker_outbox is held
+// in a conflicting mode, SET LOCAL lock_timeout aborts the DDL promptly so it
+// cannot queue an indefinite ACCESS EXCLUSIVE lock convoy ahead of writers.
+func TestCreateWorkerOutboxPartitions_BoundsLockWaitWhenParentBusy(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	blocker, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin blocker failed: %v", err)
+	}
+	defer blocker.Rollback(ctx) //nolint:errcheck // cleaned up on exit
+	if _, err := blocker.Exec(ctx, `LOCK TABLE worker_outbox IN SHARE UPDATE EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("locking worker_outbox failed: %v", err)
+	}
+
+	future := time.Now().UTC().Add(24 * time.Hour)
+	start := time.Now()
+	err = s.createWorkerOutboxPartitions(ctx, future)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected lock_timeout error while worker_outbox held a conflicting lock, got nil")
+	}
+	if pgErrCode(err) != "55P03" {
+		t.Fatalf("error SQLSTATE = %q (%v), want 55P03 (lock_not_available)", pgErrCode(err), err)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("lock_timeout took %v, want bounded near 3s", elapsed)
 	}
 }
