@@ -33,6 +33,10 @@ rules:
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["get", "watch", "list"]
+# Checks the cluster's ServiceAccount tokens.
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
 ---
 # Create Service Account for Workload Identity
 apiVersion: v1

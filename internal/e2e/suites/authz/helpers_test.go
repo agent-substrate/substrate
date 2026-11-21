@@ -64,8 +64,9 @@ func exactly(c codes.Code) outcome {
 }
 
 var (
-	allowed = exactly(codes.OK)
-	denied  = exactly(codes.PermissionDenied)
+	allowed         = exactly(codes.OK)
+	denied          = exactly(codes.PermissionDenied)
+	unauthenticated = exactly(codes.Unauthenticated)
 	// passedCheck is any outcome but a permission or authentication failure.
 	// The permission check runs before the handler validates or looks
 	// anything up, so a request the handler then rejects (an invalid
@@ -143,18 +144,20 @@ func newPrincipal(t *testing.T, ctx context.Context, clients *e2e.Clients, names
 	if _, err := clients.K8s.CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("creating ServiceAccount %s/%s: %v", namespace, name, err)
 	}
-	return principalFor(t, ctx, clients, namespace, name)
+	return principalFor(t, ctx, clients, namespace, name, nil)
 }
 
 // principalFor returns a principal that authenticates with a token minted
-// for the existing ServiceAccount namespace/name.
-func principalFor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, name string) *principal {
+// for the existing ServiceAccount namespace/name. A non-nil bound binds the
+// token to that object.
+func principalFor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, name string, bound *authv1.BoundObjectReference) *principal {
 	t.Helper()
 	expiration := int64(3600)
 	token, err := clients.K8s.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, name, &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
 			Audiences:         []string{installdefaults.APIServiceName + "." + installdefaults.SystemNamespace + ".svc"},
 			ExpirationSeconds: &expiration,
+			BoundObjectRef:    bound,
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
