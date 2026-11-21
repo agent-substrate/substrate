@@ -58,7 +58,7 @@ func EgressMITMCAPoolRef(systemNamespace string) types.NamespacedName {
 }
 
 // resourceNames covers list and watch because the manager's cache selects the
-// Secret by metadata.name (managerOptions in main.go), which the apiserver
+// Secret by metadata.name (CacheOptions), which the apiserver
 // authorizes as a request for that one name. Without the selector the grant
 // would deny them.
 //
