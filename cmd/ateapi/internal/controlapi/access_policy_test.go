@@ -30,23 +30,11 @@ import (
 )
 
 func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
-	persistence := storetest.SetupPostgresPersistence(t)
-	ctx := context.Background()
-
-	pool := persistence.Pool()
-	fgaServer, err := authz.NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
-
 	// alice@example.com is a bootstrap owner: a global owner through server
 	// configuration, never through a stored AccessPolicy.
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"}, storetest.DefaultSystemPrincipals())
-	if err != nil {
-		t.Fatalf("authz.New failed: %v", err)
-	}
-	persistence.SetPolicyManager(policyManager)
+	fix := storetest.SetupPostgresWithAuthz(t, []string{"alice@example.com"})
+	persistence, pool, authorizer, fgaServer := fix.Persistence, fix.Pool, fix.Authorizer, fix.FGAServer
+	ctx := context.Background()
 
 	svc, _ := NewRPCService(persistence, nil, nil, nil, nil, nil, "", nil, nil, "", nil, "")
 	interceptor := authz.UnaryServerInterceptor(authorizer)

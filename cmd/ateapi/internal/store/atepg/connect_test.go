@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 )
 
 // TestPoolConfigRereadsRotatedCredentials covers the pod certificate rotation
@@ -85,7 +87,7 @@ func TestPoolConfigRequiresRole(t *testing.T) {
 	}
 }
 
-func TestConnectRequiresRoles(t *testing.T) {
+func TestOpenPoolsRequiresRoles(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		readWriteRole string
@@ -96,7 +98,7 @@ func TestConnectRequiresRoles(t *testing.T) {
 		{name: "owner", readWriteRole: "readwrite", want: "owner role must not be empty"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Connect(t.Context(), ConnectConfig{
+			_, err := OpenPools(t.Context(), ConnectConfig{
 				ReadWriteDSN:  "unused",
 				OwnerDSN:      "unused",
 				ReadWriteRole: tc.readWriteRole,
@@ -104,21 +106,48 @@ func TestConnectRequiresRoles(t *testing.T) {
 				Schema:        "substrate",
 			})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Connect error = %v, want %q", err, tc.want)
+				t.Fatalf("OpenPools error = %v, want %q", err, tc.want)
 			}
 		})
 	}
 }
 
-func TestConnectRequiresOwnerConnectionString(t *testing.T) {
-	_, err := Connect(t.Context(), ConnectConfig{
+func TestOpenPoolsRequiresOwnerConnectionString(t *testing.T) {
+	_, err := OpenPools(t.Context(), ConnectConfig{
 		ReadWriteDSN:  "unused",
 		ReadWriteRole: "runtime",
 		OwnerRole:     "owner",
 		Schema:        "substrate",
 	})
 	if err == nil || !strings.Contains(err.Error(), "owner connection string must not be empty") {
-		t.Fatalf("Connect error = %v, want missing-owner error", err)
+		t.Fatalf("OpenPools error = %v, want missing-owner error", err)
+	}
+}
+
+func TestApplyMigrationsRejectsNilPool(t *testing.T) {
+	err := ApplyMigrations(t.Context(), nil)
+	if err == nil || !strings.Contains(err.Error(), "pool must not be nil") {
+		t.Fatalf("ApplyMigrations(nil) error = %v, want nil-pool error", err)
+	}
+}
+
+func TestNewPersistenceValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		pools *Pools
+		pm    *authz.PolicyManager
+		want  string
+	}{
+		{name: "nil pools", pm: &authz.PolicyManager{}, want: "pools must not be nil"},
+		{name: "nil single pool", pools: SinglePool(nil), pm: &authz.PolicyManager{}, want: "pools must not be nil"},
+		{name: "nil policy manager", pools: SinglePool(&pgxpool.Pool{}), want: "policy manager must not be nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewPersistence(t.Context(), tc.pools, tc.pm)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NewPersistence error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -212,18 +241,13 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, ConnectConfig{
+	_, persistence := connectTestPersistence(t, ctx, ConnectConfig{
 		ReadWriteDSN:  dsn + "&search_path=public",
 		OwnerDSN:      dsn,
 		ReadWriteRole: "atepg",
 		OwnerRole:     "atepg",
 		Schema:        schema,
 	})
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer persistence.pool.Close()
-	defer persistence.Close()
 
 	if _, err := persistence.CreateAtespace(ctx, newTestAtespace("schema-test")); err != nil {
 		t.Fatalf("creating atespace in configured schema: %v", err)
@@ -331,7 +355,7 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	if runtimeDSN == containerDSN || ddlDSN == containerDSN {
 		t.Fatalf("unexpected test DSN format: %q", containerDSN)
 	}
-	p, err := Connect(ctx, ConnectConfig{
+	_, p := connectTestPersistence(t, ctx, ConnectConfig{
 		ReadWriteDSN:  runtimeDSN,
 		OwnerDSN:      ddlDSN,
 		ReadWriteRole: runtimeRole,
@@ -339,11 +363,6 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		Schema:        schema,
 		PoolMaxConns:  20,
 	})
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
 	if got := p.pool.Config().MaxConns; got != 20 {
 		t.Fatalf("read/write pool MaxConns = %d, want 20", got)
 	}

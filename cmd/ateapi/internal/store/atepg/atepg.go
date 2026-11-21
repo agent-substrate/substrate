@@ -18,7 +18,7 @@
 // (primary keys, versions, pagination, update/delete preconditions) plus
 // the complete protobuf message, binary-encoded, in a BYTEA column.
 // TLS is configured entirely through the connection string passed
-// to Connect (standard libpq sslmode/sslrootcert/sslcert/sslkey parameters)
+// to OpenPools (standard libpq sslmode/sslrootcert/sslcert/sslkey parameters).
 package atepg
 
 import (
@@ -63,15 +63,12 @@ const (
 type Persistence struct {
 	pool *pgxpool.Pool
 	// watchPool serves WatchWorkers pollers and expired-lease cleanup.
-	// ownerPool applies migrations and maintains outbox partitions.
+	// ownerPool maintains outbox partitions.
 	// probePool serves only Ping, so request traffic can never hold the
 	// connection a readiness probe needs.
 	watchPool             *pgxpool.Pool
 	ownerPool             *pgxpool.Pool
 	probePool             *pgxpool.Pool
-	ownsWatchPool         bool
-	ownsOwnerPool         bool
-	ownsProbePool         bool
 	policyManager         *authz.PolicyManager
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
@@ -135,9 +132,51 @@ type ConnectConfig struct {
 	PoolMaxConns  int32
 }
 
-// Connect opens the read/write, owner, watch, and probe pools. It creates the
-// schema and applies migrations.
-func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
+// Pools holds the PostgreSQL connection pools shared by Persistence and authz.
+type Pools struct {
+	pool      *pgxpool.Pool
+	watchPool *pgxpool.Pool
+	ownerPool *pgxpool.Pool
+	probePool *pgxpool.Pool
+	ownsPools bool
+}
+
+// SinglePool wraps a caller-owned pool so all Persistence operations share it.
+// Close is a no-op because the caller owns pool.
+func SinglePool(pool *pgxpool.Pool) *Pools {
+	return &Pools{
+		pool:      pool,
+		watchPool: pool,
+		ownerPool: pool,
+		probePool: pool,
+	}
+}
+
+// Pool returns the read/write PostgreSQL connection pool.
+func (p *Pools) Pool() *pgxpool.Pool {
+	return p.pool
+}
+
+// OwnerPool returns the owner PostgreSQL connection pool used for migrations
+// and partition maintenance.
+func (p *Pools) OwnerPool() *pgxpool.Pool {
+	return p.ownerPool
+}
+
+// Close closes every pool created by OpenPools.
+func (p *Pools) Close() {
+	if !p.ownsPools {
+		return
+	}
+	p.probePool.Close()
+	p.watchPool.Close()
+	p.ownerPool.Close()
+	p.pool.Close()
+}
+
+// OpenPools opens the read/write, owner, watch, and probe pools and creates
+// the configured schema if it does not exist.
+func OpenPools(ctx context.Context, config ConnectConfig) (*Pools, error) {
 	if config.Schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
@@ -209,18 +248,13 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 		return nil, fmt.Errorf("opening PostgreSQL probe pool: %w", err)
 	}
 
-	p, err := newPersistence(ctx, pool, watchPool, ownerPool, probePool)
-	if err != nil {
-		probePool.Close()
-		watchPool.Close()
-		ownerPool.Close()
-		pool.Close()
-		return nil, err
-	}
-	p.ownsWatchPool = true
-	p.ownsOwnerPool = true
-	p.ownsProbePool = true
-	return p, nil
+	return &Pools{
+		pool:      pool,
+		watchPool: watchPool,
+		ownerPool: ownerPool,
+		probePool: probePool,
+		ownsPools: true,
+	}, nil
 }
 
 // resizedPoolConfig returns a copy of base, the read/write pool config, with
@@ -296,24 +330,23 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 	return cfg, nil
 }
 
-// NewPersistence wraps an already-open pool, applying pending migrations.
-// Callers that already hold a pool (e.g. tests using testcontainers) use
-// this directly instead of Connect; outbox watch traffic and Ping share the
-// given pool.
-func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
-	return newPersistence(ctx, pool, pool, pool, pool)
-}
-
-func newPersistence(ctx context.Context, pool, watchPool, ownerPool, probePool *pgxpool.Pool) (*Persistence, error) {
-	if err := applyMigrations(ctx, ownerPool); err != nil {
-		return nil, err
+// NewPersistence creates a Persistence backed by pools and policyManager.
+// Callers must run ApplyMigrations before constructing policyManager and
+// calling NewPersistence.
+func NewPersistence(ctx context.Context, pools *Pools, policyManager *authz.PolicyManager) (*Persistence, error) {
+	if pools == nil || pools.pool == nil || pools.watchPool == nil || pools.ownerPool == nil || pools.probePool == nil {
+		return nil, fmt.Errorf("PostgreSQL pools must not be nil")
+	}
+	if policyManager == nil {
+		return nil, fmt.Errorf("policy manager must not be nil")
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
 	p := &Persistence{
-		pool:                  pool,
-		watchPool:             watchPool,
-		ownerPool:             ownerPool,
-		probePool:             probePool,
+		pool:                  pools.pool,
+		watchPool:             pools.watchPool,
+		ownerPool:             pools.ownerPool,
+		probePool:             pools.probePool,
+		policyManager:         policyManager,
 		leaseTTL:              defaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -339,21 +372,11 @@ func newPersistence(ctx context.Context, pool, watchPool, ownerPool, probePool *
 	return p, nil
 }
 
-// Close stops the maintenance loop and waits for it to exit,
-// then closes the auxiliary pools if Connect created them. It does not close the
-// main pool, which the caller owns.
+// Close stops the maintenance loop and waits for it to exit. It does not close
+// the underlying pools, which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
-	if p.ownsWatchPool {
-		p.watchPool.Close()
-	}
-	if p.ownsOwnerPool {
-		p.ownerPool.Close()
-	}
-	if p.ownsProbePool {
-		p.probePool.Close()
-	}
 }
 
 // Ping reports whether PostgreSQL answers. It uses a connection reserved for
@@ -361,19 +384,6 @@ func (p *Persistence) Close() {
 // database does not answer within ctx.
 func (p *Persistence) Ping(ctx context.Context) error {
 	return p.probePool.Ping(ctx)
-}
-
-// Pool returns the underlying PostgreSQL connection pool.
-func (p *Persistence) Pool() *pgxpool.Pool {
-	return p.pool
-}
-
-// SetPolicyManager configures the authorization policy manager that writes
-// OpenFGA tuples in the same transaction as access policy and atespace
-// mutations. It must be set before the store serves access policy or
-// atespace writes.
-func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
-	p.policyManager = pm
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers

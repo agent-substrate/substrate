@@ -23,12 +23,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 )
 
 // connectForPing connects to the shared container with a fresh schema that is
 // dropped when the test ends. The returned config lets a test adjust the DSN
 // or pool size before connecting.
-func connectForPing(t *testing.T, schema string, adjust func(*ConnectConfig)) *Persistence {
+func connectForPing(t *testing.T, schema string, adjust func(*ConnectConfig)) (*Pools, *Persistence) {
 	t.Helper()
 	admin := requirePool(t)
 	ctx := t.Context()
@@ -40,21 +42,30 @@ func connectForPing(t *testing.T, schema string, adjust func(*ConnectConfig)) *P
 
 	cfg := testConnectConfig(schema)
 	adjust(&cfg)
-	p, err := Connect(ctx, cfg)
+	pools, err := OpenPools(ctx, cfg)
 	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
+		t.Fatalf("OpenPools failed: %v", err)
 	}
-	t.Cleanup(func() {
-		p.Close()
-		p.pool.Close()
-	})
-	return p
+	t.Cleanup(pools.Close)
+	if err := ApplyMigrations(ctx, pools.OwnerPool()); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	// Ping tests do not write access policies or atespaces, and
+	// TestPingIgnoresSaturatedRequestPool sets PoolMaxConns = 1, which cannot
+	// run authz.EnsureStoreAndModel (it holds an advisory lock on one
+	// connection while OpenFGA queries on another).
+	p, err := NewPersistence(ctx, pools, &authz.PolicyManager{})
+	if err != nil {
+		t.Fatalf("NewPersistence failed: %v", err)
+	}
+	t.Cleanup(p.Close)
+	return pools, p
 }
 
 // A saturated request pool must not fail the readiness probe: the probe cannot
 // tell a busy replica from an unreachable store if it borrows from that pool.
 func TestPingIgnoresSaturatedRequestPool(t *testing.T) {
-	p := connectForPing(t, "ping-saturated", func(cfg *ConnectConfig) { cfg.PoolMaxConns = 1 })
+	_, p := connectForPing(t, "ping-saturated", func(cfg *ConnectConfig) { cfg.PoolMaxConns = 1 })
 	ctx := t.Context()
 
 	if p.probePool == p.pool {
@@ -93,11 +104,12 @@ func TestPingIgnoresSaturatedRequestPool(t *testing.T) {
 }
 
 func TestPingFailsAfterClose(t *testing.T) {
-	p := connectForPing(t, "ping-closed", func(*ConnectConfig) {})
+	pools, p := connectForPing(t, "ping-closed", func(*ConnectConfig) {})
 	if err := p.Ping(t.Context()); err != nil {
 		t.Fatalf("Ping before Close = %v, want nil", err)
 	}
 	p.Close()
+	pools.Close()
 	if err := p.Ping(t.Context()); err == nil {
 		t.Error("Ping after Close succeeded, want an error from the closed probe pool")
 	}
@@ -113,7 +125,7 @@ func TestPingFollowsStoreReachability(t *testing.T) {
 	}
 	proxy := newTCPProxy(t, dsn.Host)
 	dsn.Host = proxy.addr
-	p := connectForPing(t, "ping-reachability", func(cfg *ConnectConfig) { cfg.ReadWriteDSN = dsn.String() })
+	_, p := connectForPing(t, "ping-reachability", func(cfg *ConnectConfig) { cfg.ReadWriteDSN = dsn.String() })
 
 	ping := func() error {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)

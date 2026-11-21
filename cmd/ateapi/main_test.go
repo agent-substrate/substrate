@@ -33,16 +33,16 @@ import (
 	"time"
 )
 
-func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
+func TestOpenPostgresPoolsRequiresReadWriteConnectionString(t *testing.T) {
 	oldDSN := *postgresReadWriteConnectionString
 	t.Cleanup(func() {
 		*postgresReadWriteConnectionString = oldDSN
 	})
 	*postgresReadWriteConnectionString = ""
 
-	_, err := connectStore(context.Background())
+	_, err := openPostgresPools(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "--postgres-read-write-connection-string is required") {
-		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
+		t.Fatalf("openPostgresPools() error = %v, want missing-connection-string error", err)
 	}
 }
 

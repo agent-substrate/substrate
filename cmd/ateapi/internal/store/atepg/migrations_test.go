@@ -133,17 +133,19 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			p, err := Connect(ctx, testConnectConfig("concurrent-startup"))
-			if p != nil {
-				p.Close()
-				p.pool.Close()
+			pools, err := OpenPools(ctx, testConnectConfig("concurrent-startup"))
+			if err != nil {
+				errs <- err
+				return
 			}
+			err = ApplyMigrations(ctx, pools.OwnerPool())
+			pools.Close()
 			errs <- err
 		}()
 	}
 	for range 2 {
 		if err := <-errs; err != nil {
-			t.Fatalf("Connect failed: %v", err)
+			t.Fatalf("OpenPools/ApplyMigrations failed: %v", err)
 		}
 	}
 
@@ -201,7 +203,7 @@ func TestMigrationsWaitForInProgressMigration(t *testing.T) {
 	}
 
 	result := make(chan error, 1)
-	go func() { result <- applyMigrations(ctx, migrationPool) }()
+	go func() { result <- ApplyMigrations(ctx, migrationPool) }()
 	select {
 	case err := <-result:
 		t.Fatalf("migration returned while its advisory lock was held: %v", err)
@@ -233,22 +235,27 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`)
 		})
 
-		p, err := Connect(ctx, testConnectConfig("migration-ahead"))
+		pools, err := OpenPools(ctx, testConnectConfig("migration-ahead"))
 		if err != nil {
+			t.Fatalf("opening pools for current schema: %v", err)
+		}
+		if err := ApplyMigrations(ctx, pools.OwnerPool()); err != nil {
+			pools.Close()
 			t.Fatalf("creating current schema: %v", err)
 		}
-		p.Close()
-		p.pool.Close()
+		pools.Close()
 		if _, err := pool.Exec(ctx, `INSERT INTO "migration-ahead".schema_migrations (version_id, is_applied) VALUES ((SELECT max(version_id) + 1 FROM "migration-ahead".schema_migrations), true)`); err != nil {
 			t.Fatalf("setting ahead migration state: %v", err)
 		}
 
-		p, err = Connect(ctx, testConnectConfig("migration-ahead"))
+		pools, err = OpenPools(ctx, testConnectConfig("migration-ahead"))
 		if err != nil {
-			t.Fatalf("Connect with an ahead clean schema failed: %v", err)
+			t.Fatalf("OpenPools with an ahead clean schema failed: %v", err)
 		}
-		p.Close()
-		p.pool.Close()
+		defer pools.Close()
+		if err := ApplyMigrations(ctx, pools.OwnerPool()); err != nil {
+			t.Fatalf("ApplyMigrations with an ahead clean schema failed: %v", err)
+		}
 	})
 
 	t.Run("tables without metadata", func(t *testing.T) {
@@ -262,16 +269,21 @@ func TestMigrationSchemaStates(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-legacy" CASCADE`)
 		})
 
-		_, err := Connect(ctx, testConnectConfig("migration-legacy"))
+		pools, err := OpenPools(ctx, testConnectConfig("migration-legacy"))
+		if err != nil {
+			t.Fatalf("OpenPools failed: %v", err)
+		}
+		defer pools.Close()
+		err = ApplyMigrations(ctx, pools.OwnerPool())
 		if err == nil || !strings.Contains(err.Error(), "Substrate tables exist without a migration ledger") {
-			t.Fatalf("Connect error = %v, want unsupported schema error", err)
+			t.Fatalf("ApplyMigrations error = %v, want unsupported schema error", err)
 		}
 		var metadataExists bool
 		if err := pool.QueryRow(ctx, `SELECT to_regclass('"migration-legacy".schema_migrations') IS NOT NULL`).Scan(&metadataExists); err != nil {
 			t.Fatalf("checking migration metadata: %v", err)
 		}
 		if metadataExists {
-			t.Error("Connect created a migration ledger for an unsupported schema")
+			t.Error("ApplyMigrations created a migration ledger for an unsupported schema")
 		}
 	})
 }

@@ -201,18 +201,13 @@ func TestBundledPostgresCertificateAuthentication(t *testing.T) {
 	writeBundle(t, ownerBundle, ownerCert, ownerKey)
 	// Both pools must work together for migrations and runtime queries, without
 	// allowing the runtime certificate to assume the owner's role.
-	persistence, err := Connect(t.Context(), ConnectConfig{
+	_, persistence := connectTestPersistence(t, t.Context(), ConnectConfig{
 		ReadWriteDSN:  certificateDSN(postgressetup.ReadWriteUser, runtimeBundle, runtimeBundle, ""),
 		OwnerDSN:      certificateDSN(postgressetup.OwnerUser, ownerBundle, ownerBundle, ""),
 		ReadWriteRole: postgressetup.ReadWriteRole,
 		OwnerRole:     postgressetup.OwnerRole,
 		Schema:        postgressetup.Schema,
 	})
-	if err != nil {
-		t.Fatalf("connecting both certificate pools: %v", err)
-	}
-	defer persistence.pool.Close()
-	defer persistence.Close()
 	if _, err := persistence.CreateAtespace(t.Context(), newTestAtespace("cert-auth")); err != nil {
 		t.Fatal(err)
 	}

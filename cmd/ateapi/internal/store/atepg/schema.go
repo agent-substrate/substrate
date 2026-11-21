@@ -37,7 +37,13 @@ const (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+// ApplyMigrations verifies the PostgreSQL version and applies all pending
+// schema migrations using pool. Callers must run this before initializing
+// OpenFGA or constructing Persistence.
+func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	if pool == nil {
+		return fmt.Errorf("PostgreSQL pool must not be nil")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
