@@ -36,7 +36,7 @@ import (
 // bundle rootfs is an overlay mount, as in production.
 func failedRestoreRootfs(t *testing.T, actorUID string, overlays bool) *ateworkerpb.ActorDirs {
 	t.Helper()
-	t.Cleanup(func() { kata.CleanupSandboxState(context.Background(), actorUID) })
+	t.Cleanup(func() { kata.CleanupSandboxState(context.Background(), actorUID, false) })
 	dirs := &ateworkerpb.ActorDirs{RootDir: t.TempDir(), OciBundleDir: t.TempDir()}
 	if err := os.MkdirAll(filepath.Join(rootfsUpperDir(dirs), "app", "data"), 0o755); err != nil {
 		t.Fatal(err)
