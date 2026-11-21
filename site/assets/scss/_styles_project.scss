@@ -3240,7 +3240,7 @@ footer {
 
 // Tables (matching redesign_docs_inner.html)
 .td-content table:not(.td-initial) {
-  display: table !important;
+  display: block !important;
   width: 100% !important;
   max-width: 100% !important;
   table-layout: auto;
@@ -3248,7 +3248,7 @@ footer {
   border-spacing: 0 !important;
   border: 1px solid #243028 !important;
   border-radius: 10px !important;
-  overflow: hidden;
+  overflow-x: auto;
   margin: 18px 0 24px !important;
 
   > thead {
@@ -3298,8 +3298,8 @@ footer {
       code {
         font-size: 12.5px;
         padding: 1px 5px;
-        overflow-wrap: anywhere;
-        word-break: break-all;
+        overflow-wrap: break-word;
+        word-break: normal;
       }
 
       a {
