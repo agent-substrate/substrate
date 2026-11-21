@@ -234,7 +234,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	setUpdateMetadata(dbTag.Metadata, oldMeta)
+	dbTag.Metadata = setUpdateMetadata(oldMeta)
 	if markForDeletion && dbTag.Metadata.DeleteTime == nil {
 		dbTag.Metadata.DeleteTime = proto.CloneOf(dbTag.Metadata.UpdateTime)
 	}

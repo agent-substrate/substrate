@@ -127,7 +127,7 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	setUpdateMetadata(dbActor.Metadata, oldMeta)
+	dbActor.Metadata = setUpdateMetadata(oldMeta)
 	if markForDeletion && dbActor.Metadata.DeleteTime == nil {
 		dbActor.Metadata.DeleteTime = proto.CloneOf(dbActor.Metadata.UpdateTime)
 	}

@@ -98,3 +98,17 @@ func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)
 	}
 }
+
+func TestUpdateTag_DiscardsMetadataEdits(t *testing.T) {
+	ref := resources.TagRef{Atespace: "team-a", Name: "tag-a"}
+	testUpdateDiscardsMetadataEdits(t,
+		func(t *testing.T, s *Persistence) *ateapi.Tag {
+			return createTestTag(t, s, ref.Atespace, ref.Name)
+		},
+		func(ctx context.Context, s *Persistence, pc store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+			return s.UpdateTag(ctx, ref, pc, mutate)
+		},
+		func(ctx context.Context, s *Persistence) (*ateapi.Tag, error) {
+			return s.GetTag(ctx, ref)
+		})
+}

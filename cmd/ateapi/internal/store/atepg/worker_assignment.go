@@ -48,20 +48,22 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 // saveWorker writes back a Worker whose allocation just moved, at the next
 // version. This assumes the caller holds the row lock getWorkerForUpdate took.
 func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
-	read := proto.CloneOf(worker.GetMetadata())
-	setUpdateMetadata(worker.GetMetadata(), worker.GetMetadata())
+	currentUID := worker.GetMetadata().GetUid()
+	currentVersion := worker.GetMetadata().GetVersion()
+	worker.Metadata = setUpdateMetadata(worker.Metadata)
 	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
-	// Callers hold the row lock getWorkerForUpdate took, so this matches the
+	meta := worker.GetMetadata()
+	// Callers hold the row lock for this worker, so this matches the
 	// row they read. It is stated anyway so a caller that skipped the lock
 	// fails loudly instead of overwriting a newer Worker, and so a row that is
 	// gone is an error rather than an update of nothing.
 	tag, err := tx.Exec(ctx, `UPDATE workers SET version = $1, proto = $2 WHERE name = $3 AND uid = $4 AND version = $5`,
-		worker.GetMetadata().GetVersion(), protoBytes, read.GetName(), read.GetUid(), read.GetVersion())
+		meta.GetVersion(), protoBytes, meta.GetName(), currentUID, currentVersion)
 	if err != nil {
-		return fmt.Errorf("updating worker %s: %w", read.GetName(), err)
+		return fmt.Errorf("updating worker %s: %w", meta.GetName(), err)
 	}
 	if tag.RowsAffected() != 1 {
 		return store.ErrVersionConflict

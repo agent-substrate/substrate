@@ -405,6 +405,8 @@ func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
 	return nil
 }
 
+// setCreateMetadata modifies the input metadata to be correct for a create
+// operation.
 func setCreateMetadata(metadata *ateapi.ResourceMetadata) {
 	metadata.Uid = uuid.NewString()
 	metadata.Version = 1
@@ -439,14 +441,13 @@ func validateSnapshotURIs(resource string, snapshots ...*ateapi.Snapshot) error 
 	return nil
 }
 
-func setUpdateMetadata(newMeta, oldMeta *ateapi.ResourceMetadata) {
-	newMeta.Atespace = oldMeta.Atespace
-	newMeta.Name = oldMeta.Name
-	newMeta.Uid = oldMeta.Uid
-	newMeta.Version = oldMeta.Version + 1
-	newMeta.CreateTime = oldMeta.CreateTime
-	newMeta.UpdateTime = timestamppb.Now()
-	newMeta.DeleteTime = oldMeta.DeleteTime
+// setUpdateMetadata modifies the input metadata for an update operation and
+// returns it. There are no mutable metadata fields yet. If some are added in
+// the future, (e.g. labels), this would take 2 params and merge them.
+func setUpdateMetadata(metadata *ateapi.ResourceMetadata) *ateapi.ResourceMetadata {
+	metadata.Version++
+	metadata.UpdateTime = timestamppb.Now()
+	return metadata
 }
 
 func mapDeleteError(err error, uid string, version int64, precondition store.Precondition) error {

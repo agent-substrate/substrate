@@ -103,16 +103,13 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
 		return nil, err
 	}
-	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapi.ActorTemplate)
+	oldMeta := proto.CloneOf(dbTemplate.Metadata)
 	if mutate != nil {
 		if err := mutate(dbTemplate); err != nil {
 			return nil, err
 		}
 	}
-	if dbTemplate.Metadata == nil {
-		dbTemplate.Metadata = &ateapi.ResourceMetadata{}
-	}
-	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
+	dbTemplate.Metadata = setUpdateMetadata(oldMeta)
 	if markForDeletion && dbTemplate.Metadata.DeleteTime == nil {
 		dbTemplate.Metadata.DeleteTime = proto.CloneOf(dbTemplate.Metadata.UpdateTime)
 	}

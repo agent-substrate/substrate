@@ -116,3 +116,22 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 		t.Errorf("ListActorTemplates did not backfill snapshot_config defaults (-want +got):\n%s", diff)
 	}
 }
+
+func TestUpdateActorTemplate_DiscardsMetadataEdits(t *testing.T) {
+	ref := resources.ActorTemplateRef{Atespace: "team-a", Name: "template-a"}
+	testUpdateDiscardsMetadataEdits(t,
+		func(t *testing.T, s *Persistence) *ateapi.ActorTemplate {
+			createTestActorTemplate(t, s, ref.Atespace, ref.Name)
+			tmpl, err := s.GetActorTemplate(t.Context(), ref)
+			if err != nil {
+				t.Fatalf("GetActorTemplate failed: %v", err)
+			}
+			return tmpl
+		},
+		func(ctx context.Context, s *Persistence, pc store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
+			return s.UpdateActorTemplate(ctx, ref, pc, mutate)
+		},
+		func(ctx context.Context, s *Persistence) (*ateapi.ActorTemplate, error) {
+			return s.GetActorTemplate(ctx, ref)
+		})
+}

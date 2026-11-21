@@ -15,6 +15,7 @@
 package atepg
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"sync"
@@ -264,4 +265,44 @@ func TestGlobalAccessPolicy_UpdateIsAtomic(t *testing.T) {
 			t.Errorf("tuples do not match the committed row (-row +tuples):\n%s", diff)
 		}
 	})
+}
+
+func TestUpdateGlobalAccessPolicy_DiscardsMetadataEdits(t *testing.T) {
+	testUpdateDiscardsMetadataEdits(t,
+		func(t *testing.T, s *Persistence) *ateapi.AccessPolicy {
+			created, err := s.CreateGlobalAccessPolicy(t.Context(), &ateapi.AccessPolicy{
+				Metadata: &ateapi.ResourceMetadata{Name: "default"},
+				Bindings: []*ateapi.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice"}}},
+			})
+			if err != nil {
+				t.Fatalf("CreateGlobalAccessPolicy failed: %v", err)
+			}
+			return created
+		},
+		func(ctx context.Context, s *Persistence, pc store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
+			return s.UpdateGlobalAccessPolicy(ctx, pc, mutate)
+		},
+		func(ctx context.Context, s *Persistence) (*ateapi.AccessPolicy, error) {
+			return s.GetGlobalAccessPolicy(ctx)
+		})
+}
+
+func TestUpdateAtespaceAccessPolicy_DiscardsMetadataEdits(t *testing.T) {
+	testUpdateDiscardsMetadataEdits(t,
+		func(t *testing.T, s *Persistence) *ateapi.AccessPolicy {
+			created, err := s.CreateAtespaceAccessPolicy(t.Context(), "team-a", &ateapi.AccessPolicy{
+				Metadata: &ateapi.ResourceMetadata{Name: "default"},
+				Bindings: []*ateapi.Binding{{Role: authz.RoleEditor, Members: []string{"user:bob"}}},
+			})
+			if err != nil {
+				t.Fatalf("CreateAtespaceAccessPolicy failed: %v", err)
+			}
+			return created
+		},
+		func(ctx context.Context, s *Persistence, pc store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
+			return s.UpdateAtespaceAccessPolicy(ctx, "team-a", pc, mutate)
+		},
+		func(ctx context.Context, s *Persistence) (*ateapi.AccessPolicy, error) {
+			return s.GetAtespaceAccessPolicy(ctx, "team-a")
+		})
 }
