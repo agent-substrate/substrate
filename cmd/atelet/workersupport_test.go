@@ -659,14 +659,16 @@ func TestReportActorCrashedNamesTheCallingWorker(t *testing.T) {
 		ActorName:     "actor-1",
 		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
 		Message:       "cloud-hypervisor exited",
+		ExecutionUid:  "bbde9529-e971-4147-8b2a-49e0aa4d55b0",
 	}); err != nil {
 		t.Fatalf("ReportActorCrashed() failed: %v", err)
 	}
 	want := []*ateapi.ReportActorCrashedRequest{{
-		Worker:   &ateapi.ObjectRef{Name: "pod-a"},
-		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
-		Message:  "cloud-hypervisor exited",
+		Worker:       &ateapi.ObjectRef{Name: "pod-a"},
+		Actor:        &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid:     "01234567-89ab-cdef-0123-456789abcdef",
+		Message:      "cloud-hypervisor exited",
+		ExecutionUid: "bbde9529-e971-4147-8b2a-49e0aa4d55b0",
 	}}
 	if diff := cmp.Diff(want, workers.gotCrashed, protocmp.Transform()); diff != "" {
 		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)

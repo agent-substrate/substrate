@@ -245,6 +245,13 @@ message RunWorkloadRequest {
   ResourceRequirements resources = 10;
   // +k8s:required
   ActorDirs actor_dirs = 12;
+
+  // The API server-assigned identity of this Run call, bound to its runtime.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -569,6 +576,13 @@ message RestoreWorkloadRequest {
   //
   // +k8s:optional
   bool preserve_restore_dir = 14;
+
+  // The API server-assigned identity of this Restore call, bound to its runtime.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 15;
 }
 
 message RestoreWorkloadResponse {

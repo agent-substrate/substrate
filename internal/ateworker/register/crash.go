@@ -51,11 +51,8 @@ func NewCrashReporter(cfg ReportConfig) (*CrashReporter, error) {
 	return &CrashReporter{socketPath: cfg.SocketPath, tlsConfig: tlsConfig}, nil
 }
 
-// ReportCrashed reports that actor's sandbox died, retrying until the control
-// plane answers or ctx ends. A crash stays true, so unlike a suspend request it
-// is worth retrying for as long as the caller allows. A refusal, the actor
-// having moved on or an operation in flight owning it, is an answer and is
-// logged rather than returned.
+// ReportCrashed reports that the actor's sandbox died until the control plane
+// answers or ctx ends. Refusals are logged rather than returned.
 func (r *CrashReporter) ReportCrashed(ctx context.Context, actor resources.ActorAttribution, message string) error {
 	conn, err := ateletdial.Dial(r.socketPath, r.tlsConfig)
 	if err != nil {
