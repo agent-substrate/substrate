@@ -22,6 +22,9 @@ that principal may do.
   `sub`.
 - A call with no certificate and no valid token gets `Unauthenticated`.
 
+For identity in flows that don't call `ate-api-server`, such as actors calling
+other services, see the [Identity Overview](../security/identity.md).
+
 ## Which credential to use
 
 | Caller | Credential | Principal |
