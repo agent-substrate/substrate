@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -36,26 +37,51 @@ func clearAll(t *testing.T, p *Persistence) {
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
 	ctx := context.Background()
-	p, err := NewPersistence(ctx, requirePool(t))
+	pool := requirePool(t)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	policyManager := newTestPolicyManager(t, pool)
+	p, err := NewPersistence(ctx, SinglePool(pool), policyManager)
 	if err != nil {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
 	t.Cleanup(p.Close)
 	clearAll(t, p)
-	setTestPolicyManager(t, p)
 	return p
 }
 
-// setTestPolicyManager gives p an OpenFGA-backed PolicyManager, as the server
-// always does.
-func setTestPolicyManager(t *testing.T, p *Persistence) {
+// connectTestPersistence opens pools, applies migrations, wires an OpenFGA-backed
+// PolicyManager, and creates Persistence. Cleanup runs in LIFO order: Persistence,
+// OpenFGA server, then Pools.
+func connectTestPersistence(t *testing.T, ctx context.Context, cfg ConnectConfig) (*Pools, *Persistence) {
 	t.Helper()
-	fgaServer, err := authz.NewOpenFGAServer(p.pool)
+	pools, err := OpenPools(ctx, cfg)
+	if err != nil {
+		t.Fatalf("OpenPools failed: %v", err)
+	}
+	t.Cleanup(pools.Close)
+	if err := ApplyMigrations(ctx, pools.OwnerPool()); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	policyManager := newTestPolicyManager(t, pools.Pool())
+	p, err := NewPersistence(ctx, pools, policyManager)
+	if err != nil {
+		t.Fatalf("NewPersistence failed: %v", err)
+	}
+	t.Cleanup(p.Close)
+	return pools, p
+}
+
+// newTestPolicyManager creates an OpenFGA-backed PolicyManager on pool.
+func newTestPolicyManager(t *testing.T, pool *pgxpool.Pool) *authz.PolicyManager {
+	t.Helper()
+	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil, authz.SystemPrincipals{
+	_, policyManager, err := authz.New(t.Context(), pool, fgaServer, nil, authz.SystemPrincipals{
 		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
 		EgressGatewaySPIFFEIDs:   []string{installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace)},
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
@@ -65,7 +91,7 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
-	p.SetPolicyManager(policyManager)
+	return policyManager
 }
 
 func newTestAtespace(name string) *ateapi.Atespace {

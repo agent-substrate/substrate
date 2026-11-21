@@ -49,20 +49,8 @@ func withAtespaceMetadata(mutate func(*ateapi.ResourceMetadata)) func(*ateapi.At
 
 func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	ctx := context.Background()
-	persistence := storetest.SetupPostgresPersistence(t)
-	pool := persistence.Pool()
-
-	fgaServer, err := authz.NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("authz.NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
-
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil, storetest.DefaultSystemPrincipals())
-	if err != nil {
-		t.Fatalf("authz.New failed: %v", err)
-	}
-	persistence.SetPolicyManager(policyManager)
+	fix := storetest.SetupPostgresWithAuthz(t, nil)
+	persistence, pool, authorizer, fgaServer := fix.Persistence, fix.Pool, fix.Authorizer, fix.FGAServer
 
 	storesResp, err := fgaServer.ListStores(ctx, &openfgav1.ListStoresRequest{})
 	if err != nil || len(storesResp.GetStores()) == 0 {

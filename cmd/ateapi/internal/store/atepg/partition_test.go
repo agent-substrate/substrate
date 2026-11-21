@@ -127,13 +127,13 @@ func runContractSuitePartitioned(t *testing.T, key string, tables []string, allo
 	check := newFanOutCheck(key, tables, allowed, pool, t.Errorf)
 	traced := openPool(t, schema, check)
 	storecontract.RunContractTests(t, func(t *testing.T) store.Interface {
-		p, err := NewPersistence(t.Context(), traced)
+		policyManager := newTestPolicyManager(t, traced)
+		p, err := NewPersistence(t.Context(), SinglePool(traced), policyManager)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(p.Close)
 		clearAll(t, p)
-		setTestPolicyManager(t, p)
 		return p
 	})
 	// A table the suite never reads or writes goes unchecked, so a missing
@@ -308,11 +308,9 @@ func migratedPool(t *testing.T, schema string) *pgxpool.Pool {
 	}
 	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+quoted+` CASCADE`) })
 	pool := openPool(t, schema, nil)
-	p, err := NewPersistence(t.Context(), pool)
-	if err != nil {
+	if err := ApplyMigrations(t.Context(), pool); err != nil {
 		t.Fatal(err)
 	}
-	p.Close()
 	return pool
 }
 

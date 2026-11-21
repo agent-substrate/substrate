@@ -30,12 +30,7 @@ func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, testConnectConfig("public"))
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
+	_, p := connectTestPersistence(t, ctx, testConnectConfig("public"))
 	clearAll(t, p)
 
 	created, err := p.CreateWorker(ctx, &ateapi.Worker{
@@ -72,12 +67,7 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, testConnectConfig("public"))
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
+	_, p := connectTestPersistence(t, ctx, testConnectConfig("public"))
 	clearAll(t, p)
 
 	created, err := p.CreateWorker(ctx, &ateapi.Worker{

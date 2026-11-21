@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/openfga/openfga/pkg/server"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
@@ -62,8 +63,24 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 	return SetupPostgresPersistence(t), func() {}
 }
 
+// PostgresFixture holds an isolated PostgreSQL-backed store and its OpenFGA
+// handles for tests that exercise authorization or run SQL directly.
+type PostgresFixture struct {
+	Persistence *atepg.Persistence
+	Pool        *pgxpool.Pool
+	Authorizer  *authz.Authorizer
+	FGAServer   *server.Server
+}
+
 // SetupPostgresPersistence returns an isolated atepg persistence instance.
 func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
+	t.Helper()
+	return SetupPostgresWithAuthz(t, nil).Persistence
+}
+
+// SetupPostgresWithAuthz returns an isolated atepg persistence instance along
+// with its pool, Authorizer, and embedded OpenFGA server.
+func SetupPostgresWithAuthz(t *testing.T, bootstrapOwners []string) PostgresFixture {
 	t.Helper()
 	ctx := context.Background()
 	admin := requireAdminPool(t)
@@ -78,31 +95,41 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 	if err != nil {
 		t.Fatalf("connecting to PostgreSQL test database: %v", err)
 	}
-	persistence, err := atepg.NewPersistence(ctx, pool)
-	if err != nil {
-		pool.Close()
-		t.Fatalf("creating PostgreSQL persistence: %v", err)
-	}
-	pools.Store(persistence, pool)
 	t.Cleanup(func() {
-		pools.Delete(persistence)
 		pool.Close()
 		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+databaseName); err != nil {
 			t.Errorf("dropping PostgreSQL test database: %v", err)
 		}
 	})
-	// The server always wires a PolicyManager, so test stores do too.
+
+	if err := atepg.ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("applying PostgreSQL migrations: %v", err)
+	}
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		t.Fatalf("creating OpenFGA server: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals())
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, bootstrapOwners, DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("initializing OpenFGA authz: %v", err)
 	}
-	persistence.SetPolicyManager(policyManager)
-	return persistence
+
+	persistence, err := atepg.NewPersistence(ctx, atepg.SinglePool(pool), policyManager)
+	if err != nil {
+		t.Fatalf("creating PostgreSQL persistence: %v", err)
+	}
+	pools.Store(persistence, pool)
+	t.Cleanup(func() {
+		persistence.Close()
+		pools.Delete(persistence)
+	})
+	return PostgresFixture{
+		Persistence: persistence,
+		Pool:        pool,
+		Authorizer:  authorizer,
+		FGAServer:   fgaServer,
+	}
 }
 
 // DefaultSystemPrincipals returns valid SystemPrincipals for tests that

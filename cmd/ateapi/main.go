@@ -223,15 +223,15 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
 
-	persistence, err := connectStore(shutdownCtx)
+	pools, err := openPostgresPools(shutdownCtx)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
+		serverboot.Fatal(ctx, "Failed to connect to PostgreSQL", err)
 	}
-	pool := persistence.Pool()
-	defer pool.Close()
-	// Backends may run background maintenance rooted in their own context
-	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
-	defer persistence.Close()
+	defer pools.Close()
+
+	if err := atepg.ApplyMigrations(shutdownCtx, pools.OwnerPool()); err != nil {
+		serverboot.Fatal(ctx, "Failed to apply PostgreSQL migrations", err)
+	}
 
 	if len(*authzBootstrapOwners) == 0 {
 		// Without a bootstrap owner, nobody could create the global
@@ -250,6 +250,7 @@ func main() {
 	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
 	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
 
+	pool := pools.Pool()
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
@@ -265,7 +266,13 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}
-	persistence.SetPolicyManager(policyManager)
+
+	persistence, err := atepg.NewPersistence(shutdownCtx, pools, policyManager)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
+	}
+	// Stop the outbox maintenance loop on shutdown before closing pools.
+	defer persistence.Close()
 
 	clientset, ateClient, err := newKubeClients()
 	if err != nil {
@@ -529,7 +536,7 @@ func logFlagValues(ctx context.Context) {
 // strings, but an external database DSN can carry a password, and the raw
 // value would otherwise be written to the log on every restart. Only the
 // parsed, non-secret parts are logged; a string that does not parse is
-// reported as invalid and connectStore surfaces the actual error.
+// reported as invalid and openPostgresPools reports the actual error.
 func postgresConnectionAttr(key, connString string) slog.Attr {
 	if connString == "" {
 		return slog.String(key, "")
@@ -548,20 +555,20 @@ func postgresConnectionAttr(key, connString string) slog.Attr {
 	)
 }
 
-// connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
-// its configuration is missing or the database can't be reached.
-func connectStore(ctx context.Context) (*atepg.Persistence, error) {
+// openPostgresPools opens the PostgreSQL connection pools. Startup fails if
+// their configuration is missing or the database can't be reached.
+func openPostgresPools(ctx context.Context) (*atepg.Pools, error) {
 	if *postgresReadWriteConnectionString == "" {
 		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
 	}
 	if *postgresPoolMaxConns < 0 {
 		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
 	}
-	persistence, err := connectPostgresWithRetries(ctx)
+	pools, err := openPostgresPoolsWithRetries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
 	}
-	return persistence, nil
+	return pools, nil
 }
 
 var (
@@ -569,10 +576,10 @@ var (
 	postgresConnectPeriod = 2 * time.Second
 )
 
-func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
+func openPostgresPoolsWithRetries(ctx context.Context) (*atepg.Pools, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, atepg.ConnectConfig{
+		pools, err := atepg.OpenPools(ctx, atepg.ConnectConfig{
 			ReadWriteDSN:  *postgresReadWriteConnectionString,
 			OwnerDSN:      *postgresOwnerConnectionString,
 			ReadWriteRole: *postgresReadWriteRole,
@@ -581,7 +588,7 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 			PoolMaxConns:  *postgresPoolMaxConns,
 		})
 		if err == nil {
-			return persistence, nil
+			return pools, nil
 		}
 		if !errors.Is(err, atepg.ErrUnavailable) {
 			return nil, err

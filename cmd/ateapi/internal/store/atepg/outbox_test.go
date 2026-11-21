@@ -34,28 +34,23 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
-// TestConnect_DedicatedWatchPool covers the auxiliary-pool path only Connect
-// takes (the rest of the suite uses NewPersistence, where every operation
-// shares the caller's pool).
-func TestConnect_DedicatedWatchPool(t *testing.T) {
+// TestOpenPools_DedicatedWatchPool covers the auxiliary-pool path OpenPools
+// takes (the rest of the suite uses SinglePool, where every operation shares
+// the caller's pool).
+func TestOpenPools_DedicatedWatchPool(t *testing.T) {
 	requirePool(t) // ensures the container is up and containerDSN is set
 	ctx := context.Background()
 
-	p, err := Connect(ctx, testConnectConfig("public"))
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
+	pools, p := connectTestPersistence(t, ctx, testConnectConfig("public"))
 
 	if p.watchPool == p.pool {
-		t.Fatal("Connect did not create a dedicated watch pool")
+		t.Fatal("OpenPools did not create a dedicated watch pool")
 	}
-	if !p.ownsWatchPool {
-		t.Fatal("Connect must own the watch pool so Close releases it")
+	if !pools.ownsPools {
+		t.Fatal("OpenPools must own its pools so Close releases them")
 	}
-	if p.ownerPool == p.pool || p.ownerPool == p.watchPool || !p.ownsOwnerPool {
-		t.Fatal("Connect must own a dedicated owner pool")
+	if p.ownerPool == p.pool || p.ownerPool == p.watchPool {
+		t.Fatal("OpenPools must create a dedicated owner pool")
 	}
 	if got := p.watchPool.Config().MaxConns; got != watchPoolMaxConns {
 		t.Fatalf("watch pool MaxConns = %d, want %d", got, watchPoolMaxConns)
@@ -456,7 +451,11 @@ func TestWatchWorkers_DeliveryFencedByOldestTransaction(t *testing.T) {
 // on the loop's done channel, so its return IS the assertion.
 func TestClose_StopsMaintenance(t *testing.T) {
 	ctx := context.Background()
-	p, err := NewPersistence(ctx, requirePool(t))
+	pool := requirePool(t)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations failed: %v", err)
+	}
+	p, err := NewPersistence(ctx, SinglePool(pool), newTestPolicyManager(t, pool))
 	if err != nil {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
@@ -523,7 +522,7 @@ func TestOutboxMaintenance_ConcurrentPassesAreHarmless(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
-	replica, err := NewPersistence(ctx, s.pool)
+	replica, err := NewPersistence(ctx, SinglePool(s.pool), s.policyManager)
 	if err != nil {
 		t.Fatalf("second Persistence failed: %v", err)
 	}
@@ -862,15 +861,10 @@ func TestWatchWorkers_ClosesAfterPersistentPollFailure(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	// Connect so the watcher has its own pool: killing it simulates a
+	// OpenPools so the watcher has its own pool: killing it simulates a
 	// persistent outage without touching the shared container pool.
-	p, err := Connect(ctx, testConnectConfig("public"))
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
+	_, p := connectTestPersistence(t, ctx, testConnectConfig("public"))
 	p.pollFailureCloseAfter = 300 * time.Millisecond // before WatchWorkers starts the poller
-	defer p.pool.Close()
-	defer p.Close()
 
 	watch, err := p.WatchWorkers(ctx)
 	if err != nil {
@@ -1041,12 +1035,7 @@ func TestLocalPublishReachesWatchers(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, testConnectConfig("public"))
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
+	_, p := connectTestPersistence(t, ctx, testConnectConfig("public"))
 	clearAll(t, p)
 
 	watch, err := p.WatchWorkers(ctx)
@@ -1125,12 +1114,7 @@ func TestLocalPublishSurvivesWatchClose(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, testConnectConfig("public"))
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.pool.Close()
-	defer p.Close()
+	_, p := connectTestPersistence(t, ctx, testConnectConfig("public"))
 	clearAll(t, p)
 
 	for i := range 20 {
