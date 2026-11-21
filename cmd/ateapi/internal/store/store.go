@@ -101,6 +101,12 @@ type Interface interface {
 	// validation before the write.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
+	// UpdateObservedActor updates an unmodified Actor previously returned by
+	// the store, using its UID and version as guards. mutate edits a copy and
+	// may run before a conflict is detected. Returns the updated Actor with
+	// advanced metadata, or the same errors as UpdateActor.
+	UpdateObservedActor(ctx context.Context, actorRef resources.ActorRef, observed *ateapi.Actor, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error)
+
 	// MarkActorForDeletion initiates the deletion of an actor. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the actor's status. Returns ErrNotFound if missing,

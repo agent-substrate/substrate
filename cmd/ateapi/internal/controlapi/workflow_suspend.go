@@ -179,13 +179,14 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if err != nil {
 		return nil, err
 	}
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING
+	storedActor, err := w.store.UpdateObservedActor(ctx, actorRef, actor, func(toUpdate *ateapi.Actor) error {
+		status := toUpdate.GetStatus()
+		status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING
 		// Increment last_assigned_generation for the new Suspend request and create
 		// a snapshot for that generation with a pending durable copy. Both modes
 		// record where the snapshot is uploaded, so the mode can change on a retry.
-		gen := toUpdate.Status.LastAssignedGeneration + 1
-		toUpdate.Status.LastAssignedGeneration = gen
+		gen := status.LastAssignedGeneration + 1
+		status.LastAssignedGeneration = gen
 
 		snap := newDurableSnapshot(
 			gen,
@@ -196,8 +197,8 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 			uri.String(),
 			ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 		)
-		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
-		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
+		snap.SandboxRuntime = proto.CloneOf(status.GetWorkerAssignment().GetSandboxRuntime())
+		status.Snapshots = append(status.Snapshots, snap)
 		return nil
 	})
 	if err != nil {

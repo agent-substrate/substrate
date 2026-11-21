@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
@@ -69,6 +70,88 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	}
 	if got, want := stored.GetMetadata().GetVersion(), created.GetMetadata().GetVersion()+1; got != want {
 		t.Errorf("version = %d, want %d", got, want)
+	}
+}
+
+func TestUpdateObservedActor(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := t.Context()
+	createTestAtespace(t, s, "team-a")
+	input := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-a"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	created, err := s.CreateActor(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	actorRef := resources.ActorRefFromActor(created)
+	original := proto.CloneOf(created)
+	markRunning := func(actor *ateapi.Actor) error {
+		actor.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+		return nil
+	}
+
+	tracer, tp, spans := newTestQueryTracer(t)
+	traced := &Persistence{pool: openPool(t, "public", tracer)}
+	updateCtx, parent := tp.Tracer("test").Start(ctx, "update actor status")
+	updated, err := traced.UpdateObservedActor(updateCtx, actorRef, created, markRunning)
+	statements := spans.Ended()
+	parent.End()
+	if err != nil {
+		t.Fatalf("UpdateObservedActor: %v", err)
+	}
+	if len(statements) != 1 || statements[0].Name() != "UPDATE actors" {
+		var names []string
+		for _, statement := range statements {
+			names = append(names, statement.Name())
+		}
+		t.Errorf("statements = %v, want [UPDATE actors]", names)
+	}
+	if !proto.Equal(created, original) {
+		t.Error("UpdateObservedActor mutated its input")
+	}
+	if got := updated.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", got)
+	}
+	if got, want := updated.GetMetadata().GetVersion(), original.GetMetadata().GetVersion()+1; got != want {
+		t.Errorf("version = %d, want %d", got, want)
+	}
+
+	if _, err := s.UpdateObservedActor(ctx, actorRef, original, markRunning); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("update with stale version = %v, want ErrVersionConflict", err)
+	}
+	stored, err := s.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if !proto.Equal(stored, updated) {
+		t.Error("stored actor differs from the result of the successful update")
+	}
+	if _, err := s.DeleteActor(ctx, actorRef, store.PreconditionFrom(updated)); err != nil {
+		t.Fatalf("DeleteActor: %v", err)
+	}
+	if _, err := s.UpdateObservedActor(ctx, actorRef, original, markRunning); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("update after delete = %v, want ErrNotFound", err)
+	}
+
+	recreated, err := s.CreateActor(ctx, input)
+	if err != nil {
+		t.Fatalf("recreating actor: %v", err)
+	}
+	if recreated.GetMetadata().GetVersion() != original.GetMetadata().GetVersion() {
+		t.Fatal("recreated actor must have the same version to test the UID guard")
+	}
+	if _, err := s.UpdateObservedActor(ctx, actorRef, original, markRunning); !errors.Is(err, store.ErrUIDConflict) {
+		t.Errorf("update after recreation = %v, want ErrUIDConflict", err)
+	}
+	stored, err = s.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after recreation: %v", err)
+	}
+	if !proto.Equal(stored, recreated) {
+		t.Error("stale update changed the recreated actor")
 	}
 }
 
