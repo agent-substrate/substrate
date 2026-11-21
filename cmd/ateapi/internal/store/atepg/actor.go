@@ -45,20 +45,21 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*at
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	commandTag, err := p.insertIntoAtespace(ctx, atespace, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
-		VALUES ($1, $2, $3, $4, $5)`,
+		SELECT $1, $2, $3, $4, $5
+		WHERE EXISTS (SELECT 1 FROM atespaces WHERE name = $1)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
 		}
-		if isForeignKeyViolation(err) {
-			// The atespace referenced by this actor doesn't exist (or was
-			// deleted concurrently with the control API's own pre-check).
-			return nil, store.ErrFailedPrecondition
-		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		// The atespace referenced by this actor does not exist (or was deleted
+		// concurrently).
+		return nil, store.ErrFailedPrecondition
 	}
 	return dbActor, nil
 }

@@ -167,23 +167,19 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 		return nil, fmt.Errorf("marshaling tag: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	commandTag, err := p.insertIntoAtespace(ctx, atespace, `
 		INSERT INTO tags (atespace, name, uid, version, proto)
-		VALUES ($1, $2, $3, $4, $5)`, atespace, name,
+		SELECT $1, $2, $3, $4, $5
+		WHERE EXISTS (SELECT 1 FROM atespaces WHERE name = $1)`, atespace, name,
 		dbTag.GetMetadata().GetUid(), dbTag.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
 		}
-		if isForeignKeyViolation(err) {
-			switch pgErrConstraint(err) {
-			case "tags_atespace_fk":
-				return nil, store.ErrFailedPrecondition
-			default:
-				return nil, fmt.Errorf("inserting tag %s/%s violated unknown foreign key %q: %w", atespace, name, pgErrConstraint(err), err)
-			}
-		}
 		return nil, fmt.Errorf("inserting tag %s/%s: %w", atespace, name, err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrFailedPrecondition
 	}
 	return dbTag, nil
 }
