@@ -37,6 +37,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/atenet/internal/metrics"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/atenet"
 	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
@@ -85,7 +86,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// HTTP headers carried inside the ProcessingRequest payload. Extract
 	// from there so our span links to the gateway's ingress span.
 	ctx = otel.GetTextMapPropagator().Extract(ctx, md)
-	ctx, span := otel.Tracer(serviceName).Start(ctx, "ExtProc.RequestHeaders")
+	ctx, span := otel.Tracer(metrics.RouterOTelServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
 	actorRef, err := atenet.ParseTargetActor(routingValue(md, atenet.TargetActorHeader, extproc.TargetActorFilterStateAttribute))

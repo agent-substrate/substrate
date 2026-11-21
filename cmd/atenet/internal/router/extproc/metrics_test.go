@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/cmd/atenet/internal/metrics"
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
@@ -145,7 +146,7 @@ func TestClassifyOutcome(t *testing.T) {
 func TestRecordRouteDuration_Attributes(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	h, err := NewRouteDurationHistogram(mp.Meter("atenet-router"))
+	h, err := NewRouteDurationHistogram(mp.Meter(metrics.RouterOTelServiceName))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	h, err := NewRouteDurationHistogram(mp.Meter("atenet-router"))
+	h, err := NewRouteDurationHistogram(mp.Meter(metrics.RouterOTelServiceName))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}

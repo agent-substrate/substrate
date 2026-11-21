@@ -23,6 +23,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"go.ate.dev/substrate/cmd/atenet/internal/metrics"
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
@@ -32,7 +33,7 @@ func newTestParkingMetrics(t *testing.T) (*ParkingMetrics, *sdkmetric.ManualRead
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	rejected, err := mp.Meter("atenet-router").Int64Counter(parkingRejectedMetricName)
+	rejected, err := mp.Meter(metrics.RouterOTelServiceName).Int64Counter(parkingRejectedMetricName)
 	if err != nil {
 		t.Fatalf("create %s counter: %v", parkingRejectedMetricName, err)
 	}

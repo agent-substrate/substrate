@@ -38,6 +38,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/credprovider/v1"
+	"go.ate.dev/substrate/cmd/atenet/internal/metrics"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
@@ -141,9 +142,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// below, because otelgrpc.NewClientHandler captures the global
 	// TracerProvider at construction time. Resolved once so the router's SDK
 	// sampler and Envoy's RandomSampling percent cannot drift.
-	serviceName := "atenet-router"
+	serviceName := metrics.RouterOTelServiceName
 	if s.cfg.Mode == ModeEgress {
-		serviceName = "atenet-egress"
+		serviceName = metrics.EgressOTelServiceName
 	}
 	sampling := serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(dataPlaneTraceRatio))
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
