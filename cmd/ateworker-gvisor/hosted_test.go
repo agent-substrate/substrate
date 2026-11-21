@@ -120,7 +120,7 @@ func TestGracefulShutdownStopsAnActorRestoredDuringTheWait(t *testing.T) {
 		synctest.Wait()
 
 		// The restore finishes.
-		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0); err != nil {
+		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, "", 0); err != nil {
 			t.Fatal(err)
 		}
 		f := newFakeRunsc("app")
@@ -145,7 +145,7 @@ func TestGracefulShutdownLetsASuspendFinish(t *testing.T) {
 				return cgroupstats.Sample{}, fs.ErrNotExist
 			},
 		}
-		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0); err != nil {
+		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, "", 0); err != nil {
 			t.Fatal(err)
 		}
 		f := newFakeRunsc("app")
