@@ -39,6 +39,20 @@ func TestCPUMax(t *testing.T) {
 	}
 }
 
+func TestLifecycleMilliCPU(t *testing.T) {
+	for _, tc := range []struct{ milli, want int64 }{
+		{0, 0},
+		{100, 1000},
+		{250, 1000},
+		{500, 2000},
+		{2000, 8000},
+	} {
+		if got := LifecycleMilliCPU(tc.milli); got != tc.want {
+			t.Errorf("LifecycleMilliCPU(%d) = %d, want %d", tc.milli, got, tc.want)
+		}
+	}
+}
+
 // A leaf left by an earlier incarnation is reused, and its old cap replaced.
 func TestOpenActorLeafReusesAndResetsALeftover(t *testing.T) {
 	root := t.TempDir()
