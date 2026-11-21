@@ -17,13 +17,16 @@ package authz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -564,5 +567,123 @@ func TestAtespacedObjects_NoCollision(t *testing.T) {
 	}
 	if o1, o2 := ActorObject("a", "b"), ActorTemplateObject("a", "b"); o1 == o2 {
 		t.Errorf("ActorObject and ActorTemplateObject collided on %q", o1)
+	}
+}
+
+type sqlQueryCounter struct {
+	count atomic.Int64
+}
+
+func (q *sqlQueryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	q.count.Add(1)
+	return ctx
+}
+
+func (q *sqlQueryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestScopeCheckCache_HitInvalidationExpiryAndIsolation(t *testing.T) {
+	basePool := startPostgres(t)
+	ctx := context.Background()
+
+	if _, err := NewOpenFGAServerWithCache(basePool, -time.Second); err == nil {
+		t.Fatal("expected error for negative cache TTL")
+	}
+
+	counter := &sqlQueryCounter{}
+	tracedCfg := basePool.Config()
+	tracedCfg.ConnConfig.Tracer = counter
+	tracedPool, err := pgxpool.NewWithConfig(ctx, tracedCfg)
+	if err != nil {
+		t.Fatalf("creating traced pool: %v", err)
+	}
+	t.Cleanup(tracedPool.Close)
+
+	// Replica 1 with a long 1h TTL to verify deterministic local invalidation
+	// and zero-SQL scope cache hits across distinct actor names.
+	fgaSrv1, err := NewOpenFGAServerWithCache(tracedPool, time.Hour)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServerWithCache(1h) failed: %v", err)
+	}
+	t.Cleanup(fgaSrv1.Close)
+	auth1, pm1, err := New(ctx, tracedPool, fgaSrv1, nil, testSystemPrincipals())
+	if err != nil {
+		t.Fatalf("authz.New(1) failed: %v", err)
+	}
+
+	writeTestTuple(t, ctx, basePool, pm1, "alice", RoleEditor, AtespaceObject("team-cache"))
+	pm1.InvalidateCache()
+
+	aliceCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "alice", Kind: principal.KindJWT})
+	bobCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "bob", Kind: principal.KindJWT})
+
+	// Warm scope cache on actor-0.
+	if err := auth1.Check(aliceCtx, RelationCanUpdate, ActorObject("team-cache", "actor-0")); err != nil {
+		t.Fatalf("initial Check(actor-0) failed: %v", err)
+	}
+
+	// Checks across 50 distinct new actor names in team-cache must be served
+	// entirely from the scope cache with zero PostgreSQL queries.
+	counter.count.Store(0)
+	for i := 1; i <= 50; i++ {
+		if err := auth1.Check(aliceCtx, RelationCanUpdate, ActorObject("team-cache", fmt.Sprintf("actor-%d", i))); err != nil {
+			t.Fatalf("cached Check(actor-%d) failed: %v", i, err)
+		}
+	}
+	if got := counter.count.Load(); got != 0 {
+		t.Errorf("50 cached distinct-actor Checks executed %d SQL queries, want 0", got)
+	}
+
+	// A canceled context must still fail closed with Internal even on a warm hit.
+	canceledCtx, cancel := context.WithCancel(aliceCtx)
+	cancel()
+	if err := auth1.Check(canceledCtx, RelationCanUpdate, ActorObject("team-cache", "actor-1")); apierror.Code(err) != codes.Internal {
+		t.Errorf("canceled context on warm cache = %v, want Internal", err)
+	}
+
+	// Direct per-actor tuple must NEVER be promoted to an atespace-wide cached allow.
+	writeTestTuple(t, ctx, basePool, pm1, "bob", RelationCanResume, ActorObject("team-cache", "only-bob"))
+	pm1.InvalidateCache()
+	if err := auth1.Check(bobCtx, RelationCanResume, ActorObject("team-cache", "only-bob")); err != nil {
+		t.Fatalf("expected bob allowed on direct actor tuple only-bob, got %v", err)
+	}
+	if err := auth1.Check(bobCtx, RelationCanResume, ActorObject("team-cache", "actor-2")); apierror.Code(err) != codes.PermissionDenied {
+		t.Fatalf("direct actor tuple leaked to sibling actor-2: got %v, want PermissionDenied", err)
+	}
+
+	// Peer replica 2 with a 60ms TTL warms its cache before revocation on replica 1.
+	fgaSrv2, err := NewOpenFGAServerWithCache(basePool, 60*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServerWithCache(60ms) failed: %v", err)
+	}
+	t.Cleanup(fgaSrv2.Close)
+	auth2, _, err := New(ctx, basePool, fgaSrv2, nil, testSystemPrincipals())
+	if err != nil {
+		t.Fatalf("authz.New(2) failed: %v", err)
+	}
+	if err := auth2.Check(aliceCtx, RelationCanUpdate, ActorObject("team-cache", "actor-99")); err != nil {
+		t.Fatalf("peer replica initial Check failed: %v", err)
+	}
+
+	// Revoke alice's atespace policy on replica 1: replica 1 must deny immediately
+	// despite its 1h TTL, and replica 2 must deny once its single 60ms TTL expires.
+	tx, err := basePool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin revoke tx failed: %v", err)
+	}
+	if err := pm1.DeleteAtespacePolicies(ctx, tx, "team-cache"); err != nil {
+		t.Fatalf("DeleteAtespacePolicies failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit revoke tx failed: %v", err)
+	}
+	pm1.InvalidateCache()
+
+	if err := auth1.Check(aliceCtx, RelationCanUpdate, ActorObject("team-cache", "actor-1")); apierror.Code(err) != codes.PermissionDenied {
+		t.Errorf("writing replica 1 served stale allow after revocation: got %v, want PermissionDenied", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if err := auth2.Check(aliceCtx, RelationCanUpdate, ActorObject("team-cache", "actor-99")); apierror.Code(err) != codes.PermissionDenied {
+		t.Errorf("peer replica 2 served stale allow past 1x TTL: got %v, want PermissionDenied", err)
 	}
 }

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -177,22 +179,64 @@ func FormatMember(member string) (string, error) {
 //go:embed model.fga
 var modelDSL string
 
+const (
+	// checkCacheLimit bounds OpenFGA's tuple iterator cache. Stored tuples
+	// live only on global:root and atespace:<name>; per-actor CheckQueryCache
+	// stays disabled because 1M+ unique actor names and contextual tuples
+	// churn multi-GiB heaps with low hit rates and multi-hop TTL staleness.
+	checkCacheLimit = 16_384
+)
+
+var serverCaches sync.Map // *server.Server -> *checkCache
+
 // NewOpenFGAServer creates an embedded OpenFGA server backed by a transaction-aware
-// PostgreSQL datastore on pool. Calling Close on the returned server stops
-// OpenFGA's background workers without closing the caller-owned pool.
+// PostgreSQL datastore on pool with in-memory caching disabled. Calling Close on
+// the returned server stops OpenFGA's background workers without closing pool.
 func NewOpenFGAServer(pool *pgxpool.Pool) (*server.Server, error) {
+	return NewOpenFGAServerWithCache(pool, 0)
+}
+
+// NewOpenFGAServerWithCache creates an embedded OpenFGA server on pool. When
+// cacheTTL > 0, it enables a bounded tuple iterator cache and coordinates
+// generation-invalidated scope-level positive Check caching in Authorizer.
+func NewOpenFGAServerWithCache(pool *pgxpool.Pool, cacheTTL time.Duration) (*server.Server, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("postgres pool must not be nil")
+	}
+	if cacheTTL < 0 {
+		return nil, fmt.Errorf("authz cache TTL must not be negative: %s", cacheTTL)
 	}
 	rawDatastore, err := postgres.NewWithDB(pool, nil, sqlcommon.NewConfig())
 	if err != nil {
 		return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
 	}
-	fgaServer, err := server.NewServerWithOpts(
-		server.WithDatastore(newTransactionalDatastore(rawDatastore)),
-	)
+	var cache *checkCache
+	opts := []server.OpenFGAServiceV1Option{
+		server.WithCheckQueryCacheEnabled(false),
+		server.WithCacheControllerEnabled(false),
+	}
+	if cacheTTL > 0 {
+		cache, err = newCheckCache(checkCacheLimit, cacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("creating OpenFGA check cache: %w", err)
+		}
+		opts = append(opts,
+			server.WithCheckCache(cache),
+			server.WithCheckIteratorCacheEnabled(true),
+			server.WithCheckIteratorCacheTTL(cacheTTL),
+		)
+	}
+	opts = append(opts, server.WithDatastore(newTransactionalDatastore(rawDatastore, cache)))
+	fgaServer, err := server.NewServerWithOpts(opts...)
 	if err != nil {
+		if cache != nil {
+			cache.Stop()
+		}
 		return nil, fmt.Errorf("creating OpenFGA server: %w", err)
+	}
+	if cache != nil {
+		cache.onStop = func() { serverCaches.Delete(fgaServer) }
+		serverCaches.Store(fgaServer, cache)
 	}
 	return fgaServer, nil
 }
@@ -256,17 +300,23 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 	if err != nil {
 		return nil, nil, err
 	}
+	var cache *checkCache
+	if c, ok := serverCaches.Load(fgaServer); ok {
+		cache, _ = c.(*checkCache)
+	}
 	authorizer := &Authorizer{
 		fgaServer:        fgaServer,
 		storeID:          storeID,
 		modelID:          modelID,
 		bootstrapOwners:  owners,
 		systemPrincipals: systemPrincipals,
+		cache:            cache,
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,
 		storeID:   storeID,
 		modelID:   modelID,
+		cache:     cache,
 	}
 	return authorizer, policyManager, nil
 }

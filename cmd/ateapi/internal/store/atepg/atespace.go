@@ -150,6 +150,7 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
 	}
+	p.policyManager.InvalidateCache()
 	out := &ateapi.Atespace{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted atespace: %w", err)
