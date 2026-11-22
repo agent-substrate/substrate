@@ -23,8 +23,8 @@ contract). The flow, with the type hooks marked:
   2. Wait for docker; clone the substrate branch once, or build
      --substrate-dir as it is.
   3. Per test entry:
-     a. Source the target cluster's env file, or --env-file; gcloud/
-        docker/kubectl setup and the runner image build [hook:
+     a. Source the target cluster's env file, or --env-file; cluster
+        setup and the runner image build [hook:
         build_image] are cached per env file.
      b. Sweep leftovers, deploy substrate, let the type shape the
         cluster [hook: pre_test], deploy the shared workloads when the
@@ -72,6 +72,11 @@ from workers import SANDBOX_CLASSES
 SUBSTRATE_DIR = "/workspace/substrate"
 TARGET_CLUSTER_DIR = "/etc/orchestrator/target-clusters"
 ENV_FILE_NAME = ".ate-dev-env.sh"
+GKE_COORDINATES = ("PROJECT_ID", "CLUSTER_NAME", "CLUSTER_LOCATION")
+CLUSTER_SELECTORS = (
+    *GKE_COORDINATES, "KUBECONFIG", "KUBECTL_CONTEXT",
+    "ATE_INSTALL_KIND", "KIND_CLUSTER_NAME", "ATE_CONFIG",
+)
 # The runner Job templates ship next to this script, both in the image and
 # in the checkout.
 MANIFESTS_DIR = str(Path(__file__).resolve().parent / "manifests")
@@ -202,20 +207,17 @@ def select_tests(tests: list[dict], names: list[str]) -> list[dict]:
     return [t for t in tests if t.get("name") in names]
 
 
-def source_env(path: str) -> None:
-    # env -0: a developer shell exports multi-line bash functions, which
-    # newline splitting would turn into bogus keys.
+def source_env(path: Path) -> None:
+    # env -0 preserves multi-line values, including exported Bash functions.
     result = subprocess.run(
-        ["bash", "-c", f'set -a; source "{path}"; env -0'],
+        ["bash", str(Path(__file__).with_name("source-target-env.sh")), str(path)],
         check=True,
         capture_output=True,
         text=True,
     )
-    for entry in result.stdout.split("\0"):
-        if "=" not in entry:
-            continue
-        k, _, v = entry.partition("=")
-        os.environ[k] = v
+    sourced = dict(entry.split("=", 1) for entry in result.stdout.split("\0") if "=" in entry)
+    os.environ.clear()
+    os.environ.update(sourced)
 
 
 def is_own_env_file(src: Path, substrate_dir: str) -> bool:
@@ -226,20 +228,16 @@ def is_own_env_file(src: Path, substrate_dir: str) -> bool:
 
 
 def apply_env_file(src: Path, substrate_dir: str = SUBSTRATE_DIR) -> None:
-    """Install src as the substrate checkout's .ate-dev-env.sh (so ate-setup
-    / deploy.sh source it) and merge it into this process's env (so the
-    orchestrator's own gcloud / docker / kubectl calls see the same values).
-    Resets os.environ to the startup baseline first so vars defined by a
-    previous env file don't bleed into the next one."""
+    """Source the target env file from the checkout, starting from the caller's
+    environment with cluster selectors cleared."""
     os.environ.clear()
-    os.environ.update(_ORIG_ENV)
+    os.environ.update({k: v for k, v in _ORIG_ENV.items() if k not in CLUSTER_SELECTORS})
     dst = Path(substrate_dir) / ENV_FILE_NAME
     if not is_own_env_file(src, substrate_dir):
         shutil.copy(src, dst)
-    source_env(str(dst))
-    for k in ("PROJECT_ID", "CLUSTER_NAME", "CLUSTER_LOCATION", "KO_DOCKER_REPO"):
-        if not os.environ.get(k):
-            raise RuntimeError(f"{k} not set after sourcing {src}")
+    source_env(dst)
+    if not os.environ.get("KO_DOCKER_REPO"):
+        raise RuntimeError(f"KO_DOCKER_REPO not set after sourcing {src}")
 
 
 def clear_env_file(src: Path, substrate_dir: str = SUBSTRATE_DIR) -> None:
@@ -275,6 +273,97 @@ def gcloud_setup_for_target_cluster(configure_docker: bool) -> None:
             os.environ["PROJECT_ID"],
         ]
     )
+
+
+def prepare_kubeconfig_users(config: dict[str, Any]) -> None:
+    # kubectl --flatten embeds certificates and keys but leaves these paths
+    # relative to the original kubeconfig. The first file defining a user wins.
+    files = os.environ.get("KUBECONFIG") or str(Path.home() / ".kube" / "config")
+    for user in config.get("users") or ():
+        auth = user["user"]
+        provider = auth.get("auth-provider") or {}
+        if provider.get("name") == "oidc" and (provider.get("config") or {}).get("refresh-token"):
+            raise ValueError(
+                "OIDC refresh tokens cannot be written back from the temporary kubeconfig. "
+                "Use an exec credential plugin for this target."
+            )
+        token_file = auth.get("tokenFile")
+        command = (auth.get("exec") or {}).get("command", "")
+        relative_token = token_file and not os.path.isabs(token_file)
+        relative_exec = os.sep in command and not os.path.isabs(command)
+        if not relative_token and not relative_exec:
+            continue
+        for filename in filter(None, files.split(os.pathsep)):
+            names = run(
+                ["kubectl", "--kubeconfig", filename, "config", "view",
+                 "-o", "jsonpath-as-json={.users[*].name}"],
+                stdout=subprocess.PIPE, text=True,
+            ).stdout
+            if user["name"] in json.loads(names):
+                # client-go cleans relative auth paths with filepath.Join.
+                directory = Path(filename).parent
+                if relative_token:
+                    auth["tokenFile"] = os.path.abspath(directory / token_file)
+                if relative_exec:
+                    auth["exec"]["command"] = os.path.abspath(directory / command)
+                break
+        else:
+            raise ValueError("Could not resolve authentication paths in the target kubeconfig.")
+
+
+def prepare_target_cluster(kubeconfig: Path, *, configure_docker: bool) -> dict[str, str]:
+    """Select a target and pin it in the run's private kubeconfig."""
+    context = os.environ.get("KUBECTL_CONTEXT")
+    if not context and os.environ.get("ATE_INSTALL_KIND", "").lower() in ("1", "t", "true"):
+        context = "kind-" + (os.environ.get("KIND_CLUSTER_NAME") or "kind")
+    use_existing = bool(context or os.environ.get("KUBECONFIG"))
+    missing = [var for var in GKE_COORDINATES if not os.environ.get(var)]
+    if use_existing and not missing:
+        raise ValueError(
+            "GKE coordinates and existing credentials both select a target. "
+            "For GKE discovery, remove KUBECTL_CONTEXT and KUBECONFIG from the env file. "
+            "For existing credentials, remove the GKE coordinates."
+        )
+    if not use_existing:
+        if missing:
+            raise ValueError(
+                f"Set KUBECONFIG or KUBECTL_CONTEXT in the env file, "
+                f"or complete the GKE coordinates ({', '.join(missing)} missing)."
+            )
+        if not shutil.which("gcloud"):
+            raise RuntimeError("Install gcloud for GKE discovery or supply existing credentials.")
+        # A previous target may have populated the file. Start discovery with an
+        # empty kubeconfig so it cannot leave a context from another target.
+        kubeconfig.unlink(missing_ok=True)
+        os.environ["KUBECONFIG"] = str(kubeconfig)
+        gcloud_setup_for_target_cluster(configure_docker)
+
+    cmd = ["kubectl", "config", "view", "--minify", "-o", "json"]
+    if context:
+        cmd.extend(["--context", context])
+    if use_existing:
+        cmd.extend(["--flatten", "--raw"])
+    config = json.loads(run(cmd, stdout=subprocess.PIPE, text=True).stdout)
+    # Minify also accepts a context whose cluster name is empty.
+    clusters = config["clusters"] or []
+    if not clusters or not clusters[0]["cluster"].get("server"):
+        raise ValueError("The target kubeconfig has no cluster server.")
+    if use_existing:
+        prepare_kubeconfig_users(config)
+        kubeconfig.unlink(missing_ok=True)
+        fd = os.open(kubeconfig, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(config, f)
+
+    target_env = {"KUBECONFIG": str(kubeconfig), "KUBECTL_CONTEXT": config["current-context"]}
+    run(
+        [
+            "kubectl", "--request-timeout=10s", "get", "namespace", "ate-system",
+            "--ignore-not-found", "-o", "name",
+        ],
+        env={**os.environ, **target_env},
+    )
+    return target_env
 
 
 def test_type(test: dict[str, Any]) -> str:
@@ -535,8 +624,8 @@ def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
     run(["go", "run", "./cmd/ate-setup", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
 
 
-def teardown_substrate() -> None:
-    run_no_check(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
+def teardown_substrate(cluster_args: Iterable[str]) -> None:
+    run_no_check(["go", "run", "./cmd/ate-setup", "delete", "ate-system", *cluster_args])
 
 
 def deploy_workloads(
@@ -690,14 +779,10 @@ def main() -> None:
     except ValueError as e:
         sys.exit(str(e))
 
-    # gcloud get-credentials writes the cluster into KUBECONFIG and makes it
-    # the current context, so give the run its own file rather than the
-    # caller's ~/.kube/config. Set in _ORIG_ENV too, so it survives
-    # apply_env_file's reset.
+    # Keep a private kubeconfig for both credential discovery and existing targets.
     kubeconfig_dir = tempfile.TemporaryDirectory(prefix="orchestrator-")
     atexit.register(kubeconfig_dir.cleanup)
-    kubeconfig = str(Path(kubeconfig_dir.name) / "kubeconfig")
-    _ORIG_ENV["KUBECONFIG"] = os.environ["KUBECONFIG"] = kubeconfig
+    kubeconfig = Path(kubeconfig_dir.name) / "kubeconfig"
 
     # Every run of this invocation is stored under this timestamp (runner.py
     # --run-ts), so a run finds another test's run of the invocation by it.
@@ -723,6 +808,30 @@ def main() -> None:
     tag = build_tag(substrate_dir)
     print(f"Building {tag} from {substrate_dir}", flush=True)
 
+    results = run_tests(tests, args, tag, run_ts, kubeconfig)
+
+    print("\n=== summary ===", flush=True)
+    failed = 0
+    for name, status, duration, _ in results:
+        print(f"  {name}: {status} ({duration:.2f}s)", flush=True)
+        if status != "complete":
+            failed += 1
+
+    if args.junit_output:
+        print(f"Writing JUnit XML report to {args.junit_output}", flush=True)
+        write_junit_xml(args.junit_output, results)
+
+    sys.exit(1 if failed else 0)
+
+
+def run_tests(
+    tests: list[dict[str, Any]],
+    args: argparse.Namespace,
+    tag: str,
+    run_ts: int,
+    kubeconfig: Path,
+) -> list[tuple[str, str, float, str | None]]:
+    substrate_dir = args.substrate_dir or SUBSTRATE_DIR
     # Per-env-file caches: re-running setup for the same env file is
     # wasted work, so we track what was last set up and only redo it when
     # the env file changes (substrate images get rebuilt by ate-setup each
@@ -730,6 +839,7 @@ def main() -> None:
     # a locust-only tests.yaml never builds the nighthawk image and vice
     # versa.
     last_env_file = None
+    target_env: dict[str, str] = {}
     images: dict[str, str] = {}
     results = []
 
@@ -741,24 +851,30 @@ def main() -> None:
         )
 
         try:
-            apply_env_file(env_file, substrate_dir)
-        except Exception as e:
-            print(f"Failed to apply env file {env_file}: {e}", flush=True)
-            results.append((test["name"], "config-error", 0.0, str(e)))
-            clear_env_file(env_file, substrate_dir)
-            continue
-        # The env file may export a KUBECONFIG of its own.
-        os.environ["KUBECONFIG"] = kubeconfig
+            try:
+                apply_env_file(env_file, substrate_dir)
+                if env_file != last_env_file:
+                    # Invalidate the previous selection before prepare can
+                    # replace the private kubeconfig, even if prepare fails.
+                    last_env_file = None
+                    target_env = prepare_target_cluster(
+                        kubeconfig, configure_docker=not args.substrate_dir
+                    )
+                    images = {}
+                    last_env_file = env_file
+            except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as e:
+                print(f"Failed to prepare env file {env_file}: {e}", flush=True)
+                results.append((test["name"], "config-error", 0.0, str(e)))
+                continue
 
-        try:
-            if env_file != last_env_file:
-                # A --substrate-dir run pushes with the docker auth the
-                # caller already has.
-                gcloud_setup_for_target_cluster(
-                    configure_docker=not args.substrate_dir
-                )
-                images = {}
-                last_env_file = env_file
+            os.environ.update(target_env)
+            # Subprocesses inherit the sourced settings and pinned kubeconfig.
+            # A second source could replace the target for workload cleanup.
+            os.environ["NO_DEV_ENV"] = "1"
+            cluster_args = [
+                "--kubeconfig", target_env["KUBECONFIG"],
+                "--context", target_env["KUBECTL_CONTEXT"],
+            ]
             ttype = test_type(test)
             if ttype not in images:
                 images[ttype] = TYPES[ttype].build_image(tag)
@@ -769,14 +885,14 @@ def main() -> None:
             # into this run. All teardowns use --ignore-not-found, so
             # this is cheap on a clean cluster.
             teardown_test_workloads(TYPES)
-            teardown_substrate()
+            teardown_substrate(cluster_args)
 
             sandbox_class = test.get("sandboxClass", "gvisor")
             status = "error"
             failure_msg = None
             start_time = time.time()
             try:
-                deploy_substrate(substrate_args(test))
+                deploy_substrate([*substrate_args(test), *cluster_args])
                 TYPES[ttype].pre_test(test)
                 if TYPES[ttype].USES_SHARED_WORKLOADS:
                     deploy_workloads(
@@ -809,7 +925,7 @@ def main() -> None:
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
                 teardown_test_workloads([ttype])
-                teardown_substrate()
+                teardown_substrate(cluster_args)
             duration = time.time() - start_time
             results.append((test["name"], status, duration, failure_msg))
         finally:
@@ -818,18 +934,7 @@ def main() -> None:
             # apply_env_file fails partway through.
             clear_env_file(env_file, substrate_dir)
 
-    print("\n=== summary ===", flush=True)
-    failed = 0
-    for name, status, duration, _ in results:
-        print(f"  {name}: {status} ({duration:.2f}s)", flush=True)
-        if status != "complete":
-            failed += 1
-
-    if args.junit_output:
-        print(f"Writing JUnit XML report to {args.junit_output}", flush=True)
-        write_junit_xml(args.junit_output, results)
-
-    sys.exit(1 if failed else 0)
+    return results
 
 
 if __name__ == "__main__":

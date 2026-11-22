@@ -128,7 +128,7 @@ class EnvFileTest(unittest.TestCase):
 
     def test_missing_var(self):
         self.dev.write_text("export PROJECT_ID=p\n")
-        with self.assertRaisesRegex(RuntimeError, "CLUSTER_NAME"):
+        with self.assertRaisesRegex(RuntimeError, "KO_DOCKER_REPO"):
             orchestrator.apply_env_file(self.dev, str(self.checkout))
 
     def test_exported_bash_function_does_not_pollute_env(self):
@@ -139,6 +139,19 @@ class EnvFileTest(unittest.TestCase):
         self.assertEqual(os.environ["KO_DOCKER_REPO"], "r/x")
         self.assertNotIn(" Y", os.environ)
         self.assertTrue(os.environ["BASH_FUNC_f%%"].endswith("}"))
+
+    def test_selector_and_unset_values_come_from_env_file(self):
+        startup = dict.fromkeys(orchestrator.CLUSTER_SELECTORS, "caller")
+        startup["BENCHMARK_METADATA"] = '{"build": "caller"}'
+        self.dev.write_text("echo sourcing\nKO_DOCKER_REPO=r/x\n"
+                            "KUBECTL_CONTEXT=bench\nunset BENCHMARK_METADATA\n")
+        with mock.patch.object(orchestrator, "_ORIG_ENV", startup):
+            orchestrator.apply_env_file(self.dev, str(self.checkout))
+        self.assertEqual(
+            {k: os.environ[k] for k in startup if k in os.environ},
+            {"KUBECTL_CONTEXT": "bench"},
+        )
+        self.assertEqual(os.environ["KO_DOCKER_REPO"], "r/x")
 
     def test_check_env_files(self):
         dev = {"targetCluster": "dev"}
@@ -265,8 +278,11 @@ class DeploySubstrateTest(unittest.TestCase):
 
     @mock.patch("orchestrator.run_no_check")
     def test_teardown_substrate(self, run_no_check):
-        orchestrator.teardown_substrate()
-        run_no_check.assert_called_once_with(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
+        cluster_args = ["--kubeconfig", "/config", "--context", "bench"]
+        orchestrator.teardown_substrate(cluster_args)
+        run_no_check.assert_called_once_with(
+            ["go", "run", "./cmd/ate-setup", "delete", "ate-system", *cluster_args]
+        )
 
 
 class DeployWorkloadsTest(unittest.TestCase):
@@ -668,10 +684,9 @@ class NighthawkEgressTest(unittest.TestCase):
                         apply_env_file=mock.DEFAULT,
                         clear_env_file=mock.DEFAULT,
                     ),
-                    # main points KUBECONFIG at a file of its own.
                     mock.patch.dict(os.environ),
-                    mock.patch.dict(orchestrator._ORIG_ENV),
-                    mock.patch("orchestrator.gcloud_setup_for_target_cluster"),
+                    mock.patch("orchestrator.prepare_target_cluster",
+                               return_value={"KUBECONFIG": "/config", "KUBECTL_CONTEXT": "bench"}),
                     mock.patch("orchestrator.deploy_substrate"),
                     mock.patch("orchestrator.teardown_substrate"),
                     mock.patch("orchestrator.run_test", return_value="complete"),
@@ -817,6 +832,193 @@ class JobNameTest(unittest.TestCase):
 
 
 CLUSTER_ENV = {"CLUSTER_NAME": "c", "CLUSTER_LOCATION": "l", "PROJECT_ID": "p"}
+
+
+class TargetClusterCredentialsTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.snapshot = self.root / "target.json"
+        self.view = {
+            "current-context": "bench", "clusters": [{"cluster": {"server": "https://bench.invalid"}}],
+            "users": None,
+        }
+
+    @mock.patch("orchestrator.run")
+    def test_auth_paths_use_the_first_file_defining_the_user(self, run):
+        first, second, third = (self.root / name / "config" for name in ("a", "b", "c"))
+        auth = {"tokenFile": "current/../token", "exec": {"command": "bin/../get-token"}}
+        config = {"users": [{"name": "2026-11-01", "user": auth}]}
+        run.side_effect = [mock.Mock(stdout='["other"]'), mock.Mock(stdout='["2026-11-01"]')]
+        with mock.patch.dict(os.environ, {"KUBECONFIG": os.pathsep.join(map(str, (first, second, third)))}):
+            orchestrator.prepare_kubeconfig_users(config)
+        self.assertEqual([call.args[0][2] for call in run.call_args_list], [str(first), str(second)])
+        self.assertEqual(auth["tokenFile"], str(second.parent / "token"))
+        self.assertEqual(auth["exec"]["command"], str(second.parent / "get-token"))
+
+    @mock.patch("orchestrator.run")
+    def test_existing_credentials_use_private_kubeconfig(self, run):
+        cases = [
+            ({"KUBECONFIG": "/a:/b"}, "bench", []),
+            ({"KUBECTL_CONTEXT": "explicit"}, "explicit", ["--context", "explicit"]),
+            ({"ATE_INSTALL_KIND": "true", "KIND_CLUSTER_NAME": "local"},
+             "kind-local", ["--context", "kind-local"]),
+        ]
+        for env, context, flags in cases:
+            with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
+                run.reset_mock()
+                view = {**self.view, "current-context": context}
+                run.return_value.stdout = json.dumps(view)
+                self.snapshot.write_text("previous kubeconfig")
+                target = orchestrator.prepare_target_cluster(self.snapshot, configure_docker=True)
+                config, probe = run.call_args_list
+                self.assertEqual(config.args[0], [
+                    "kubectl", "config", "view", "--minify", "-o", "json",
+                    *flags, "--flatten", "--raw",
+                ])
+                self.assertEqual(target, {"KUBECONFIG": str(self.snapshot), "KUBECTL_CONTEXT": context})
+                self.assertEqual(probe.kwargs["env"], {**env, **target})
+                self.assertEqual(json.loads(self.snapshot.read_text()), view)
+                self.assertEqual(self.snapshot.stat().st_mode & 0o777, 0o600)
+
+    @mock.patch("orchestrator.shutil.which", return_value="/tools/gcloud")
+    @mock.patch("orchestrator.run")
+    def test_gke_uses_private_kubeconfig(self, run, which):
+        def run_in_target(cmd, **kwargs):
+            if cmd[:3] == ["gcloud", "container", "clusters"]:
+                self.assertEqual(os.environ["KUBECONFIG"], str(self.snapshot))
+                self.assertFalse(self.snapshot.exists())
+                self.snapshot.write_text(json.dumps(self.view))
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(self.view))
+
+        run.side_effect = run_in_target
+        env = {**CLUSTER_ENV, "KO_DOCKER_REPO": "gcr.io/p"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.snapshot.write_text("previous target")
+            target = orchestrator.prepare_target_cluster(self.snapshot, configure_docker=True)
+        self.assertEqual([c.args[0] for c in run.call_args_list[:2]], [
+            ["gcloud", "auth", "configure-docker", "gcr.io", "--quiet"],
+            ["gcloud", "container", "clusters", "get-credentials", "c",
+             "--location", "l", "--project", "p"],
+        ])
+        self.assertEqual(target, {"KUBECONFIG": str(self.snapshot), "KUBECTL_CONTEXT": "bench"})
+        self.assertEqual(json.loads(self.snapshot.read_text()), self.view)
+
+    @mock.patch("orchestrator.run")
+    def test_missing_or_mixed_credentials_fail_before_kubectl(self, run):
+        cases = [
+            ({}, "Set KUBECONFIG or KUBECTL_CONTEXT"),
+            ({"PROJECT_ID": "p"}, "CLUSTER_NAME, CLUSTER_LOCATION missing"),
+            ({**CLUSTER_ENV, "KUBECTL_CONTEXT": "legacy"}, "remove KUBECTL_CONTEXT"),
+            ({**CLUSTER_ENV, "KUBECONFIG": "/config"}, "remove KUBECTL_CONTEXT and KUBECONFIG"),
+        ]
+        for env, error in cases:
+            with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaisesRegex(ValueError, error):
+                    orchestrator.prepare_target_cluster(self.snapshot, configure_docker=True)
+        run.assert_not_called()
+
+    @mock.patch("orchestrator.teardown_substrate")
+    @mock.patch("orchestrator.teardown_test_workloads")
+    @mock.patch("orchestrator.run")
+    def test_failed_preflight_skips_cleanup(self, run, workloads, substrate):
+        oidc = {"name": "oidc", "config": {"refresh-token": "fixture"}}
+        cases = [
+            ({"clusters": [{"cluster": {"server": ""}}]}, "no cluster server", 1),
+            ({"users": [{"name": "bench", "user": {"auth-provider": oidc}}]}, "exec credential plugin", 1),
+            ({}, "returned non-zero exit status", 2),
+        ]
+        test = {"name": "sample", "targetCluster": "bench", "type": "locust"}
+        script = self.root / "bench.sh"
+        script.write_text("KO_DOCKER_REPO=r/x\nKUBECTL_CONTEXT=bench\n")
+        args = argparse.Namespace(substrate_dir=str(self.root), env_file=str(script))
+        for fields, message, expected_calls in cases:
+            with self.subTest(message=message), mock.patch.dict(os.environ):
+                run.reset_mock()
+                run.side_effect = [
+                    mock.Mock(stdout=json.dumps({**self.view, **fields})),
+                    subprocess.CalledProcessError(1, ["kubectl", "get"]),
+                ]
+                result, = orchestrator.run_tests([test], args, "tag", 0, self.snapshot)
+                self.assertEqual(result[1], "config-error")
+                self.assertIn(message, result[3])
+                self.assertEqual(run.call_count, expected_calls)
+                workloads.assert_not_called()
+                substrate.assert_not_called()
+
+    def test_env_file_override_pins_workloads_and_cleanup(self):
+        env_file = self.root / orchestrator.ENV_FILE_NAME
+        content = "KO_DOCKER_REPO=r/x\nKUBECONFIG=/input\nKUBECTL_CONTEXT=bench\n"
+        env_file.write_text(content)
+        args = argparse.Namespace(
+            substrate_dir=str(self.root), env_file=str(env_file), dest="dest", manifests_dir="m",
+        )
+        tests = [{"name": c, "targetCluster": c, "type": "locust"} for c in ("dev", "prod")]
+        target = {"KUBECONFIG": str(self.snapshot), "KUBECTL_CONTEXT": "bench"}
+
+        def check_target(*_args):
+            self.assertEqual({k: os.environ[k] for k in target}, target)
+            self.assertEqual(os.environ["NO_DEV_ENV"], "1")
+
+        ttype = mock.Mock(USES_SHARED_WORKLOADS=True)
+        with (
+            mock.patch.dict(orchestrator.TYPES, {"locust": ttype}, clear=True),
+            mock.patch.dict(os.environ),
+            mock.patch("orchestrator.prepare_target_cluster", return_value=target) as prepare,
+            mock.patch("orchestrator.deploy_workloads", side_effect=check_target) as deploy,
+            mock.patch("orchestrator.teardown_test_workloads", side_effect=check_target) as cleanup,
+            mock.patch("orchestrator.deploy_substrate", side_effect=check_target) as install,
+            mock.patch("orchestrator.teardown_substrate", side_effect=check_target) as uninstall,
+            mock.patch("orchestrator.run_test", return_value="complete"),
+        ):
+            results = orchestrator.run_tests(tests, args, "tag", 0, self.snapshot)
+        self.assertEqual([result[1] for result in results], ["complete", "complete"])
+        prepare.assert_called_once_with(self.snapshot, configure_docker=False)
+        self.assertEqual(deploy.call_count, 2)
+        self.assertEqual(cleanup.call_count, 4)
+        flags = ["--kubeconfig", str(self.snapshot), "--context", "bench"]
+        self.assertEqual(install.call_args.args[0][-len(flags):], flags)
+        self.assertEqual(uninstall.call_args_list, [mock.call(flags)] * 4)
+        self.assertEqual(env_file.read_text(), content)
+
+
+    def test_failed_target_switch_invalidates_previous_kubeconfig(self):
+        for context in ("bench", "broken"):
+            (self.root / f"{context}.sh").write_text(f"KO_DOCKER_REPO=r/x\nKUBECTL_CONTEXT={context}\n")
+        args = argparse.Namespace(
+            substrate_dir=str(self.root), env_file=None, target_cluster_dir=str(self.root),
+            dest="dest", manifests_dir="m",
+        )
+        tests = [
+            {"name": c, "targetCluster": c, "type": "locust"}
+            for c in ("bench", "broken", "bench")
+        ]
+
+        def prepare(path, **_kwargs):
+            context = os.environ["KUBECTL_CONTEXT"]
+            path.write_text(context)
+            if context == "broken":
+                raise ValueError("unreachable target")
+            return {"KUBECONFIG": str(path), "KUBECTL_CONTEXT": context}
+
+        def check_target(*_args):
+            self.assertEqual(self.snapshot.read_text(), "bench")
+
+        with (
+            mock.patch.dict(orchestrator.TYPES, {"locust": mock.Mock()}, clear=True),
+            mock.patch.dict(os.environ),
+            mock.patch("orchestrator.prepare_target_cluster", side_effect=prepare) as select,
+            mock.patch("orchestrator.teardown_test_workloads", side_effect=check_target) as cleanup,
+            mock.patch("orchestrator.teardown_substrate"),
+            mock.patch("orchestrator.deploy_workloads"),
+            mock.patch("orchestrator.deploy_substrate"),
+            mock.patch("orchestrator.run_test", return_value="complete"),
+        ):
+            results = orchestrator.run_tests(tests, args, "tag", 0, self.snapshot)
+        self.assertEqual([result[1] for result in results], ["complete", "config-error", "complete"])
+        self.assertEqual(select.call_count, 3)
+        self.assertEqual(cleanup.call_count, 4)
 
 
 class RunMetadataTest(unittest.TestCase):
