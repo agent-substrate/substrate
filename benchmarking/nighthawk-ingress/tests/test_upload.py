@@ -18,6 +18,10 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import obstore
+import pytest
+from obstore.store import MemoryStore
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from nighthawk_common.output import upload, upload_files
@@ -31,15 +35,17 @@ def test_upload_copies_to_a_local_path(tmp_path):
     assert dest.read_text() == "{}"
 
 
-def test_upload_sends_a_gs_uri_to_its_bucket(tmp_path):
+@pytest.mark.parametrize("root", ["gs://bucket/run", "s3://bucket/run", "az://container/run"])
+def test_upload_files_sends_object_store_urls_to_the_store(tmp_path, monkeypatch, root):
+    monkeypatch.chdir(tmp_path)
     src = tmp_path / "capacity.json"
     src.write_text("{}")
-    with mock.patch("google.cloud.storage.Client") as client:
-        upload(src, "gs://bucket/path/runs/name/capacity.json")
-    bucket = client.return_value.bucket
-    bucket.assert_called_once_with("bucket")
-    bucket.return_value.blob.assert_called_once_with("path/runs/name/capacity.json")
-    bucket.return_value.blob.return_value.upload_from_filename.assert_called_once_with(str(src))
+    store = MemoryStore()
+    with mock.patch("result_store.from_url", return_value=store) as from_url:
+        assert upload_files([src], root) == []
+    from_url.assert_called_once_with(root)
+    assert bytes(obstore.get(store, "capacity.json").bytes()) == b"{}"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["capacity.json"]
 
 
 def test_upload_files_goes_on_after_a_missing_file_and_a_failure(tmp_path, capsys):
