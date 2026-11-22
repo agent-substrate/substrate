@@ -100,7 +100,7 @@ All three share `layouts/_partials/raw-markdown.html` with the per-page
 
 On doc pages, the first mention of each glossary term gets a hover card with
 its definition and a link to the term on the glossary page. Terms and
-definitions come only from `docs/glossary.md`: each term is a top-level
+definitions come only from `docs/reference/glossary.md`: each term is a top-level
 bullet like
 
 ```markdown
