@@ -43,6 +43,35 @@ class SelectTestsTest(unittest.TestCase):
             orchestrator.select_tests(self.TESTS, ["a", "y", "x"])
 
 
+class RegistryAuthTest(unittest.TestCase):
+    @mock.patch("orchestrator.run")
+    def test_configures_only_google_registries(self, run):
+        cases = {
+            "gcr.io/project/images": "gcr.io",
+            "us.gcr.io/project/images": "us.gcr.io",
+            "us-central1-docker.pkg.dev/project/images": "us-central1-docker.pkg.dev",
+            "registry.example.com/project/images": None,
+            "localhost:5001/images": None,
+            "gcr.io.example.com/project/images": None,
+        }
+        for repo, host in cases.items():
+            with self.subTest(repo=repo), mock.patch.dict(os.environ, {}, clear=True):
+                run.reset_mock()
+                orchestrator.configure_registry_auth(repo)
+                if host:
+                    run.assert_called_once_with(
+                        ["gcloud", "auth", "configure-docker", host, "--quiet"],
+                    )
+                else:
+                    run.assert_not_called()
+
+    @mock.patch("orchestrator.run")
+    def test_uses_explicit_docker_config_for_google_registry(self, run):
+        with mock.patch.dict(os.environ, {"DOCKER_CONFIG": "/registry-auth"}, clear=True):
+            orchestrator.configure_registry_auth("gcr.io/project/images")
+        run.assert_not_called()
+
+
 class DeployWorkloadsFakeAteletTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_fake_atelet_tuning_goes_to_deploy_sh(self, run):
