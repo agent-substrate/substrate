@@ -94,6 +94,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
 		return err
 	}
+	// Likewise a --component patch that would apply nowhere.
+	if err := e.checkComponentTargets(providers); err != nil {
+		return err
+	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
@@ -218,6 +222,15 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	return e.applyOtelEndpointOverride(ctx)
 }
 
+// podCertificateControllerPath is the podcertificate controller manifest for
+// the cluster size.
+func (e *Env) podCertificateControllerPath() string {
+	if e.Cfg.Size10() {
+		return e.Cfg.Manifest("podcert-size10")
+	}
+	return e.Cfg.Manifest("pod-certificate-controller.yaml")
+}
+
 // DeployPodCertificateController creates any missing signer CA pools, applies
 // the podcertificate controller, and waits until it is rolling and has
 // published its trust bundles.
@@ -238,11 +251,7 @@ func (e *Env) DeployPodCertificateController(ctx context.Context) error {
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
-	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
-	if e.Cfg.Size10() {
-		path = e.Cfg.Manifest("podcert-size10")
-	}
-	manifest, err := e.renderResolve(ctx, path)
+	manifest, err := e.renderResolve(ctx, e.podCertificateControllerPath())
 	if err != nil {
 		return err
 	}

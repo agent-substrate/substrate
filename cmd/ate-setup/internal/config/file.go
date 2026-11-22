@@ -110,6 +110,12 @@ func ParseFile(path string) (*File, error) {
 			plural(len(unknown)), strings.Join(quoteAll(unknown), ", "))
 	}
 
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	resolvePathLists(filepath.Dir(abs), flat)
+
 	return &File{Path: path, values: flat}, nil
 }
 
@@ -178,7 +184,15 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 			}
 			continue
 		case yaml.SequenceNode:
-			return fmt.Errorf("setting %q is a list; no setting takes a list", key)
+			list, err := pathList(key, value)
+			if err != nil {
+				return err
+			}
+			if _, dup := out[key]; dup {
+				return fmt.Errorf("setting %q is set twice", key)
+			}
+			out[key] = list
+			continue
 		case yaml.ScalarNode:
 		default:
 			return fmt.Errorf("setting %q has an unsupported value", key)
@@ -194,6 +208,44 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 		out[key] = value.Value
 	}
 	return nil
+}
+
+// pathList joins a YAML sequence into a KindPathList value. Only a
+// KindPathList setting takes a sequence; an unknown key is left for ParseFile
+// to report.
+func pathList(key string, node *yaml.Node) (string, error) {
+	if s, ok := Lookup(key); ok && s.Kind != KindPathList {
+		return "", fmt.Errorf("setting %q is a list; it takes a single value", key)
+	}
+	paths := make([]string, 0, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind != yaml.ScalarNode || item.Tag == "!!null" || item.Value == "" {
+			return "", fmt.Errorf("setting %q must be a list of paths", key)
+		}
+		if strings.ContainsRune(item.Value, os.PathListSeparator) {
+			return "", fmt.Errorf("setting %q: path %q must not contain %q", key, item.Value, os.PathListSeparator)
+		}
+		paths = append(paths, item.Value)
+	}
+	return strings.Join(paths, string(os.PathListSeparator)), nil
+}
+
+// resolvePathLists makes the relative paths in KindPathList values relative
+// to dir, the document's directory, so a document means the same files from
+// any working directory.
+func resolvePathLists(dir string, values map[string]string) {
+	for key, raw := range values {
+		if s, ok := Lookup(key); !ok || s.Kind != KindPathList || raw == "" {
+			continue
+		}
+		paths := filepath.SplitList(raw)
+		for i, p := range paths {
+			if p != "" && !filepath.IsAbs(p) {
+				paths[i] = filepath.Join(dir, p)
+			}
+		}
+		values[key] = strings.Join(paths, string(os.PathListSeparator))
+	}
 }
 
 func quoteAll(in []string) []string {
