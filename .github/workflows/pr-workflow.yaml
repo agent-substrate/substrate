@@ -208,6 +208,21 @@ jobs:
       env:
         BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
       run: hack/verify/postgresql-migrations.sh "origin/${BASE_REF#refs/heads/}"
+  # Skips the e2e lanes when a pull request or merge group only changes the
+  # paths listed under "Docs-only changes" in CONTRIBUTING.md.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+    - name: Detect code changes
+      id: diff
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+      run: .github/scripts/pr-workflow/detect-code-change.sh "${BASE_SHA}"
   # Free x86-64 ubuntu-latest runners expose /dev/kvm (with a udev rule), so
   # create-kind-cluster.sh mounts it and the micro-VM (kata + cloud-hypervisor)
   # sandbox class works alongside gVisor.
@@ -216,6 +231,8 @@ jobs:
   # below are written once and run for every dataplane, sandbox class and
   # preview mode. The e2e-test job below reports the required checks.
   e2e:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: >-
       ${{ format('e2e ({0}, {1}{2})', matrix.dataplane, matrix.sandbox, matrix.preview == 'on' && ', preview' || '') }}
     runs-on: ubuntu-latest
@@ -410,13 +427,17 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
-  # The required check, so the branch rules don't list each lane. Passes only
-  # when every lane passed.
+  # The required check, so the branch rules don't list each lane. Passes when
+  # every lane passed, or when changes found only docs and the lanes skipped.
   e2e-test:
-    needs: e2e
+    needs: [changes, e2e]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
     - name: Require every e2e lane to pass
-      run: test "${{ needs.e2e.result }}" = success
+      env:
+        # code is only set when changes succeeded, and code=false always
+        # skips the lanes.
+        PASSED: ${{ needs.e2e.result == 'success' || needs.changes.outputs.code == 'false' }}
+      run: test "${PASSED}" = true

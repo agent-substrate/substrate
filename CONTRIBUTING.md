@@ -337,6 +337,18 @@ hack/run-root-tests.sh
 
 New privileged tests only need the `roottest.Require` call — no CI changes.
 
+### Docs-only changes
+
+A PR skips the e2e tests if it only changes these files:
+
+* `docs/**`
+* `site/**`
+* `*.md` at the repository root
+* `demos/*/README.md`
+
+These PRs still run the unit tests, `hack/verify-all.sh` and the PostgreSQL
+migration check.
+
 ### Copyright Headers
 
 Every file containing source code must include copyright and license
