@@ -116,6 +116,8 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
+	objectstorage.WarnIfBackendNotSet(ctx)
+
 	srv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	// stopExchange drains the credential exchange, when control mode serves it.
 	stopExchange := func() {}

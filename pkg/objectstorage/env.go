@@ -30,6 +30,20 @@ func UsesS3() bool {
 	return os.Getenv("ATE_STORAGE_BACKEND") == "s3"
 }
 
+// WarnIfBackendNotSet logs a warning when ATE_STORAGE_BACKEND is unset or is
+// not "gcs" or "s3". Either way GCS is used, so a cluster without GCS access
+// would otherwise fail only at its first transfer, far from the cause. The
+// backend is chosen as before.
+func WarnIfBackendNotSet(ctx context.Context) {
+	switch v := os.Getenv("ATE_STORAGE_BACKEND"); v {
+	case "gcs", "s3":
+	case "":
+		slog.WarnContext(ctx, `ATE_STORAGE_BACKEND is not set, so GCS is used; set it to "gcs" or "s3"`)
+	default:
+		slog.WarnContext(ctx, `ATE_STORAGE_BACKEND is not a known backend, so GCS is used; set it to "gcs" or "s3"`, slog.String("value", v))
+	}
+}
+
 // NewS3ClientFromEnv builds an S3 client from the standard AWS environment
 // variables. AWS_S3_USE_PATH_STYLE=true selects path-style addressing.
 func NewS3ClientFromEnv(ctx context.Context) (*s3.Client, error) {

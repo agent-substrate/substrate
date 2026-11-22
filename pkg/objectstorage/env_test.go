@@ -15,8 +15,12 @@
 package objectstorage
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +69,50 @@ func TestNewFromEnv(t *testing.T) {
 				}
 			default:
 				t.Fatalf("NewFromEnv returned %T", got)
+			}
+		})
+	}
+}
+
+func TestWarnIfBackendNotSet(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		backend   string
+		unset     bool
+		wantWarn  string
+		wantValue string
+	}{
+		{name: "unset", unset: true, wantWarn: "is not set"},
+		{name: "empty", backend: "", wantWarn: "is not set"},
+		{name: "gcs", backend: "gcs"},
+		{name: "s3", backend: "s3"},
+		{name: "unknown", backend: "azure", wantWarn: "is not a known backend", wantValue: "value=azure"},
+		{name: "s3 with a space", backend: " s3", wantWarn: "is not a known backend", wantValue: `value=" s3"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ATE_STORAGE_BACKEND", tc.backend)
+			if tc.unset {
+				os.Unsetenv("ATE_STORAGE_BACKEND")
+			}
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			WarnIfBackendNotSet(context.Background())
+
+			got := logs.String()
+			if tc.wantWarn == "" {
+				if got != "" {
+					t.Errorf("logged %q, want nothing", got)
+				}
+				return
+			}
+			if !strings.Contains(got, "level=WARN") || !strings.Contains(got, tc.wantWarn) {
+				t.Errorf("logged %q, want a warning containing %q", got, tc.wantWarn)
+			}
+			if !strings.Contains(got, tc.wantValue) {
+				t.Errorf("logged %q, want it to contain %q", got, tc.wantValue)
 			}
 		})
 	}
