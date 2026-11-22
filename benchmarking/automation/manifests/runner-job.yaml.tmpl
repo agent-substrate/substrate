@@ -128,6 +128,50 @@ subjects:
   name: benchmark-runner
   namespace: benchmarking
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: benchmark-runner-pod-discovery
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  # list only: pprof discovery reads pod collections, never a single pod.
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: benchmark-runner-pod-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: benchmark-runner-pod-discovery
+subjects:
+- kind: ServiceAccount
+  name: benchmark-runner
+  namespace: benchmarking
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: benchmark-runner-worker-pprof
+  namespace: benchmark-workloads
+spec:
+  podSelector:
+    matchExpressions:
+    - key: ate.dev/worker-pool
+      operator: Exists
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: benchmarking
+    ports:
+    - port: pprof
+      protocol: TCP
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
