@@ -174,10 +174,11 @@ func actorLeafMemory(root, actorUID string) (int64, error) {
 // clean page cache, which the kernel can reclaim. Both are 0 when the pod has no
 // limit.
 func PodMemory() (limit, unreclaimable int64, err error) {
-	return podMemory(Root)
+	return PodMemoryUnder(Root)
 }
 
-func podMemory(root string) (limit, unreclaimable int64, err error) {
+// PodMemoryUnder is PodMemory for the pod cgroup at root rather than Root.
+func PodMemoryUnder(root string) (limit, unreclaimable int64, err error) {
 	raw, err := os.ReadFile(filepath.Join(root, "memory.max"))
 	if err != nil {
 		return 0, 0, err
@@ -194,7 +195,7 @@ func podMemory(root string) (limit, unreclaimable int64, err error) {
 	return limit, unreclaimable, nil
 }
 
-// memoryUnreclaimable is memoryUsed plus page cache that is dirty or under
+// memoryUnreclaimable is MemoryUsed plus page cache that is dirty or under
 // writeback, which reclaim can't drop either.
 func memoryUnreclaimable(root string) (int64, error) {
 	sum, err := sumMemoryStat(root, memoryUnreclaimableStats...)

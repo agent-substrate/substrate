@@ -49,7 +49,7 @@ func TestTake(t *testing.T) {
 		got      int64
 	}{
 		{name: "capped by unbooked capacity", current: 1 << 30, unbooked: 2 << 30, want: want, got: 2 << 30},
-		{name: "capped by free pod memory", current: limit - 512<<20, unbooked: 2 << 30, want: want, got: 512<<20 - margin},
+		{name: "capped by free pod memory", current: limit - 512<<20, unbooked: 2 << 30, want: want, got: 512<<20 - Margin},
 		{name: "capped by what it wants", current: 0, unbooked: 2 << 30, want: 100 << 20, got: 100 << 20},
 		{name: "pod full", current: limit, unbooked: 2 << 30, want: want, got: 0},
 		{name: "nothing wanted", current: 0, unbooked: 2 << 30, want: -1, got: 0},
