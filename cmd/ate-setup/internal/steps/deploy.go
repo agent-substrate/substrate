@@ -223,8 +223,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // published its trust bundles.
 //
 // size10 clusters render the podcert-size10 overlay instead of the base file.
-// It appends --kube-api-qps=100 / --kube-api-burst=200 so the controller keeps
-// up with the request volume the size10 postgres profile enables. An overlay
+// It appends --kube-api-qps=500 / --kube-api-burst=1000 and sets
+// WORKERS_PER_SIGNER=50 so the controller keeps up with the request volume the
+// size10 postgres profile enables. An overlay
 // rather than a post-apply patch, so that no later apply of the base file can
 // reconcile the flags away; the base kustomization leaves the file out for the
 // same reason.
