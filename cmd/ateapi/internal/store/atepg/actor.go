@@ -86,6 +86,38 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	return updateActor(ctx, p.pool, actorRef, precondition, mutate, false)
 }
 
+func (p *Persistence) UpdateObservedActor(ctx context.Context, actorRef resources.ActorRef, observed *ateapi.Actor, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	precondition := store.PreconditionFrom(observed)
+	if err := precondition.ValidateRequired(); err != nil {
+		return nil, err
+	}
+
+	actor := proto.CloneOf(observed)
+	oldMeta := proto.CloneOf(actor.Metadata)
+	if mutate != nil {
+		if err := mutate(actor); err != nil {
+			return nil, err
+		}
+	}
+	updated, err := saveActorUpdate(ctx, p.pool, actorRef, actor, oldMeta, false)
+	if !errors.Is(err, store.ErrVersionConflict) {
+		return updated, err
+	}
+
+	var uid string
+	err = p.pool.QueryRow(ctx, `SELECT uid FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("checking actor %s after update conflict: %w", actorRef, err)
+	}
+	if uid != precondition.UID {
+		return nil, store.ErrUIDConflict
+	}
+	return nil, store.ErrVersionConflict
+}
+
 func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return updateActor(ctx, p.pool, actorRef, precondition, mutate, true)
 }
@@ -122,6 +154,11 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 			return nil, err
 		}
 	}
+	return saveActorUpdate(ctx, q, actorRef, dbActor, oldMeta, markForDeletion)
+}
+
+func saveActorUpdate(ctx context.Context, q querier, actorRef resources.ActorRef, dbActor *ateapi.Actor, oldMeta *ateapi.ResourceMetadata, markForDeletion bool) (*ateapi.Actor, error) {
+	uid, version := oldMeta.GetUid(), oldMeta.GetVersion()
 	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
 		return nil, err
 	}
@@ -140,15 +177,15 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 			UPDATE actors
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
-		dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
+		dbActor.GetMetadata().GetVersion(), updatedBytes, actorRef.Atespace, actorRef.Name, uid, version)
 	if err != nil {
-		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
+		return nil, fmt.Errorf("updating actor %s: %w", actorRef, err)
 	}
 	if commandTag.RowsAffected() == 0 {
 		return nil, store.ErrVersionConflict
 	}
 	if commandTag.RowsAffected() != 1 {
-		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
+		return nil, fmt.Errorf("updating actor %s affected %d rows, want 1", actorRef, commandTag.RowsAffected())
 	}
 	return dbActor, nil
 }

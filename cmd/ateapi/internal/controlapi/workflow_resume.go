@@ -895,16 +895,15 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, apierror.Internal("worker %s reported epoch %d, above its registered epoch %d", workerName, workerEpoch, registered)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
-		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
-		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
-		// The workload already runs, so a record that can't take the upload
-		// doesn't hold the actor in RESUMING. The next suspend prunes the entry.
-		if err := recordRestoredUpload(ctx, toUpdate.Status); err != nil {
-			slog.WarnContext(ctx, "Restored a snapshot from its upload but could not record the upload",
-				slog.Any("actor", actorRef), slog.Any("err", err))
-		}
+	var uploadErr error
+	storedActor, err := w.store.UpdateObservedActor(ctx, actorRef, latestActor, func(toUpdate *ateapi.Actor) error {
+		status := toUpdate.GetStatus()
+		status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+		status.WorkerAssignment.WorkerEpoch = workerEpoch
+		status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
+		// The actor can enter RUNNING even if it cannot record the upload.
+		// The next suspend prunes the entry.
+		uploadErr = recordRestoredUpload(ctx, status)
 		return nil
 	})
 	if err != nil {
@@ -912,6 +911,10 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
+	}
+	if uploadErr != nil {
+		slog.WarnContext(ctx, "Restored a snapshot from its upload but could not record the upload",
+			slog.Any("actor", actorRef), slog.Any("err", uploadErr))
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, nil

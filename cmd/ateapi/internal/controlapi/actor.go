@@ -287,7 +287,16 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 }
 
 func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
+	actor, err := s.store.UpdateActor(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
+	return actorUpdateResult(actorRef, actor, err)
+}
+
+func (s *ServiceImpl) UpdateObservedActor(ctx context.Context, actorRef resources.ActorRef, observed *ateapi.Actor, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	actor, err := s.store.UpdateObservedActor(ctx, actorRef, observed, s.validatedActorMutation(ctx, mutate))
+	return actorUpdateResult(actorRef, actor, err)
+}
+
+func actorUpdateResult(actorRef resources.ActorRef, storedActor *ateapi.Actor, err error) (*ateapi.Actor, error) {
 	if err != nil {
 		if mapped := actorWriteError(actorRef, err); mapped != err {
 			return nil, mapped
