@@ -107,12 +107,31 @@ func (al *ActorLogger) EmitLifecycleLog(ctx context.Context, msg string, a resou
 // callers that multiplex multiple containers should give each its own pipe so the
 // tag is meaningful.
 func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerName string) (io.WriteCloser, error) {
+	return al.startJSONLogPipe(a, containerName, nil)
+}
+
+// StartJSONLogPipeTee is StartJSONLogPipe, and every byte read from the pipe is
+// also written to tee before it is logged. Use it when the caller needs the
+// container's output itself, as the crash report does. The write end stays an
+// *os.File, so os/exec hands it to the container's process directly.
+func (al *ActorLogger) StartJSONLogPipeTee(a resources.ActorAttribution, containerName string, tee io.Writer) (io.WriteCloser, error) {
+	if tee == nil {
+		return nil, errors.New("no tee writer")
+	}
+	return al.startJSONLogPipe(a, containerName, tee)
+}
+
+func (al *ActorLogger) startJSONLogPipe(a resources.ActorAttribution, containerName string, tee io.Writer) (io.WriteCloser, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	go func() {
-		al.WrapContainerLogs(pr, a, containerName)
+		var r io.Reader = pr
+		if tee != nil {
+			r = io.TeeReader(pr, tee)
+		}
+		al.WrapContainerLogs(r, a, containerName)
 		pr.Close()
 	}()
 	return pw, nil

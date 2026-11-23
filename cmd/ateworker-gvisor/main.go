@@ -764,7 +764,8 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	// capabilities, so ateworker mounts it, and runsc's gofer resolves the
 	// mount in this pod's mount namespace.
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
+		// The tee records the container's last line for the crash report.
+		pw, err := s.actorLogger.StartJSONLogPipeTee(attribution, ac.GetName(), hosted.outputs.watch(ac.GetName()))
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -1246,7 +1247,8 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// every line is tagged with the originating container (ate.actor.container.name).
 	// app_create includes starting that pipe.
 	for _, ac := range containers {
-		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
+		// The tee records the container's last line for the crash report.
+		pw, err := s.actorLogger.StartJSONLogPipeTee(attribution, ac.GetName(), hosted.outputs.watch(ac.GetName()))
 		timing.appCreate += lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)

@@ -60,6 +60,10 @@ type hostedActor struct {
 	memoryBytes int64
 	// memory kills the sandbox once it is stuck at its memory.high.
 	memory cgroup.MemoryGuard
+	// outputs keeps the last line each application container wrote, so the
+	// crash report can carry the container's own words. New with every
+	// activation.
+	outputs *outputTails
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
@@ -83,7 +87,7 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, ex
 	// The sandbox cgroup is new with every activation, so its counters start
 	// at zero.
 	ctx, cancel := context.WithCancel(context.Background())
-	hosted := &hostedActor{attribution: attribution, executionUID: executionUID, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes}
+	hosted := &hostedActor{attribution: attribution, executionUID: executionUID, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes, outputs: newOutputTails()}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }

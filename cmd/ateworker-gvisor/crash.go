@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -35,6 +36,27 @@ type crashReporter interface {
 }
 
 var _ crashReporter = (*register.CrashReporter)(nil)
+
+// crashMessage describes a sandbox that died while nothing was stopping it.
+// A container that fails at startup states its reason on its output, which
+// otherwise reaches only this worker's log, so the message carries the last
+// line each container wrote.
+func crashMessage(hosted *hostedActor) string {
+	message := "gVisor sandbox exited"
+	if hosted.memory.Killed() {
+		message = "killed for exceeding its memory limit"
+	}
+	return appendLastOutput(message, hosted.outputs)
+}
+
+// appendLastOutput appends the last line each container wrote to a crash
+// message, naming the container.
+func appendLastOutput(message string, outputs *outputTails) string {
+	for _, l := range outputs.lines() {
+		message += fmt.Sprintf(": container %q last wrote: %s", l.container, l.line)
+	}
+	return message
+}
 
 // watchSandbox handles the actor's sandbox dying while nothing is stopping it:
 // the actor is torn down here, since the control plane will not reach this
@@ -57,10 +79,7 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 			return
 		}
 		ctx := context.Background()
-		message := "gVisor sandbox exited"
-		if hosted.memory.Killed() {
-			message = "killed for exceeding its memory limit"
-		}
+		message := crashMessage(hosted)
 
 		// stopping is checked under the actor's lock, so an exit during a
 		// checkpoint that then fails is still handled once it gives up.

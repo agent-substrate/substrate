@@ -2014,6 +2014,11 @@ func TestSandboxCrashIsReported(t *testing.T) {
 		t.Fatalf("running actor has no pod recorded: %v", assignment)
 	}
 
+	// Make the container write a line, for the crash message to carry.
+	if _, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName}); err != nil {
+		t.Fatalf("failed to call the Actor before killing its sandbox: %v", err)
+	}
+
 	e2e.KillActorSandbox(ctx, t, clients, assignment.GetWorkerNamespace(), assignment.GetWorkerPod(), actor.GetMetadata().GetUid())
 	waitForActorStateWithTimeout(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_CRASHED, 2*time.Minute)
 
@@ -2021,8 +2026,14 @@ func TestSandboxCrashIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get crashed Actor: %v", err)
 	}
-	if msg := crashed.GetStatus().GetCrash().GetMessage(); !strings.Contains(msg, "exited") {
+	msg := crashed.GetStatus().GetCrash().GetMessage()
+	if !strings.Contains(msg, "exited") {
 		t.Errorf("crash message = %q, want the worker's report of the sandbox exiting", msg)
+	}
+	// The gVisor worker carries the last line the container wrote. The microVM
+	// worker does not yet.
+	if !e2e.IsMicroVM() && !strings.Contains(msg, "Handled request") {
+		t.Errorf("crash message = %q, want the container's last output line", msg)
 	}
 	if crashed.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment survived the crash: %v", crashed.GetStatus().GetWorkerAssignment())
