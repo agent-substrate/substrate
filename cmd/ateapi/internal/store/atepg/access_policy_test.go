@@ -424,17 +424,17 @@ func TestExternalVolumeClassAccessPolicy_LifecycleAndCascade(t *testing.T) {
 	}
 
 	// DeleteExternalVolumeClassAccessPolicy preconditions and cleanup.
-	if _, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "missing-class", store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
+	if _, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "missing-class", store.Precondition{}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("DeleteExternalVolumeClassAccessPolicy on missing policy = %v, want ErrNotFound", err)
 	}
-	if _, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs-gold", store.DeletePreconditions{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
+	if _, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs-gold", store.Precondition{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("DeleteExternalVolumeClassAccessPolicy wrong version = %v, want ErrVersionConflict", err)
 	}
-	if _, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs-gold", store.DeletePreconditions{UID: "wrong-uid"}); !errors.Is(err, store.ErrUIDConflict) {
+	if _, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs-gold", store.Precondition{UID: "wrong-uid"}); !errors.Is(err, store.ErrUIDConflict) {
 		t.Fatalf("DeleteExternalVolumeClassAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
 	}
 
-	deleted, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs-gold", store.DeletePreconditions{
+	deleted, err := p.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs-gold", store.Precondition{
 		UID:     updated.GetMetadata().GetUid(),
 		Version: updated.GetMetadata().GetVersion(),
 	})
@@ -455,13 +455,13 @@ func TestExternalVolumeClassAccessPolicy_LifecycleAndCascade(t *testing.T) {
 	if _, err := p.CreateExternalVolumeClassAccessPolicy(ctx, "nfs-gold", policy); err != nil {
 		t.Fatalf("re-creating access policy failed: %v", err)
 	}
-	if _, err := p.DeleteExternalVolumeClass(ctx, "nfs-gold", store.DeletePreconditions{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
+	if _, err := p.DeleteExternalVolumeClass(ctx, "nfs-gold", store.Precondition{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("DeleteExternalVolumeClass wrong version = %v, want ErrVersionConflict", err)
 	}
 	if diff := cmp.Diff(wantInitialTuples, externalVolumeClassTuples(t, p, "nfs-gold")); diff != "" {
 		t.Fatalf("tuples changed after failed DeleteExternalVolumeClass (-want +got):\n%s", diff)
 	}
-	if _, err := p.DeleteExternalVolumeClass(ctx, "nfs-gold", store.DeletePreconditions{}); err != nil {
+	if _, err := p.DeleteExternalVolumeClass(ctx, "nfs-gold", store.Precondition{}); err != nil {
 		t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
 	}
 	if _, err := p.GetExternalVolumeClassAccessPolicy(ctx, "nfs-gold"); !errors.Is(err, store.ErrNotFound) {
@@ -513,7 +513,7 @@ func TestDeleteAtespace_ScrubsExternalVolumeClassAccessPolicies(t *testing.T) {
 	}
 
 	// Precondition mismatch aborts before scrubbing policy rows or sweeping tuples.
-	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
+	if _, err := p.DeleteAtespace(ctx, "team-a", store.Precondition{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("DeleteAtespace wrong version = %v, want ErrVersionConflict", err)
 	}
 	if diff := cmp.Diff([]string{"allowed_atespace atespace:team-a", "allowed_atespace atespace:team-b"}, externalVolumeClassTuples(t, p, "nfs-gold")); diff != "" {
@@ -521,7 +521,7 @@ func TestDeleteAtespace_ScrubsExternalVolumeClassAccessPolicies(t *testing.T) {
 	}
 
 	// Deleting team-a scrubs it from nfs-gold and ssd-fast without touching untouched.
-	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
+	if _, err := p.DeleteAtespace(ctx, "team-a", store.Precondition{}); err != nil {
 		t.Fatalf("DeleteAtespace(team-a) failed: %v", err)
 	}
 
@@ -676,7 +676,7 @@ func TestExternalVolumeClassAccessPolicy_ConcurrentUpdateAndDeleteAtespace(t *te
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := p.DeleteAtespace(ctx, ephemeral, store.DeletePreconditions{}); err != nil {
+			if _, err := p.DeleteAtespace(ctx, ephemeral, store.Precondition{}); err != nil {
 				errCh <- fmt.Errorf("DeleteAtespace(%s): %w", ephemeral, err)
 			}
 		}()

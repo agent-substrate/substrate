@@ -238,7 +238,7 @@ type Interface interface {
 	// Deletes and returns an ExternalVolumeClass's access policy subresource.
 	// Returns ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
 	// precondition does not describe the policy the caller observed.
-	DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.AccessPolicy, error)
+	DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition Precondition) (*ateapi.AccessPolicy, error)
 
 	// Stores a new ExternalVolumeClass and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not

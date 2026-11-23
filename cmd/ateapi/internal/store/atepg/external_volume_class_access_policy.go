@@ -80,7 +80,7 @@ func (p *Persistence) GetExternalVolumeClassAccessPolicy(ctx context.Context, na
 }
 
 func (p *Persistence) UpdateExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 
@@ -145,7 +145,7 @@ func (p *Persistence) UpdateExternalVolumeClassAccessPolicy(ctx context.Context,
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition store.Precondition) (*ateapi.AccessPolicy, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning external volume class access policy delete for %q: %w", name, err)

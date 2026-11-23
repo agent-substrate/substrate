@@ -94,7 +94,7 @@ func (s *RPCService) DeleteExternalVolumeClassAccessPolicy(ctx context.Context, 
 	return s.impl.DeleteExternalVolumeClassAccessPolicy(ctx, req.GetExternalVolumeClass().GetName(), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
+func (s *ServiceImpl) DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition store.Precondition) (*ateapi.AccessPolicy, error) {
 	deleted, err := s.store.DeleteExternalVolumeClassAccessPolicy(ctx, name, precondition)
 	return mapAccessPolicyWrite(deleted, err, "")
 }

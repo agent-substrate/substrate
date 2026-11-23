@@ -3993,7 +3993,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "UpdateExternalVolumeClassAccessPolicy", created, updated)
 
-		deleted, err := s.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs", store.DeletePreconditions{})
+		deleted, err := s.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs", store.Precondition{})
 		if err != nil {
 			t.Fatalf("DeleteExternalVolumeClassAccessPolicy failed: %v", err)
 		}
