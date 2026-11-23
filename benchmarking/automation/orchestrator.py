@@ -179,15 +179,7 @@ def clear_target_cluster() -> None:
 def gcloud_setup_for_target_cluster() -> None:
     """Per-target-cluster gcloud setup: configure docker creds for the new
     registry and switch kubectl to the new cluster."""
-    run(
-        [
-            "gcloud",
-            "auth",
-            "configure-docker",
-            registry_host(os.environ["KO_DOCKER_REPO"]),
-            "--quiet",
-        ]
-    )
+    configure_registry_auth(os.environ["KO_DOCKER_REPO"])
     run(
         [
             "gcloud",
@@ -278,6 +270,15 @@ def wait_for_docker(timeout: int = 120) -> None:
 
 def registry_host(ko_docker_repo: str) -> str:
     return ko_docker_repo.split("/", 1)[0]
+
+
+def configure_registry_auth(repo: str) -> None:
+    # An explicit Docker config belongs to the caller.
+    if os.environ.get("DOCKER_CONFIG"):
+        return
+    host = registry_host(repo)
+    if host == "gcr.io" or host.endswith((".gcr.io", "-docker.pkg.dev")):
+        run(["gcloud", "auth", "configure-docker", host, "--quiet"])
 
 
 def sanitize(name: str) -> str:

@@ -13,6 +13,14 @@ gateway capacity benchmark, see
 To run the cold resume tests from your workstation instead, see
 [ateapi-cold-resume.md](ateapi-cold-resume.md).
 
+## Registry authentication
+
+Configure Docker credentials for the registry in `KO_DOCKER_REPO` before
+running the orchestrator. Set `DOCKER_CONFIG` to use a prepared configuration
+directory. If it is unset, GKE target setup runs `gcloud auth configure-docker`
+for Container Registry and Artifact Registry hosts. Other registries use the
+existing Docker configuration.
+
 ## How it works
 
 1. CronJob fires on the orchestration cluster; pod starts (orchestrator +
