@@ -148,8 +148,8 @@
 # Deploys its own gVisor rig (`USES_SHARED_WORKLOADS = False`), so `sandboxClass`
 # must be `gvisor` and shared-workload fields (`workerCount`, `actorMemory`,
 # `actorCPU`, `workerMemory`, `workerWaitTimeout`, `isolate`) are rejected.
-# The block takes `envoyCpu` and `mode` (`http`, `mitm` or `passthrough`).
-# Both are required. See the "Configuration knobs" table in
+# The block takes `mode` (`http`, `mitm` or `passthrough`), which is required.
+# The gateway runs at 1 CPU. See the "Configuration knobs" table in
 # benchmarking/nighthawk-egress/README.md.
 
 tests:
@@ -720,7 +720,6 @@ tests:
   #     - "--cordon-system-infra-components"
   #   nighthawk-egress:
   #     mode: http
-  #     envoyCpu: 1
   # ate-api-server and Postgres cold resume ceiling on the fake data plane.
   # Each user owns one actor: its first iteration creates the actor and
   # makes it cold, in the step that adds the user, and every later one

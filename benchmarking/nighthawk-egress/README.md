@@ -34,12 +34,13 @@ flowchart LR
 
 ### Configuration knobs (the `nighthawk-egress:` block)
 
-A `type: nighthawk-egress` entry in [`benchmarking/automation/tests.yaml`](../automation/tests.yaml) sets both knobs in its `nighthawk-egress:` block:
+A `type: nighthawk-egress` entry in [`benchmarking/automation/tests.yaml`](../automation/tests.yaml) sets one knob in its `nighthawk-egress:` block:
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `envoyCpu` | required | CPU request and limit of `envoy` and `ext-proc` in `deployment/atenet-egress`, and the Envoy `--concurrency`. |
 | `mode` | required | `http`, `mitm`, or `passthrough`. |
+
+The gateway size is not a knob. The orchestrator gives `envoy` and `ext-proc` of `deployment/atenet-egress` a CPU request and limit of 1 each and starts Envoy with `--concurrency 1`. [Sizing the rig](#sizing-the-rig) sizes the load for that gateway.
 
 ### Sizing the rig
 

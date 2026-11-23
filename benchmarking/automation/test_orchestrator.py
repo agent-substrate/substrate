@@ -250,7 +250,7 @@ class RunnerNamespaceTest(unittest.TestCase):
 
 class NighthawkEgressTest(unittest.TestCase):
     def _entry(self, **overrides):
-        cfg = {"envoyCpu": 2, "mode": "mitm", **overrides}
+        cfg = {"mode": "mitm", **overrides}
         return {
             "name": "egress_mitm",
             "type": "nighthawk-egress",
@@ -270,10 +270,7 @@ class NighthawkEgressTest(unittest.TestCase):
             ("flags at the top level", {"flags": ["--x"]}, {}, "put knobs under 'nighthawk-egress:'"),
             ("no block", {"nighthawk-egress": None}, {}, "requires 'nighthawk-egress:' block"),
             ("unknown knob", {}, {"connections": 8}, "unknown knob"),
-            ("no envoyCpu", {}, {"envoyCpu": None}, "missing nighthawk-egress.envoyCpu"),
-            ("envoyCpu zero", {}, {"envoyCpu": 0}, "envoyCpu must be a positive int"),
-            ("envoyCpu bool", {}, {"envoyCpu": True}, "envoyCpu must be a positive int"),
-            ("envoyCpu string", {}, {"envoyCpu": "1"}, "envoyCpu must be a positive int"),
+            ("envoyCpu", {}, {"envoyCpu": 1}, "unknown knob"),
             ("no mode", {}, {"mode": None}, "missing nighthawk-egress.mode"),
             ("unknown mode", {}, {"mode": "tcp"}, "mode must be one of"),
         ]
@@ -290,7 +287,7 @@ class NighthawkEgressTest(unittest.TestCase):
     def test_job_template_renders_args_labels_and_toleration(self):
         from testtypes import nighthawk_egress
 
-        test = self._entry(mode="passthrough", envoyCpu=4)
+        test = self._entry(mode="passthrough")
         subs = {
             "JOB_NAME": "j",
             "IMAGE": "i",
@@ -311,7 +308,7 @@ class NighthawkEgressTest(unittest.TestCase):
         )
         args = job["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertEqual(args[args.index("--mode") + 1], "passthrough")
-        self.assertEqual(args[args.index("--envoy-cpu") + 1], "4")
+        self.assertEqual(args[args.index("--envoy-cpu") + 1], "1")
         mounts = job["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
         self.assertIn({"name": "servicedns-ca", "mountPath": "/run/servicedns-ca", "readOnly": True}, mounts)
         vols = job["spec"]["template"]["spec"]["volumes"]
@@ -463,9 +460,11 @@ class NighthawkEgressTest(unittest.TestCase):
             subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
             subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
         ]
-        nighthawk_egress.pre_test(self._entry(envoyCpu=2, mode="mitm"))
+        nighthawk_egress.pre_test(self._entry(mode="mitm"))
 
         # The first three calls pin the gateway, see test_shape_atenet_egress.
+        pin = json.loads(run.call_args_list[1].args[0][7])
+        self.assertEqual(pin["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"], {"cpu": "1000m"})
         context, tls, server, driver = run.call_args_list[3:]
         self.assertEqual(context.args[0], ["kubectl", "config", "current-context"])
         self.assertEqual(context.kwargs, {"stdout": subprocess.PIPE, "text": True})

@@ -47,7 +47,7 @@ To run the cold resume tests from your workstation instead, see
    For a `nighthawk-egress` test `benchmarking/workloads/deploy.sh --deploy`
    does not run (`USES_SHARED_WORKLOADS = False`). The orchestrator pins
    `deployment/atenet-egress` to 1 replica with the cpu requests=limits of
-   `envoy` and `ext-proc` and Envoy's thread count at `envoyCpu`, runs
+   `envoy` and `ext-proc` and Envoy's thread count at 1, runs
    `hack/setup-e2e-egress-tls-kind.sh`, and deploys `nighthawk-server` and
    the `nighthawk/tester` actor. The teardown after each test deletes them.
 6. For each test in `tests.yaml`, or only those named by `--test-name`:
