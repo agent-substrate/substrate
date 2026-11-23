@@ -66,6 +66,7 @@ func TestCheckDeployUpgrade(t *testing.T) {
 		{name: "source build", record: true, from: "v1.2.3-4-gabcdef", images: images.Source{}},
 		{name: "same prebuilt release", record: true, from: "v1.2.3", images: images.Source{Repo: "registry.example/substrate", Tag: "v1.2.3"}},
 		{name: "prebuilt upgrade", record: true, from: "v1.2.3", images: images.Source{Repo: "registry.example/substrate", Tag: "v1.3.0"}},
+		{name: "prebuilt upgrade pinned by digest", record: true, from: "v1.2.3", images: images.Source{Repo: "registry.example/substrate", Tag: "v1.3.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},
 		{name: "prebuilt after source build", record: true, from: "v1.2.3-4-gabcdef", images: images.Source{Repo: "registry.example/substrate", Tag: "v1.3.0"}, wantError: "final release"},
 		{name: "successful prebuilt record with missing source", record: true, images: images.Source{Repo: "registry.example/substrate", Tag: "v1.3.0"}, wantError: "source release is empty"},
 		{name: "fresh prebuilt retry", record: true, failed: true, images: images.Source{Repo: "registry.example/substrate", Tag: "v1.3.0"}},

@@ -201,7 +201,7 @@ func checkDeployUpgrade(cfg *config.Config) error {
 	if cfg.FailedInstallRecord && cfg.RecordedSubstrateVersion == "" {
 		return nil
 	}
-	if err := upgradepolicy.CheckUpgrade(cfg.RecordedSubstrateVersion, cfg.Images.Tag); err != nil {
+	if err := upgradepolicy.CheckUpgrade(cfg.RecordedSubstrateVersion, cfg.Images.TagWithoutDigest()); err != nil {
 		return fmt.Errorf("checking release transition: %w", err)
 	}
 	return nil

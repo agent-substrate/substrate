@@ -16,7 +16,6 @@ package steps
 
 import (
 	"os"
-	"strings"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
 )
@@ -32,10 +31,7 @@ func (e *Env) SubstrateVersion() string {
 		if v := os.Getenv("VERSION"); v != "" {
 			return v
 		}
-		// The tag may carry its digest (v1@sha256:...); the version
-		// is the tag alone.
-		v, _, _ := strings.Cut(e.Cfg.Images.Tag, "@")
-		return v
+		return e.Cfg.Images.TagWithoutDigest()
 	}
 	// ko.BuildVersion consults VERSION itself before `git describe`.
 	return ko.BuildVersion(e.Cfg.Root)
