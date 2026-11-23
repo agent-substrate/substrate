@@ -394,6 +394,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 		name        string
 		line        string
 		target      resources.ActorRef
+		uid         string
 		source      string
 		container   string
 		wantMatched bool
@@ -599,6 +600,26 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  "",
 		},
 		{
+			name:        "same UID",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.uid":"uid-2"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			uid:         "uid-2",
+			wantMatched: true,
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
+		},
+		{
+			name:   "deleted actor with the same name",
+			line:   `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.uid":"uid-1"}}`,
+			target: resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			uid:    "uid-2",
+		},
+		{
+			name:   "line without a UID",
+			line:   `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target: resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			uid:    "uid-2",
+		},
+		{
 			name:        "source=containers shows any container's line",
 			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"sidecar"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
@@ -629,7 +650,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var outBuf bytes.Buffer
 			var errBuf bytes.Buffer
-			matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, source: logSource(tc.source), container: tc.container}, &outBuf, &errBuf)
+			matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, uid: tc.uid, source: logSource(tc.source), container: tc.container}, &outBuf, &errBuf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
@@ -724,7 +745,7 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 				return nil, fmt.Errorf("unexpected actor name: %s", in.GetActor().GetName())
 			}
 			return &ateapi.Actor{
-				Metadata: &ateapi.ResourceMetadata{Name: actorName},
+				Metadata: &ateapi.ResourceMetadata{Name: actorName, Uid: "uid-2"},
 				Status: &ateapi.ActorStatus{
 					State: ateapi.ActorState_ACTOR_STATE_RUNNING,
 					WorkerAssignment: &ateapi.WorkerAssignment{
@@ -736,7 +757,9 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 		},
 	}
 
-	logLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	// The first line is from a deleted actor with the same name.
+	logLine := `{"time":"2026-05-16T01:03:37Z","level":"info","msg":"Goodbye","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.uid":"uid-1"}}` + "\n" +
+		`{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.uid":"uid-2"}}`
 	mockStreamer := &mockPodLogsStreamer{
 		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 			if ns != namespace || name != podName {
@@ -1322,6 +1345,111 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	}
 	if !strings.Contains(stdoutStr, "after resume") {
 		t.Errorf("expected output to contain 'after resume', got %q", stdoutStr)
+	}
+}
+
+// A followed actor that is deleted and recreated on the same pod gets a new
+// stream filtered by the new UID. The new stream starts from the top of the
+// pod log, because the old stream read and skipped the new actor's first lines.
+func TestLogsActorRunner_Run_Follow_ActorRecreatedOnSamePod(t *testing.T) {
+	actorName := "act-recreated"
+
+	running := func(uid string) *ateapi.Actor {
+		return &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{Name: actorName, Uid: uid},
+			Status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+				WorkerAssignment: &ateapi.WorkerAssignment{
+					WorkerPod:       "pod-1",
+					WorkerNamespace: "ns",
+				},
+			},
+		}
+	}
+
+	var getActorCalls int
+	var getActorMu sync.Mutex
+	lineRead := make(chan struct{})
+
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+			getActorMu.Lock()
+			defer getActorMu.Unlock()
+			getActorCalls++
+			if getActorCalls == 1 {
+				return running("uid-1"), nil
+			}
+			// The monitor sees the new actor only after the first line is read.
+			select {
+			case <-lineRead:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return running("uid-2"), nil
+		},
+	}
+
+	// The timeout only bounds a failure: a stream that is never cancelled.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Each line has the kubelet's timestamp prefix, so the resume cursor is used.
+	line := func(stamp, uid, msg string) string {
+		return fmt.Sprintf(`%s {"time":"2026-05-16T01:03:38Z","msg":%q,"logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":%q,"ate.actor.uid":%q}}`, stamp, msg, actorName, uid)
+	}
+	podLog := line("2026-05-16T01:03:38.1Z", "uid-1", "first actor") + "\n" +
+		line("2026-05-16T01:03:39.1Z", "uid-2", "second actor") + "\n"
+
+	var streamCalls int
+	var streamMu sync.Mutex
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			streamMu.Lock()
+			defer streamMu.Unlock()
+			streamCalls++
+
+			if streamCalls == 1 {
+				pr, pw := io.Pipe()
+				go func() {
+					// The second actor starts before the monitor sees it.
+					fmt.Fprint(pw, podLog)
+					close(lineRead)
+					<-streamCtx.Done()
+					pw.Close()
+				}()
+				return pr, nil
+			}
+
+			if opts.SinceTime != nil {
+				t.Errorf("got SinceTime %v for a new actor, want none", opts.SinceTime)
+			}
+			cancel()
+			return io.NopCloser(strings.NewReader(podLog)), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	runner := &LogsActorRunner{
+		apiClient:         mockAPI,
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
+		streamer:          mockStreamer,
+		stdout:            &stdout,
+		stderr:            &stderr,
+		follow:            true,
+		pollInterval:      1 * time.Millisecond,
+		reconnectInterval: 1 * time.Millisecond,
+		tickerInterval:    1 * time.Millisecond,
+	}
+
+	if err := runner.Run(ctx); err != nil && err != context.Canceled {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := `{"time":"2026-05-16T01:03:38Z","msg":"first actor"}` + "\n" +
+		`{"time":"2026-05-16T01:03:38Z","msg":"second actor"}` + "\n"
+	if got := stdout.String(); got != want {
+		t.Errorf("got stdout %q, want %q", got, want)
 	}
 }
 
