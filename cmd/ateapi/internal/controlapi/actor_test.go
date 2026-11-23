@@ -768,13 +768,13 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 		Interface: persistence,
 		inject: func() {
 			// A delete releases the Actor's worker before removing it.
-			if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, func(a *ateapi.Actor) error {
+			if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.Precondition{}, func(a *ateapi.Actor) error {
 				a.Status.WorkerAssignment = nil
 				return nil
 			}); err != nil {
 				t.Fatalf("racing writer: mark for deletion: %v", err)
 			}
-			if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			if _, err := persistence.DeleteActor(ctx, actorRef, store.Precondition{}); err != nil {
 				t.Fatalf("racing writer: DeleteActor: %v", err)
 			}
 			recreated, err = persistence.CreateActor(ctx, &ateapi.Actor{

@@ -487,3 +487,110 @@ func TestServerUnaryInterceptorElidesListResponses(t *testing.T) {
 		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }
+
+func TestServerUnaryInterceptorDebugInfo(t *testing.T) {
+	cause := errors.New("row version 4 != 5")
+
+	tests := []struct {
+		name             string
+		includeDebugInfo bool
+		handlerErr       error
+		wantCode         codes.Code
+		wantMsg          string
+		wantDebugDetail  string
+		wantLogSubstr    string
+	}{
+		{
+			name:             "cause logged but omitted from status when disabled",
+			includeDebugInfo: false,
+			handlerErr:       apierror.Aborted("concurrent update conflict, please retry").WithCause(cause),
+			wantCode:         codes.Aborted,
+			wantMsg:          "concurrent update conflict, please retry",
+			wantDebugDetail:  "",
+			wantLogSubstr:    "row version 4 != 5",
+		},
+		{
+			name:             "cause attached as DebugInfo when enabled",
+			includeDebugInfo: true,
+			handlerErr:       apierror.Aborted("concurrent update conflict, please retry").WithCause(cause),
+			wantCode:         codes.Aborted,
+			wantMsg:          "concurrent update conflict, please retry",
+			wantDebugDetail:  "concurrent update conflict, please retry: row version 4 != 5",
+			wantLogSubstr:    "row version 4 != 5",
+		},
+		{
+			name:             "wrapped apierror attached as DebugInfo when enabled",
+			includeDebugInfo: true,
+			handlerErr:       fmt.Errorf("step Load: %w", apierror.NotFound("actor not found")),
+			wantCode:         codes.NotFound,
+			wantMsg:          "actor not found",
+			wantDebugDetail:  "step Load: actor not found",
+			wantLogSubstr:    "step Load: actor not found",
+		},
+		{
+			name:             "wrapped apierror omitted from DebugInfo when disabled",
+			includeDebugInfo: false,
+			handlerErr:       fmt.Errorf("step Load: %w", apierror.NotFound("actor not found")),
+			wantCode:         codes.NotFound,
+			wantMsg:          "actor not found",
+			wantDebugDetail:  "",
+			wantLogSubstr:    "step Load: actor not found",
+		},
+		{
+			name:             "no redundant DebugInfo when full error equals status message",
+			includeDebugInfo: true,
+			handlerErr:       apierror.NotFound("actor not found"),
+			wantCode:         codes.NotFound,
+			wantMsg:          "actor not found",
+			wantDebugDetail:  "",
+			wantLogSubstr:    "actor not found",
+		},
+		{
+			name:             "no redundant DebugInfo for wrapped context error",
+			includeDebugInfo: true,
+			handlerErr:       fmt.Errorf("while loading actor: %w", context.DeadlineExceeded),
+			wantCode:         codes.DeadlineExceeded,
+			wantMsg:          "while loading actor: context deadline exceeded",
+			wantDebugDetail:  "",
+			wantLogSubstr:    "while loading actor: context deadline exceeded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logBuf := captureDefaultLog(t)
+
+			interceptor := NewServerUnaryInterceptor(tt.includeDebugInfo)
+			_, err := interceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, func(ctx context.Context, req any) (any, error) {
+				return nil, tt.handlerErr
+			})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("expected gRPC status error, got %v", err)
+			}
+			if st.Code() != tt.wantCode {
+				t.Errorf("code = %v, want %v", st.Code(), tt.wantCode)
+			}
+			if st.Message() != tt.wantMsg {
+				t.Errorf("message = %q, want %q", st.Message(), tt.wantMsg)
+			}
+
+			var gotDebugDetail string
+			for _, d := range st.Details() {
+				if info, ok := d.(*epb.DebugInfo); ok {
+					gotDebugDetail = info.GetDetail()
+				}
+			}
+			if gotDebugDetail != tt.wantDebugDetail {
+				t.Errorf("DebugInfo.Detail = %q, want %q", gotDebugDetail, tt.wantDebugDetail)
+			}
+			if !strings.Contains(logBuf.String(), tt.wantLogSubstr) {
+				t.Errorf("RPC log %q does not contain %q", logBuf.String(), tt.wantLogSubstr)
+			}
+		})
+	}
+}

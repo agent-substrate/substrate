@@ -24,6 +24,7 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -35,15 +36,30 @@ import (
 // so clients can report a latency unaffected by their own scheduling overhead.
 const ServerElapsedTrailer = "x-server-elapsed-us"
 
-// ServerUnaryInterceptor is for ateapi. A handler's error reaches the caller
-// with the code apierror gives it; any other error, including a status received
-// from an upstream service, is Internal.
+// NewServerUnaryInterceptor returns a unary interceptor for ateapi. A handler's
+// error reaches the caller with the code apierror gives it; any other error,
+// including a status received from an upstream service, is Internal.
+//
+// When includeDebugInfo is true, the full server-side error string is attached
+// as a google.rpc.DebugInfo detail whenever it carries more context than the
+// client-facing status message.
 //
 // Request and response bodies are logged as they are: redaction of debug_redact
 // fields happens in the shared slog handler (internal/contextlogging) that
 // serverboot's InitLogger and InitLoggerWithWriter install as the default logger
 // in every server, so it also covers protos logged anywhere else in the process.
+func NewServerUnaryInterceptor(includeDebugInfo bool) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		return serverUnaryInterceptor(ctx, req, info, handler, includeDebugInfo)
+	}
+}
+
+// ServerUnaryInterceptor is NewServerUnaryInterceptor(false).
 func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return serverUnaryInterceptor(ctx, req, info, handler, false)
+}
+
+func serverUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler, includeDebugInfo bool) (any, error) {
 	startTime := time.Now()
 
 	resp, err := handler(ctx, req)
@@ -69,6 +85,14 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 
 	if err != nil {
 		if st, ok := apierror.FromError(err); ok {
+			if includeDebugInfo && err.Error() != st.Message() {
+				withDetails, detailErr := st.WithDetails(&errdetails.DebugInfo{Detail: err.Error()})
+				if detailErr != nil {
+					slog.WarnContext(ctx, "Failed to attach DebugInfo to gRPC status", slog.Any("err", detailErr))
+				} else {
+					st = withDetails
+				}
+			}
 			return nil, st.Err()
 		}
 		return nil, status.Errorf(codes.Internal, "internal server error: %v", err)

@@ -209,3 +209,117 @@ func TestNotAGRPCStatus(t *testing.T) {
 		t.Errorf("status.FromError() = %v, %v, want Unknown, false", s.Code(), ok)
 	}
 }
+
+func TestWithCause(t *testing.T) {
+	sentinel := errors.New("version mismatch in postgres")
+	fmtCause := errors.New("bad input")
+
+	tests := []struct {
+		name           string
+		err            error
+		wantCode       codes.Code
+		wantErr        string
+		wantStatus     string
+		wantTargets    []error
+		notWantTargets []error
+	}{
+		{
+			name:           "cause included in Error and omitted from FromError and Unwrap",
+			err:            Aborted("concurrent update conflict, please retry").WithCause(sentinel),
+			wantCode:       codes.Aborted,
+			wantErr:        "concurrent update conflict, please retry: version mismatch in postgres",
+			wantStatus:     "concurrent update conflict, please retry",
+			notWantTargets: []error{sentinel},
+		},
+		{
+			name:       "nil cause leaves Error unchanged",
+			err:        NotFound("actor not found").WithCause(nil),
+			wantCode:   codes.NotFound,
+			wantErr:    "actor not found",
+			wantStatus: "actor not found",
+		},
+		{
+			name:           "formatted %w stays reachable while cause does not leak to errors.Is",
+			err:            InvalidArgument("bad request: %w", fmtCause).WithCause(sentinel),
+			wantCode:       codes.InvalidArgument,
+			wantErr:        "bad request: bad input: version mismatch in postgres",
+			wantStatus:     "bad request: bad input",
+			wantTargets:    []error{fmtCause},
+			notWantTargets: []error{sentinel},
+		},
+		{
+			name:       "outermost apierror code and message win over apierror cause",
+			err:        FailedPrecondition("cannot resume").WithCause(NotFound("worker missing")),
+			wantCode:   codes.FailedPrecondition,
+			wantErr:    "cannot resume: worker missing",
+			wantStatus: "cannot resume",
+		},
+		{
+			name:           "wrapped apierror with cause keeps only own message in FromError",
+			err:            fmt.Errorf("step Load: %w", Aborted("conflict").WithCause(sentinel)),
+			wantCode:       codes.Aborted,
+			wantErr:        "step Load: conflict: version mismatch in postgres",
+			wantStatus:     "conflict",
+			notWantTargets: []error{sentinel},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Code(tt.err); got != tt.wantCode {
+				t.Errorf("Code() = %v, want %v", got, tt.wantCode)
+			}
+			if got := tt.err.Error(); got != tt.wantErr {
+				t.Errorf("Error() = %q, want %q", got, tt.wantErr)
+			}
+			st, ok := FromError(tt.err)
+			if !ok {
+				t.Fatalf("FromError() ok = false, want true")
+			}
+			if st.Code() != tt.wantCode {
+				t.Errorf("FromError().Code() = %v, want %v", st.Code(), tt.wantCode)
+			}
+			if st.Message() != tt.wantStatus {
+				t.Errorf("FromError().Message() = %q, want %q", st.Message(), tt.wantStatus)
+			}
+			for _, target := range tt.wantTargets {
+				if !errors.Is(tt.err, target) {
+					t.Errorf("errors.Is(%v, %v) = false, want true", tt.err, target)
+				}
+			}
+			for _, target := range tt.notWantTargets {
+				if errors.Is(tt.err, target) {
+					t.Errorf("errors.Is(%v, %v) = true, want false", tt.err, target)
+				}
+			}
+		})
+	}
+}
+
+func TestWithCauseDoesNotMutateReceiver(t *testing.T) {
+	base := NotFound("actor not found")
+	withCause := base.WithCause(errors.New("db row missing"))
+
+	if got := base.Error(); got != "actor not found" {
+		t.Errorf("base.Error() = %q, want %q", got, "actor not found")
+	}
+	if got := withCause.Error(); got != "actor not found: db row missing" {
+		t.Errorf("withCause.Error() = %q, want %q", got, "actor not found: db row missing")
+	}
+}
+
+func TestTypedNilError(t *testing.T) {
+	var typedNil *Error
+	var err error = typedNil
+
+	st, ok := FromError(err)
+	if ok || st.Code() != codes.Internal {
+		t.Errorf("FromError((*Error)(nil)) = (%v, %v), want (Internal, false)", st.Code(), ok)
+	}
+	if got := Code(err); got != codes.Internal {
+		t.Errorf("Code((*Error)(nil)) = %v, want Internal", got)
+	}
+	if got := typedNil.WithCause(errors.New("ignored")); got != nil {
+		t.Errorf("(*Error)(nil).WithCause() = %v, want nil", got)
+	}
+}

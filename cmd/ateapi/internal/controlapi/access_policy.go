@@ -152,7 +152,7 @@ func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapi
 	return s.impl.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
+func (s *ServiceImpl) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition) (*ateapi.AccessPolicy, error) {
 	deleted, err := s.store.DeleteAtespaceAccessPolicy(ctx, name, precondition)
 	return mapAccessPolicyWrite(deleted, err)
 }

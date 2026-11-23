@@ -17,11 +17,14 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/version"
@@ -70,6 +73,7 @@ func executeRoot(root *cobra.Command) error {
 		}
 		errOut := executedCmd.ErrOrStderr()
 		fmt.Fprintf(errOut, "Error: %v\n", err)
+		printDebugInfo(errOut, err)
 		var uerr *usageError
 		if errors.As(err, &uerr) {
 			fmt.Fprintf(errOut, "\n%s", executedCmd.UsageString())
@@ -77,6 +81,29 @@ func executeRoot(root *cobra.Command) error {
 		return err
 	}
 	return nil
+}
+
+func printDebugInfo(w io.Writer, err error) {
+	st, ok := status.FromError(err)
+	if !ok {
+		return
+	}
+	for _, detail := range st.Details() {
+		debugInfo, ok := detail.(*errdetails.DebugInfo)
+		if !ok {
+			continue
+		}
+		detailMsg := debugInfo.GetDetail()
+		stackEntries := debugInfo.GetStackEntries()
+		if detailMsg != "" {
+			fmt.Fprintf(w, "Debug info: %s\n", detailMsg)
+		} else if len(stackEntries) > 0 {
+			fmt.Fprintln(w, "Debug info:")
+		}
+		for _, entry := range stackEntries {
+			fmt.Fprintf(w, "  %s\n", entry)
+		}
+	}
 }
 
 func Execute() {

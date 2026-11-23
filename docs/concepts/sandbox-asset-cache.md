@@ -34,8 +34,8 @@ cannot cross mounts.
 | `sandbox-asset-cache/` | The cache (`--sandbox-asset-cache-dir`). `entries/<sha256 of key>/data` is a cached file or extracted tree, published read-only with execute bits kept; `tmp/` holds in-flight downloads; `.rm-*` are retired entries awaiting removal. An entry directory's mtime is its last-use clock. |
 | `actors/<actor uid>/sandbox-assets/` | The actor's assets, each a hard link into the cache, named by asset name. The only location a worker runs a sandbox binary from; the worker checks that a request names the actor's own directory. `sandbox-assets.staging/` beside it exists only while a Run fetches. |
 | `workers/<pod uid>/sandbox-runtimes.json` | What each worker advertises to the control plane, written by `atelet`. |
-| `workers/<pod uid>/default-runtime/<hash>/` | The worker's default runtimes, one directory per default its file advertises, by bundle hash, one per sandbox class, linked in from the cache by the prewarmer. These links are what keeps a default runtime cached while no actor runs it; the syncer removes a directory when the file stops naming its runtime, and they all go with the worker's directory when the pod does. |
-| `sandbox-asset-scratch/` | Short-lived destinations for fetches that have no actor and no worker directory to link into: the assets the worker sandbox syncer stages when checking a version (and probes `runsc` for CPU features). Wiped at startup. |
+| `workers/<pod uid>/default-runtime/<hash>/` | The worker's default runtimes, one directory per default its file advertises, by bundle hash, one per sandbox class, linked in from the cache by the worker sandbox syncer as it builds the file. These links are what keeps a default runtime cached while no actor runs it; the syncer removes a directory when the file stops naming its runtime, and they all go with the worker's directory when the pod does. |
+| `sandbox-asset-scratch/` | Short-lived destinations for fetches that have no actor and no worker directory to link into: the assets the worker sandbox syncer stages to verify a restorable version, and the `runsc` it probes for CPU features. Wiped at startup. |
 | `sandbox-runtime-index.json` | The runtime index serialized: every runtime a worker on this node has advertised, by hash, with the asset record the hash was computed from. |
 | `cache-boot-id` | The node's boot ID when `atelet` last started. A different ID at startup means the node rebooted, so `atelet` empties the cache first. |
 
@@ -77,18 +77,18 @@ pool runs, hashes every enabled version, and:
 - **registers** every hash in the runtime index, with its record, and writes
   the index file durably, *before* anything else, so a hash is resolvable
   before the worker can register it with the control plane;
-- fetches each version's assets into the cache (every sync for a microVM
-  default, and once per `atelet` process for restorable microVM versions and
-  gVisor `runsc` digests), probes what a snapshot taken on the runtime must
-  find again (CPU features for gVisor, host CPU identity for microVM), and
-  writes the worker's `sandbox-runtimes.json`, from which the worker
-  registers;
+- stages the **default** version's assets into its directory under the
+  worker's `default-runtime/`, on every sync, linking them from the cache
+  and fetching what the cache lacks, so they stay cached while no actor
+  runs them; stages each restorable version's assets once per `atelet`
+  process to verify them; probes what a snapshot taken on the runtime must
+  find again (CPU features for gVisor, once per `runsc` digest; host CPU
+  identity for microVM); and writes the worker's `sandbox-runtimes.json`,
+  from which the worker registers;
 - records what the worker now advertises, which is what the written file
   says;
-- makes the worker's `default-runtime/` directory match the file's
-  **default** runtimes, and hands each to the **prewarmer**, which links
-  the default's cached assets into the runtime's directory so they stay
-  cached while no actor runs them.
+- removes the directories under `default-runtime/` of the defaults the file
+  no longer names, which unlinks them.
 
 A `SandboxConfig` or `WorkerPool` change registers the affected pools'
 runtimes at once and rewrites their files after a jitter of up to thirty
@@ -109,49 +109,42 @@ before.
 ### The default runtime directories
 
 A worker's default runtime must stay cached while no actor runs it, and the
-cache has one way to say "in use": a hard link. So the prewarmer leaves its
-links in a directory that belongs to the worker, and the syncer decides
-which directories exist. Nothing counts references and nothing prunes.
+cache has one way to say "in use": a hard link. So the syncer stages the
+default into a directory that belongs to the worker and leaves the links
+there. Nothing counts references: a directory exists while the worker's
+file names its runtime as a default.
 
-- Once a worker's file is written and registered, the syncer makes
-  `default-runtime/` hold one directory per default the file names, by
-  bundle hash, and nothing else: the directory of a default the file no
-  longer names is removed, which unlinks that runtime, and an empty one is
-  created for each default that lacks one. Then it hands the prewarmer one
-  item per default, the hash and its directory.
-- The hand-over comes after the build on purpose. A build that fails, as a
-  permanent `runsc` probe failure does, leaves the file and so the
-  directories as they were, with the previous default still linked and still
-  advertised. Unless an evicted gVisor version was promoted to default, the
-  build has already fetched the default's assets into the cache, so the
-  prewarm is just hard links.
-- The prewarm fills what exists and creates nothing. It checks that its
-  directory is there, stages into it, and on an error checks again: a
-  directory gone, after a later sync or the pod's removal, means the item
-  was superseded, and it ends without a retry and without recreating
-  anything. A directory the syncer already filled costs a stat per asset, so
-  a re-sync with an unchanged default downloads nothing and leaves the links
-  alone.
-- A failed prewarm retries with backoff and gives up after eight attempts.
-  The directory stays, empty or partial, until the next sync; an actor
-  placed on that default meanwhile stages on demand.
+- The build stages the default into `default-runtime/<hash>/` before the
+  file names it, through the same cache call an actor's activation uses: a
+  directory already filled costs a stat per asset, a missing asset is linked
+  from the cache, and an evicted one is downloaded again. A default the
+  cache cannot serve fails the build, which leaves the file, and so the
+  previous default's directory, as they were. The gVisor probe runs a
+  `runsc` linked into the scratch directory for it, not the one under the
+  worker's directory.
+- Once the file is written and registered, the syncer removes everything
+  under `default-runtime/` but the directories of the defaults the file
+  names, which unlinks the retired runtime. The new default is linked before
+  the old one is unlinked, so the worker holds one throughout.
+- A build that fails after staging the default, as a permanent `runsc`
+  probe failure does, leaves the new directory beside the previous
+  default's. That pins one more runtime until a later sync writes the file
+  and prunes; nothing reads the directory meanwhile.
 - A pod's removal removes its whole directory, links included. After a
   restart the directories of pods still on the node keep protecting their
   defaults with no wait on the syncer, and the startup sweep removes the
   directories of pods that are gone.
 - Cache writes aren't synced, so after a node reboot atelet empties the cache
   and removes every worker's `default-runtime/` directory at startup. The
-  syncer and the prewarmer then rebuild them as on a new node.
+  syncer then rebuilds them as on a new node.
 
 The old default's directory is removed as soon as the file names the new
-default: by then the worker has registered the new default (and unless an
-evicted gVisor version was promoted to default, the build has already fetched
-it into the cache), so nothing new is placed on the old one. Actors already
-running on it hold their own links, and restores of snapshots taken on it go
-through the on-demand path like every non-default version. Several pods of
-one pool each hold their own links to the same entries; the entry becomes
-evictable when the last of them goes. One queue and one worker drain the
-prewarm items in order.
+default, which is linked under the worker by then. The worker registers the
+new file a moment later; an actor the control plane places on the old
+default before that fetches it on demand, like every non-default version,
+as does a restore of a snapshot taken on it. Actors already running on it
+hold their own links. Several pods of one pool each hold their own links to
+the same entries; the entry becomes evictable when the last of them goes.
 
 ## Eviction
 

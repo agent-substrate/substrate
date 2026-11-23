@@ -212,13 +212,13 @@ func TestConcurrentActorIsolation(t *testing.T) {
 		writeFile(t, ctx, rc, refA, markerConcurrentA)
 		writeFile(t, ctx, rc, refB, markerConcurrentB)
 
-		if got := readFile(t, ctx, rc, refA, markerConcurrentA); got.Content != writtenByProbe {
+		if got := readFile(t, ctx, rc, refA, markerConcurrentA); got.Content != markerContent(refA) {
 			t.Fatalf("control: actor %s reading its OWN %s = %q (error %q), want %q",
-				refA, markerConcurrentA, got.Content, got.Error, writtenByProbe)
+				refA, markerConcurrentA, got.Content, got.Error, markerContent(refA))
 		}
-		if got := readFile(t, ctx, rc, refB, markerConcurrentB); got.Content != writtenByProbe {
+		if got := readFile(t, ctx, rc, refB, markerConcurrentB); got.Content != markerContent(refB) {
 			t.Fatalf("control: actor %s reading its OWN %s = %q (error %q), want %q",
-				refB, markerConcurrentB, got.Content, got.Error, writtenByProbe)
+				refB, markerConcurrentB, got.Content, got.Error, markerContent(refB))
 		}
 
 		if got := readFile(t, ctx, rc, refA, markerConcurrentB); got.Error == "" {

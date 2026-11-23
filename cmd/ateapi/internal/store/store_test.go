@@ -46,7 +46,6 @@ func TestPreconditionCheck(t *testing.T) {
 		{
 			name:         "the guarded object is still the stored one",
 			precondition: Precondition{UID: storedUID, Version: storedVer},
-			wantErr:      nil,
 		},
 		{
 			name:         "the name now addresses a different incarnation",
@@ -65,6 +64,27 @@ func TestPreconditionCheck(t *testing.T) {
 			precondition: Precondition{UID: staleUID, Version: staleVer},
 			wantErr:      ErrUIDConflict,
 		},
+		{
+			name: "no guards",
+		},
+		{
+			name:         "uid only",
+			precondition: Precondition{UID: storedUID},
+		},
+		{
+			name:         "stale uid only",
+			precondition: Precondition{UID: staleUID},
+			wantErr:      ErrUIDConflict,
+		},
+		{
+			name:         "version only",
+			precondition: Precondition{Version: storedVer},
+		},
+		{
+			name:         "stale version only",
+			precondition: Precondition{Version: staleVer},
+			wantErr:      ErrVersionConflict,
+		},
 	}
 
 	for _, tt := range tests {
@@ -76,7 +96,7 @@ func TestPreconditionCheck(t *testing.T) {
 	}
 }
 
-func TestPreconditionValidate(t *testing.T) {
+func TestPreconditionValidateRequired(t *testing.T) {
 	tests := []struct {
 		name         string
 		precondition Precondition
@@ -106,8 +126,8 @@ func TestPreconditionValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.precondition.Validate(); !errors.Is(err, tt.wantErr) {
-				t.Errorf("Validate() = %v, want one matching %v", err, tt.wantErr)
+			if err := tt.precondition.ValidateRequired(); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ValidateRequired() = %v, want one matching %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -152,8 +172,8 @@ func TestPreconditionFrom(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("PreconditionFrom(observed) = %+v, want %+v", got, tt.want)
 			}
-			if err := got.Validate(); !errors.Is(err, tt.wantValidateErr) {
-				t.Errorf("PreconditionFrom(observed).Validate() = %v, want one matching %v", err, tt.wantValidateErr)
+			if err := got.ValidateRequired(); !errors.Is(err, tt.wantValidateErr) {
+				t.Errorf("PreconditionFrom(observed).ValidateRequired() = %v, want one matching %v", err, tt.wantValidateErr)
 			}
 		})
 	}

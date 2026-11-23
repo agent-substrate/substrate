@@ -156,9 +156,6 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 		if errors.Is(err, errTagDeleting) {
 			return nil, apierror.FailedPrecondition("Tag %s/%s is being deleted", tagRef.Atespace, tagRef.Name)
 		}
-		if errors.Is(err, store.ErrImmutableField) {
-			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
-		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
@@ -177,19 +174,26 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 }
 
 func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error) {
-	return s.store.UpdateTag(ctx, tagRef, precondition, func(toUpdate *ateapi.Tag) error {
-		// Apply the mutation function to the stored value.
-		oldVal := proto.CloneOf(toUpdate)
-		if err := mutate(toUpdate); err != nil {
-			return err
-		}
+	return s.store.UpdateTag(ctx, tagRef, precondition, validatedTagMutation(ctx, mutate))
+}
 
-		// Validate the merged tag against the one it replaces. This is where
-		// the rules the request could not be checked against land: scope, and
-		// the immutability of metadata and source_actor.
-		errs := apivalidation.ValidateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal)
-		return resources.ToAPIError(errs)
-	})
+// validatedTagMutation wraps mutate so the Tag it writes is validated as an
+// update of the stored Tag. RPCService.UpdateTag merges the client's tag into
+// the stored one, and its request validation cannot compare the two, so a
+// failure here is an API error.
+func validatedTagMutation(ctx context.Context, mutate func(*ateapi.Tag) error) func(*ateapi.Tag) error {
+	return func(toUpdate *ateapi.Tag) error {
+		oldVal := proto.CloneOf(toUpdate)
+		if mutate != nil {
+			if err := mutate(toUpdate); err != nil {
+				return err
+			}
+		}
+		if errs := apivalidation.ValidateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal); len(errs) > 0 {
+			return resources.ToAPIError(errs)
+		}
+		return nil
+	}
 }
 
 // DeleteTag removes the tag and collects the external snapshot it owns.
@@ -200,11 +204,11 @@ func (s *RPCService) DeleteTag(ctx context.Context, req *ateapi.DeleteTagRequest
 	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
-	return s.store.MarkTagForDeletion(ctx, tagRef, precondition, mutate)
+func (s *ServiceImpl) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+	return s.store.MarkTagForDeletion(ctx, tagRef, precondition, validatedTagMutation(ctx, mutate))
 }
 
-func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error) {
+func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition) (*ateapi.Tag, error) {
 	// TODO: implement this
 	return s.store.DeleteTag(ctx, tagRef, precondition)
 }

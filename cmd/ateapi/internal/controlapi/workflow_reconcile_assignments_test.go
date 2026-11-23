@@ -368,7 +368,7 @@ func TestReconcileAssignments_LeavesReplacedWorker(t *testing.T) {
 	mustRaiseEpoch(t, ctx, persistence, 5)
 
 	replacing := &hookedStore{Interface: persistence, beforeUpdateWorker: func() {
-		if _, err := persistence.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		if _, err := persistence.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err != nil {
 			t.Fatalf("DeleteWorker() failed: %v", err)
 		}
 		seedEpochWorker(t, ctx, persistence, 1, 1)

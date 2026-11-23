@@ -206,6 +206,35 @@ func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 	}
 }
 
+// readDeadFinal reads the cgroup of h's sandbox, which has died, for the final
+// record. The cgroup keeps its CPU counter and memory peak until the teardown
+// removes it, but the memory went with the processes, so memory usage and
+// working set are left unset: no one measured them at the death. measure does
+// the same for any empty cgroup; this also covers a kernel that does not
+// report cgroup.events. A failed read leaves the newest sample to stand in, as
+// in readFinal.
+func (s *AteWorkerService) readDeadFinal(ctx context.Context, h *hostedActor) {
+	sample, _, err := s.measure(ctx, h)
+	if err != nil {
+		return
+	}
+	markMemoryUnmeasured(sample)
+	h.usage.Store(sample)
+}
+
+// endActivation reads h's final usage with read, tears the activation down,
+// and writes its final record, in that order: the reading needs the sandbox's
+// cgroup, which the teardown removes. h is nil for an actor not hosted. It
+// returns the teardown's error.
+func (s *AteWorkerService) endActivation(ctx context.Context, h *hostedActor, read func(context.Context, *hostedActor), teardown func() error) error {
+	if h != nil {
+		read(ctx, h)
+	}
+	err := teardown()
+	s.recordFinalIfEnded(ctx, h)
+	return err
+}
+
 // recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
 // its activation down, which unhosts the actor even when a later step fails.
 // The caller holds the actor's lock.
@@ -254,7 +283,19 @@ func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*atewor
 		raw = r
 		return sample, nil, err
 	})
+	if err == nil && raw.Empty {
+		// No process is left in the cgroup, as after the sandbox died: its
+		// memory went with them, so none was measured. The CPU counter stays.
+		markMemoryUnmeasured(sample)
+	}
 	return sample, raw, err
+}
+
+// markMemoryUnmeasured says s carries no memory usage or working set.
+func markMemoryUnmeasured(s *ateworkerpb.WorkloadStatsSample) {
+	s.MemoryCurrentBytes = 0
+	s.MemoryWorkingSetBytes = 0
+	s.MemoryUnmeasured = true
 }
 
 // sampleSandbox reads the sandbox cgroup and builds the sample attributed to

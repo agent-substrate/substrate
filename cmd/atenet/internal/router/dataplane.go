@@ -33,9 +33,12 @@ type dataplaneHealthCheck struct {
 	expectedBody string
 }
 
-// Both dataplanes resolve the worker address from ext_proc's dynamic
-// metadata (see ingress.OriginalDstMetadataKey). Actor identity is carried in
-// explicit headers, so ingress.New needs no per-dataplane routing mode.
+// ingress.New's Go ext_proc handler resolves the worker address and writes
+// it to ext_proc's dynamic metadata (see ingress.OriginalDstMetadataKey).
+// Only the Envoy dataplane calls it; agentgateway resolves the worker
+// address itself, in-process, via its own substrateIngress policy. Actor
+// identity is carried in explicit headers either way, so ingress.New needs
+// no per-dataplane routing mode.
 
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {

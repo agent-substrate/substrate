@@ -63,10 +63,6 @@ var (
 	// ErrPreconditionRequired indicates an update was called with a precondition
 	// missing either guard (uid or version). Blind writes are not accepted.
 	ErrPreconditionRequired = errors.New("persistence: precondition required")
-
-	// ErrImmutableField indicates an update's mutation changed a field that is
-	// immutable for the lifetime of the stored object.
-	ErrImmutableField = errors.New("persistence: immutable field")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
@@ -110,13 +106,15 @@ type Interface interface {
 	// update the actor's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
 	// write wins, or mutate's error.
-	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, ErrUIDConflict/ErrVersionConflict if precondition does not
 	// describe the actor the caller observed, or ErrFailedPrecondition if the
 	// actor's status.worker_assignment is set.
-	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapi.Actor, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition) (*ateapi.Actor, error)
 
 	// Creates the 1:1 policy subresource for an existing Actor.
 	CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error)
@@ -124,11 +122,14 @@ type Interface interface {
 	GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error)
 	// Transactionally updates an Actor's policy when its current UID and version
 	// match the precondition.
+	// Both precondition guards are required. Returns ErrPreconditionRequired if
+	// either is unset.
 	UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(*ateapi.EgressPolicy) error) (*ateapi.EgressPolicy, error)
 	// Deletes and returns an Actor's policy subresource. Returns ErrNotFound if
 	// missing, or ErrUIDConflict/ErrVersionConflict if precondition does not
 	// describe the policy the caller observed.
-	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapi.EgressPolicy, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition Precondition) (*ateapi.EgressPolicy, error)
 
 	// CreateTag creates an immutable tag to an actor snapshot.
 	//
@@ -160,11 +161,8 @@ type Interface interface {
 	//
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
-	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, ErrImmutableField if the mutated tag changed a field that is
-	// immutable for its lifetime, or the mutate's error verbatim otherwise.
-	//
-	// status.snapshot is immutable once set
+	// respective preconditions fail, ErrVersionConflict if the retry budget is
+	// exhausted, or mutate's own error otherwise.
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// MarkTagForDeletion initiates the deletion of a tag. It sets
@@ -172,12 +170,14 @@ type Interface interface {
 	// update the tag's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
 	// write wins, or mutate's error.
-	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing, or
 	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
 	// tag the caller observed.
-	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapi.Tag, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition) (*ateapi.Tag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
@@ -195,7 +195,8 @@ type Interface interface {
 	// does not describe the atespace the caller observed, or
 	// ErrFailedPrecondition if the atespace is not empty (e.g. there are actors
 	// in it).
-	DeleteAtespace(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.Atespace, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteAtespace(ctx context.Context, name string, precondition Precondition) (*ateapi.Atespace, error)
 
 	// Creates the deployment-wide global access policy singleton.
 	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error)
@@ -203,6 +204,8 @@ type Interface interface {
 	GetGlobalAccessPolicy(ctx context.Context) (*ateapi.AccessPolicy, error)
 	// Transactionally updates the deployment-wide global access policy singleton
 	// when its current UID and version match the precondition.
+	// Both precondition guards are required. Returns ErrPreconditionRequired if
+	// either is unset.
 	UpdateGlobalAccessPolicy(ctx context.Context, precondition Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error)
 
 	// Creates the 1:1 access policy subresource for an existing Atespace.
@@ -211,11 +214,14 @@ type Interface interface {
 	GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapi.AccessPolicy, error)
 	// Transactionally updates an Atespace's access policy when its current UID
 	// and version match the precondition.
+	// Both precondition guards are required. Returns ErrPreconditionRequired if
+	// either is unset.
 	UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error)
 	// Deletes and returns an Atespace's access policy subresource. Returns
 	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
 	// precondition does not describe the policy the caller observed.
-	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.AccessPolicy, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition Precondition) (*ateapi.AccessPolicy, error)
 
 	// Stores a new ActorTemplate and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -242,12 +248,14 @@ type Interface interface {
 	// non-nil, so callers can update the template's status. Returns ErrNotFound
 	// if missing, ErrUIDConflict/ErrVersionConflict if precondition fails or a
 	// concurrent write wins, or mutate's error.
-	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(toUpdate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
 	// precondition does not describe the template the caller observed.
-	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition DeletePreconditions) (*ateapi.ActorTemplate, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition) (*ateapi.ActorTemplate, error)
 
 	// Registers a new idle worker and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -278,13 +286,15 @@ type Interface interface {
 	// update the worker's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
 	// write wins, or mutate's error.
-	MarkWorkerForDeletion(ctx context.Context, name string, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	MarkWorkerForDeletion(ctx context.Context, name string, precondition Precondition, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error)
 
 	// Removes a worker by name and returns the deleted resource. Returns
 	// ErrNotFound if missing, ErrUIDConflict/ErrVersionConflict if
 	// precondition does not describe the worker the caller observed, or
 	// ErrFailedPrecondition if the worker still holds an assignment.
-	DeleteWorker(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.Worker, error)
+	// Each precondition guard is optional: an unset one is not checked.
+	DeleteWorker(ctx context.Context, name string, precondition Precondition) (*ateapi.Worker, error)
 
 	// An assignment is written only together with its Actor, and Worker
 	// allocation moves with it, so an Actor names a Worker in
@@ -295,13 +305,15 @@ type Interface interface {
 	// BindActorToWorker assigns an Actor, updates the Worker's allocation, and
 	// applies mutate to the Actor as UpdateActor does, all in one transaction.
 	// It returns the updated Actor. precondition must name the assignment's
-	// Actor, and mutate should point the Actor at the Worker.
+	// Actor with both guards set, and mutate should point the Actor at the
+	// Worker.
 	//
 	// admit decides whether the Worker will take the Actor, and runs against the
 	// Worker as it stands with its row locked, so the answer cannot go stale
 	// between the check and the bind. Returning an error from it refuses the
 	// bind and is returned unchanged.
 	//
+	// ErrPreconditionRequired if precondition omits either guard,
 	// ErrWorkerNotFound if the Worker is gone, ErrNotFound if the Actor is, and
 	// ErrUIDConflict/ErrVersionConflict if precondition fails. Binding an Actor
 	// that is already bound is an error. Any error leaves both unchanged.
@@ -312,6 +324,9 @@ type Interface interface {
 	// precondition names, on whichever Worker holds it, if any. mutate should
 	// clear the Actor's worker assignment. It returns the updated Actor. Any
 	// error leaves both unchanged.
+	//
+	// Both precondition guards are required. Returns ErrPreconditionRequired if
+	// either is unset.
 	UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
 	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
@@ -334,43 +349,16 @@ type Interface interface {
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
 }
 
-// Precondition guards an update with the uid and version the caller observed:
-// the write lands only if the stored object still matches both. Both fields are
-// required.
+// Precondition holds validation checks that allow callers to enforce that
+// a mutated resource has a given UID and/or version. Useful for implementing
+// optimistic locking.
 type Precondition struct {
-	// UID is the incarnation the write is for.
+	// A precondition that validates the mutated resource still has this
+	// UID. If not set, no validation is performed.
 	UID string
-	// Version is the revision the write is against.
+	// A precondition that validates the mutated resource still is at this
+	// version. If not set, no validation is performed.
 	Version int64
-}
-
-// DeletePreconditions pins the object incarnation a delete may act on. Unlike
-// Precondition, whose guards an update requires, each guard here is
-// independently waivable: the zero value pins nothing, which is what an
-// unguarded delete wants.
-type DeletePreconditions struct {
-	// UID accepts only the object carrying it; empty accepts whichever object
-	// holds the name at delete time.
-	UID string
-	// Version accepts only that revision; zero accepts whatever revision the
-	// store is at.
-	Version int64
-}
-
-// Check reports whether md still describes the object the caller observed.
-// A waived guard is not checked. The uid is reported first: a new incarnation
-// makes the version meaningless.
-//
-// Returns ErrUIDConflict or ErrVersionConflict, which the delete surfaces
-// verbatim.
-func (p DeletePreconditions) Check(md *ateapi.ResourceMetadata) error {
-	if p.UID != "" && p.UID != md.GetUid() {
-		return ErrUIDConflict
-	}
-	if p.Version != 0 && p.Version != md.GetVersion() {
-		return ErrVersionConflict
-	}
-	return nil
 }
 
 // hasResourceMetadata is an object the store addresses by atespace and name,
@@ -386,10 +374,10 @@ func PreconditionFrom(observed hasResourceMetadata) Precondition {
 	return Precondition{UID: md.GetUid(), Version: md.GetVersion()}
 }
 
-// Validate reports whether the precondition carries both required guards (uid and version)
+// ValidateRequired reports whether the precondition carries both guards.
 //
-// Returns ErrPreconditionRequired, which the update surfaces verbatim.
-func (p Precondition) Validate() error {
+// Returns an error matching ErrPreconditionRequired.
+func (p Precondition) ValidateRequired() error {
 	if p.UID == "" {
 		return fmt.Errorf("%w: uid", ErrPreconditionRequired)
 	}
@@ -399,13 +387,17 @@ func (p Precondition) Validate() error {
 	return nil
 }
 
-// Check reports whether md still matches the guards p carries. The uid is reported
-// first: a new incarnation makes the version meaningless.
+// Checks whether a given resource passes a given set of preconditions.
+// An unset guard is not checked.
+// The uid check is reported first: a new incarnation makes the version
+// meaningless.
+//
+// Returns ErrUIDConflict or ErrVersionConflict.
 func (p Precondition) Check(md *ateapi.ResourceMetadata) error {
-	if p.UID != md.GetUid() {
+	if p.UID != "" && p.UID != md.GetUid() {
 		return ErrUIDConflict
 	}
-	if p.Version != md.GetVersion() {
+	if p.Version != 0 && p.Version != md.GetVersion() {
 		return ErrVersionConflict
 	}
 	return nil

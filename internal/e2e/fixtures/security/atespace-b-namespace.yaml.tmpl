@@ -15,10 +15,10 @@
 # Atespace B of the cross-atespace security fixture: a namespace only.
 #
 # Atespace B deliberately has no WorkerPool. Pools are not scoped to an
-# atespace, so B's actors are placed on the single-worker pool that
-# atespace-a-pool.yaml.tmpl deploys in atespace A's namespace. That forces
-# A's and B's actors to take turns on one worker, which is the reuse boundary
-# the suite tests.
+# atespace, so an actor in B would be placed on the single-worker pool that
+# atespace-a-pool.yaml.tmpl deploys in atespace A's namespace.
+# TestCrossAtespaceIsolation never gets that far: the one actor it tries to
+# create in B is seeded from atespace A's tag, and the API must refuse it.
 #
 # The namespace is still needed: Substrate reconciles an atespace's
 # namespaced objects (network policies, for example) into it.

@@ -30,7 +30,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -180,25 +179,6 @@ def run_adaptive_client(
     return proc.wait()
 
 
-def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
-    # Imported here so non-GCS use doesn't require google-cloud-storage.
-    from google.cloud import storage
-
-    bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
-    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
-        str(local_path)
-    )
-
-
-def upload(src: Path, dest: str) -> None:
-    if dest.startswith("gs://"):
-        upload_to_gcs(src, dest)
-    else:
-        dest_path = Path(dest)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dest_path)
-
-
 def log_run_config(args: argparse.Namespace, prefix: str, logs: TextIO) -> None:
     lines = [
         "==== Run config ====",
@@ -303,17 +283,11 @@ def main() -> None:
             tee(logs, f"{ADAPTIVE_CLIENT} exited with code {adaptive_exit}")
 
             if output_path.exists():
-                output_dict = output_mod.parse_output_textproto(
-                    output_path.read_text(), DESC_PATH
-                )
-                results_path.write_text(json.dumps(output_dict, indent=2))
-                rows = output_mod.stage_rows(output_dict)
-                output_mod.write_jsonl(
-                    output_mod.stats_records(rows, args.tag, args.name),
-                    stats_path,
-                )
-                summary = output_mod.capacity_summary(
-                    output_dict,
+                summary, testing_stage_parsed = output_mod.write_artifacts(
+                    output_path,
+                    DESC_PATH,
+                    tag=args.tag,
+                    name=args.name,
                     envoy_cpu=args.envoy_cpu,
                     actors=args.actors,
                     client_concurrency=args.client_concurrency,
@@ -322,10 +296,6 @@ def main() -> None:
                         if args.tail_latency_slo_ms > 0
                         else None
                     ),
-                )
-                capacity_path.write_text(json.dumps(summary, indent=2))
-                testing_stage_parsed = any(
-                    r["stage"] == "testing" for r in rows
                 )
                 tee(logs, f"Capacity summary: {json.dumps(summary)}")
             else:
@@ -359,29 +329,20 @@ def main() -> None:
         )
     )
 
-    upload_ok = True
-    files = [
-        (status_path, "status.json"),
-        (logs_path, "logs.txt"),
-        (spec_path, "spec.textproto"),
-        (output_path, "output.textproto"),
-        (results_path, "results.json"),
-        (stats_path, "stats.jsonl"),
-        (capacity_path, "capacity.json"),
-    ]
-    for src, basename in files:
-        if not src.exists():
-            print(f"Skipping {src}: not produced", flush=True)
-            continue
-        dest = f"{prefix}/{basename}"
-        try:
-            upload(src, dest)
-            print(f"Uploaded {src} -> {dest}", flush=True)
-        except Exception as e:
-            print(f"Upload of {src} failed: {e}", flush=True)
-            upload_ok = False
+    upload_failures = output_mod.upload_files(
+        [
+            status_path,
+            logs_path,
+            spec_path,
+            output_path,
+            results_path,
+            stats_path,
+            capacity_path,
+        ],
+        prefix,
+    )
 
-    sys.exit(0 if (converged and upload_ok) else 1)
+    sys.exit(0 if (converged and not upload_failures) else 1)
 
 
 if __name__ == "__main__":

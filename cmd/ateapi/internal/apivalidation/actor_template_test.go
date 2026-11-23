@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -991,6 +993,63 @@ func TestValidateActorTemplate(t *testing.T) {
 				op := MakeCreateOp(context.Background())
 				return Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil)
 			}, tt.want, tt.wantWithPreview)
+		})
+	}
+}
+
+// TestValidateActorTemplateUpdate covers the rules that compare an
+// ActorTemplate to its stored value. TestValidateActorTemplate covers the rest.
+func TestValidateActorTemplateUpdate(t *testing.T) {
+	stored := func() *ateapi.ActorTemplate {
+		return validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Uid = "01234567-89ab-cdef-0123-456789abcdef"
+			tmpl.Metadata.Version = 3
+			tmpl.Metadata.CreateTime = timestamppb.New(time.Unix(1000, 0))
+			tmpl.Metadata.UpdateTime = timestamppb.New(time.Unix(2000, 0))
+			tmpl.Status = &ateapi.ActorTemplateStatus{}
+		})
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ateapi.ActorTemplate)
+		want   field.ErrorList
+	}{{
+		name: "unchanged",
+	}, {
+		name: "golden snapshot status set",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Status.GoldenSnapshotStatus = &ateapi.GoldenSnapshotStatus{ErrorMessage: "failed"}
+		},
+	}, {
+		name:   "metadata cleared",
+		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.Metadata = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("metadata"), "")},
+	}, {
+		name:   "metadata.atespace changed",
+		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.Metadata.Atespace = "ns2" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "metadata.name changed",
+		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.Metadata.Name = "tmpl-b" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "metadata.uid changed",
+		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.Metadata.Uid = "fedcba98-7654-3210-fedc-ba9876543210" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "uid"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "metadata.create_time changed",
+		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.Metadata.CreateTime = timestamppb.New(time.Unix(1500, 0)) },
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "create_time"), nil, "").WithOrigin("immutable")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newVal := stored()
+			if tt.mutate != nil {
+				tt.mutate(newVal)
+			}
+			assertValidate(t, func() field.ErrorList {
+				return ValidateActorTemplateUpdate(context.Background(), nil, newVal, stored())
+			}, tt.want, nil)
 		})
 	}
 }

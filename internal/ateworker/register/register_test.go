@@ -184,6 +184,17 @@ func TestEpochRegistered(t *testing.T) {
 	}
 }
 
+func TestSandboxRuntimesReported(t *testing.T) {
+	var r SandboxRuntimes
+	if err := r.Reported(context.Background()); err == nil {
+		t.Error("Reported() before report = nil, want an error")
+	}
+	r.reported.Store(true)
+	if err := r.Reported(context.Background()); err != nil {
+		t.Errorf("Reported() after report = %v, want nil", err)
+	}
+}
+
 // fakeSupport is a supportClient that fails the first acquireFails acquires
 // and fails registration with registerErrs in turn.
 type fakeSupport struct {
@@ -270,38 +281,63 @@ func TestRegisterOnce(t *testing.T) {
 	}
 }
 
+// run stores the epoch as soon as registration succeeds, and marks sandbox
+// runtimes reported only after the control plane accepts the first report.
 func TestRunStoresEpochBeforeReportingRuntimes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	for _, tc := range []struct {
+		name         string
+		reportErr    error
+		wantReported bool
+	}{
+		{name: "report accepted", wantReported: true},
+		{name: "report failed", reportErr: status.Error(codes.Unavailable, "ateapi is down")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
-	path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
-	if _, err := sandboxruntimes.Write(path, gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})); err != nil {
-		t.Fatal(err)
-	}
-	var epoch Epoch
-	client := &runtimesRecorder{fakeSupport: &fakeSupport{}, onReport: func(req *ateletpb.SetWorkerSandboxRuntimesRequest) {
-		if got := epoch.Load(); got != req.GetEpoch() {
-			t.Errorf("epoch stored = %d when runtimes were reported with %d", got, req.GetEpoch())
-		}
-		cancel()
-	}}
-	err := run(ctx, ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, PodIPs: []string{"10.0.0.1"}}, &ateletpb.WorkerResources{Actors: testActors}, client, &epoch, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("run() = %v, want context.Canceled", err)
-	}
-	if epoch.Load() != 1 {
-		t.Errorf("epoch = %d, want 1", epoch.Load())
+			path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
+			if _, err := sandboxruntimes.Write(path, gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})); err != nil {
+				t.Fatal(err)
+			}
+			var (
+				epoch    Epoch
+				runtimes SandboxRuntimes
+			)
+			client := &runtimesRecorder{fakeSupport: &fakeSupport{}, err: tc.reportErr, onReport: func(req *ateletpb.SetWorkerSandboxRuntimesRequest) {
+				if got := epoch.Load(); got != req.GetEpoch() {
+					t.Errorf("epoch stored = %d when runtimes were reported with %d", got, req.GetEpoch())
+				}
+				if err := runtimes.Reported(ctx); err == nil {
+					t.Error("Reported() = nil while runtimes were being reported, want an error")
+				}
+				cancel()
+			}}
+			err := run(ctx, ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, PodIPs: []string{"10.0.0.1"}}, &ateletpb.WorkerResources{Actors: testActors}, client, &epoch, &runtimes, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("run() = %v, want context.Canceled", err)
+			}
+			if epoch.Load() != 1 {
+				t.Errorf("epoch = %d, want 1", epoch.Load())
+			}
+			if err := runtimes.Reported(context.Background()); (err == nil) != tc.wantReported {
+				t.Errorf("Reported() = %v, want ready %v", err, tc.wantReported)
+			}
+		})
 	}
 }
 
+// runtimesRecorder is a fakeSupport that hands each sandbox runtimes report to
+// onReport and returns err.
 type runtimesRecorder struct {
 	*fakeSupport
 	onReport func(*ateletpb.SetWorkerSandboxRuntimesRequest)
+	err      error
 }
 
 func (r *runtimesRecorder) SetWorkerSandboxRuntimes(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 	r.onReport(req)
-	return nil
+	return r.err
 }
 
 func TestReconcilerSync(t *testing.T) {
@@ -829,7 +865,7 @@ func TestReportFailsFastOnBadCredentials(t *testing.T) {
 		PodIPs:               []string{"10.0.0.1"},
 		SandboxClass:         "gvisor",
 		RuntimesFile:         filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName),
-	}, &Epoch{})
+	}, &Epoch{}, &SandboxRuntimes{})
 	if err == nil {
 		t.Fatal("Report() with unreadable credentials succeeded, want an error the caller can exit on")
 	}
@@ -872,7 +908,7 @@ func TestReportFailsFastOnMissingConfig(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Report(ctx, tc.cfg, &Epoch{})
+			err := Report(ctx, tc.cfg, &Epoch{}, &SandboxRuntimes{})
 			if err == nil {
 				t.Fatal("Report() succeeded, want an error the caller can exit on")
 			}

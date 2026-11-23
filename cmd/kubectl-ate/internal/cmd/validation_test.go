@@ -16,11 +16,15 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func resetFlagsRecursive(c *cobra.Command) {
@@ -552,5 +556,91 @@ func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
 	}
 	if strings.Contains(stderr, "Usage:") {
 		t.Errorf("expected runtime error not to print Usage, got:\n%s", stderr)
+	}
+}
+
+func TestExecuteRootPrintsDebugInfo(t *testing.T) {
+	statusWithDebug := func(t *testing.T, detail string, stack ...string) error {
+		t.Helper()
+		st, err := status.New(codes.Aborted, "concurrent update conflict, please retry").WithDetails(&errdetails.DebugInfo{
+			Detail:       detail,
+			StackEntries: stack,
+		})
+		if err != nil {
+			t.Fatalf("WithDetails: %v", err)
+		}
+		return st.Err()
+	}
+
+	tests := []struct {
+		name           string
+		cmdErr         error
+		wantSubstrs    []string
+		notWantSubstrs []string
+	}{
+		{
+			name:   "direct gRPC status with DebugInfo",
+			cmdErr: statusWithDebug(t, "concurrent update conflict, please retry: row version mismatch"),
+			wantSubstrs: []string{
+				"Error: rpc error: code = Aborted desc = concurrent update conflict, please retry",
+				"Debug info: concurrent update conflict, please retry: row version mismatch",
+			},
+		},
+		{
+			name:   "wrapped gRPC status with DebugInfo and stack entries",
+			cmdErr: fmt.Errorf("failed to resume actor: %w", statusWithDebug(t, "conflict: store.ErrNotFound", "frame1", "frame2")),
+			wantSubstrs: []string{
+				"Error: failed to resume actor: rpc error: code = Aborted desc = concurrent update conflict, please retry",
+				"Debug info: conflict: store.ErrNotFound",
+				"  frame1",
+				"  frame2",
+			},
+		},
+		{
+			name:   "DebugInfo with stack entries only prints header",
+			cmdErr: statusWithDebug(t, "", "frame1"),
+			wantSubstrs: []string{
+				"Error: rpc error: code = Aborted desc = concurrent update conflict, please retry",
+				"Debug info:\n  frame1",
+			},
+		},
+		{
+			name:           "gRPC status without DebugInfo",
+			cmdErr:         status.Error(codes.NotFound, "Actor foo not found"),
+			wantSubstrs:    []string{"Error: rpc error: code = NotFound desc = Actor foo not found"},
+			notWantSubstrs: []string{"Debug info:"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var errBuf bytes.Buffer
+			cmd := &cobra.Command{
+				Use:           "test-cmd",
+				SilenceUsage:  true,
+				SilenceErrors: true,
+				RunE: func(cmd *cobra.Command, args []string) error {
+					return tc.cmdErr
+				},
+			}
+			cmd.SetErr(&errBuf)
+			cmd.SetArgs([]string{})
+
+			if err := executeRoot(cmd); err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			stderr := errBuf.String()
+			for _, want := range tc.wantSubstrs {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+				}
+			}
+			for _, notWant := range tc.notWantSubstrs {
+				if strings.Contains(stderr, notWant) {
+					t.Errorf("stderr = %q, did not want it to contain %q", stderr, notWant)
+				}
+			}
+		})
 	}
 }

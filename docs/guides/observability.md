@@ -261,7 +261,7 @@ The stdout record carries the same flat `ate.*` keys as the OTLP event, dated wh
 jsonPayload.msg="Actor usage sampled" AND jsonPayload."ate.actor.uid"="8f2a…"
 ```
 
-* **The measurements** follow [the rules above](#the-same-records-over-otlp): absent while the actor is pending, CPU in seconds since the activation began, memory usage and working set absolute. An activation that ends any other way, as by a crash, has no `final` record, so take the highest CPU per epoch rather than wait for one. The `final` reading is taken just before the teardown, bounded on a microVM to 10ms. When it fails or times out, the `final` record repeats the newest measured sample, dated when that sample was read, or is pending when none was measured.
+* **The measurements** follow [the rules above](#the-same-records-over-otlp): absent while the actor is pending, CPU in seconds since the activation began, memory usage and working set absolute. An activation whose sandbox dies on its own still gets a `final` record when the ateworker tears it down: on gVisor its CPU and memory peak are read after the death and its memory usage and working set are absent, since the memory went with the processes, and on a microVM the newest sample stands in. An activation that ends any other way, as by a lost worker, has no `final` record, so take the highest CPU per epoch rather than wait for one. The `final` reading is taken just before the teardown, bounded on a microVM to 10ms. When it fails or times out, the `final` record repeats the newest measured sample, dated when that sample was read, or is pending when none was measured.
 * **Cadence**: `--usage-sample-interval` on the ateworker sets the timer (default `1m`, at least `50s`). Each sweep writes one periodic record per actor, and `GetActiveWorkloadStats` serves the latest sample rather than reading again.
 * **Trace context**: `initial` records come from the Run or Restore call (on a microVM, from a goroutine the call starts, so the record can land just before or after the call returns) and `final` records from the call that tears the activation down, a Checkpoint, a Terminate, or, on a microVM, the Run or Restore that re-hosts it; both carry that call's span, like any record in [Joining Logs to Traces](#joining-logs-to-traces). `periodic` records come from the sampler, and a shutdown's `final` records from the drain, which serve no request, so they carry none.
 * **Delivery is best-effort**: the stdout record ignores `--log-level` and sits behind a bounded queue, so a stalled log consumer costs records, with a warning, never the sampler.
@@ -325,6 +325,30 @@ For `ate.workerpool.workers`:
   ```
 
   When one backend receives several clusters, add `cluster` to both groupings, or same-named pools in different clusters merge.
+
+* A worker counts under `ate.sandbox.class` `unknown` until its process reports a class, and only a worker with a known class gives its pool zero-valued series for that class. A pool with no `Worker` at all (for example, when none of its pods is scheduled) has no series on `ate.workerpool.workers`. So `idle == 0` alone does not fire when every worker in a pool is `unknown` or when a pool has no `Worker`. Idle workers per pool, with both cases as 0:
+
+  ```promql
+  (
+    sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers", "ate.worker.state"="idle", "ate.sandbox.class"!="unknown"}
+      )
+    )
+    or
+    0 * sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers"}
+      )
+    )
+    or
+    0 * max by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      {"ate.workerpool.desired_workers"} > 0
+    )
+  )
+  ```
+
+  Alert on `== 0`. The second branch covers a pool whose workers all report `unknown`. The third branch covers a pool with `spec.replicas > 0` and no `Worker` yet. That branch requires a backend that receives `atecontroller`'s metrics, which the kind Prometheus does not (see [Local Metrics with Prometheus](#local-metrics-with-prometheus-kind-cluster)).
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, `denied`, or `resume_error`. `denied` is a request the router refused by policy (a 403 or `PermissionDenied`), such as an egress request outside the actor's egress policy; `resume_error` is left for a resume that failed for any other reason, a router defect.

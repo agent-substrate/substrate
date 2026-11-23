@@ -2381,8 +2381,16 @@ type WorkerAssignment struct {
 	// +k8s:customValidation # a SPIFFE ID
 	// +k8s:update=NoModify
 	WorkerSpiffeId string `protobuf:"bytes,10,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// actor_execution_uid identifies the Actor's current execution on this Worker.
+	// Each Run or Restore call starts an execution with a new UUID. The field is
+	// empty until the Actor becomes RUNNING and for executions started by an
+	// older API server.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ActorExecutionUid string `protobuf:"bytes,11,opt,name=actor_execution_uid,json=actorExecutionUid,proto3" json:"actor_execution_uid,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *WorkerAssignment) Reset() {
@@ -2485,6 +2493,13 @@ func (x *WorkerAssignment) GetWorkerSpiffeId() string {
 	return ""
 }
 
+func (x *WorkerAssignment) GetActorExecutionUid() string {
+	if x != nil {
+		return x.ActorExecutionUid
+	}
+	return ""
+}
+
 // TagStatus is the server-owned state of a Tag.
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
@@ -2497,14 +2512,20 @@ type TagStatus struct {
 	// moves between snapshots and is usable only once COMPLETED. Unset until it
 	// is recorded; a tag whose creation failed first never gets one.
 	//
+	// (-- Custom validation allows an update to record the snapshot once, and then
+	// only to move its durable_snapshot from PENDING to COMPLETED. --)
+	//
 	// +k8s:optional
+	// +k8s:update=NoUnset
 	// +k8s:subfield(durable_snapshot)=+k8s:required
+	// +k8s:customValidation
 	Snapshot *Snapshot `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// UID of the ActorTemplate the snapshot was taken under. Actors can only be
 	// seeded from a tag under the same template.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
+	// +k8s:immutable
 	ActorTemplateUid string `protobuf:"bytes,2,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -2568,6 +2589,7 @@ type Tag struct {
 	// status is set by the control plane; it is ignored on write.
 	//
 	// +k8s:optional
+	// +k8s:update=NoUnset
 	Status *TagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// scope controls who may create an Actor from this tag.
 	//
@@ -8889,7 +8911,14 @@ type ReportActorCrashedRequest struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=4096
-	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	// execution_uid identifies the runtime that exited.
+	// Accepted for protocol compatibility; crash handling uses the Actor and
+	// Worker identities.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,5,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8948,6 +8977,13 @@ func (x *ReportActorCrashedRequest) GetActorUid() string {
 func (x *ReportActorCrashedRequest) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *ReportActorCrashedRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
 	}
 	return ""
 }
@@ -10101,7 +10137,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xbe\x03\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xee\x03\n" +
 	"\x10WorkerAssignment\x126\n" +
 	"\x06worker\x18\x06 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -10115,7 +10151,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\x12Q\n" +
 	"\x0fsandbox_runtime\x18\t \x01(\v2(.substrate.ateapi.v1.ActorSandboxRuntimeR\x0esandboxRuntime\x12(\n" +
 	"\x10worker_spiffe_id\x18\n" +
-	" \x01(\tR\x0eworkerSpiffeId\"t\n" +
+	" \x01(\tR\x0eworkerSpiffeId\x12.\n" +
+	"\x13actor_execution_uid\x18\v \x01(\tR\x11actorExecutionUid\"t\n" +
 	"\tTagStatus\x129\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x1d.substrate.ateapi.v1.SnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\"\x86\x02\n" +
@@ -10438,12 +10475,13 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x05actor\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"O\n" +
 	"\x1bRequestActorSuspendResponse\x120\n" +
-	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\"\xc0\x01\n" +
+	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\"\xe5\x01\n" +
 	"\x19ReportActorCrashedRequest\x126\n" +
 	"\x06worker\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x124\n" +
 	"\x05actor\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"N\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12#\n" +
+	"\rexecution_uid\x18\x05 \x01(\tR\fexecutionUid\"N\n" +
 	"\x1aReportActorCrashedResponse\x120\n" +
 	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\"\xb3\x01\n" +
 	"\x1fReportActorSnapshotStateRequest\x124\n" +

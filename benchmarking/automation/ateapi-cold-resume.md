@@ -48,10 +48,8 @@ once as in [Prometheus + Grafana](../README.md#optional-prometheus--grafana).
 
 ## 3. Workstation
 
-You need `gcloud`, `kubectl`, `docker`, Go, and Python 3 with PyYAML. ko
-runs from `hack/tools/ko` through `go tool`, so it need not be installed.
-The orchestrator polls `docker info` first and fails if Docker is not
-running within 2 minutes.
+You need the tools listed in
+[Running from a workstation](README.md#running-from-a-workstation).
 
 ```bash
 python3 -m venv benchmarking/automation/venv
@@ -80,12 +78,10 @@ header comments in `tests.yaml` describe the fields, such as
 `poolMaxConns`, keep within Postgres's connection slots as described in
 [Running at scale](../README.md#running-at-scale).
 
-## 5. Target cluster file
+## 5. Env file
 
-The orchestrator copies `<targetCluster>.sh` from the `--target-cluster-dir`
-directory into the clone as `.ate-dev-env.sh`. Both tests use
-`targetCluster: dev`, so step 6 copies your `.ate-dev-env.sh` there as
-`dev.sh`. Create it from
+`--env-file` points the orchestrator at your `.ate-dev-env.sh` for every
+test. Create it from
 the GKE [ate-dev-env.sh.example](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/ate-dev-env.sh.example) in substrate-gke
 if you don't have one. The install needs `PROJECT_ID`, `CLUSTER_NAME`,
 `CLUSTER_LOCATION`, `KO_DOCKER_REPO`, `SNAPSHOT_LOCATION`,
@@ -93,35 +89,19 @@ if you don't have one. The install needs `PROJECT_ID`, `CLUSTER_NAME`,
 
 ## 6. Run
 
-The orchestrator clones `--branch` from `--repo`, so commit your changes
-first. A `file://` URL clones your local checkout. Set `SUBSTRATE_DIR` to a
-directory that does not exist yet, because the default is the pod path
-`/workspace/substrate`. The orchestrator runs `gcloud container clusters
-get-credentials`, so point `KUBECONFIG` at a separate file to keep your
-current context:
+`--substrate-dir` builds this checkout as it is, uncommitted changes
+included. See [Running from a workstation](README.md#running-from-a-workstation)
+for what the two flags do and what the run deletes on the cluster.
 
 ```bash
-S=$PWD                      # this checkout
 D=$HOME/bench-runs/cold-$(date +%Y%m%d-%H%M)
-mkdir -p $D/target-clusters
-cp $S/.ate-dev-env.sh $D/target-clusters/dev.sh
-export KUBECONFIG=$D/kubeconfig
+mkdir -p $D
 
-cat > $D/run.py <<PY
-import sys
-sys.path.insert(0, "$S/benchmarking/automation")
-import orchestrator
-orchestrator.SUBSTRATE_DIR = "$D/substrate"
-orchestrator.main()
-PY
-
-$S/benchmarking/automation/venv/bin/python -u $D/run.py \
-  --repo file://$S --branch $(git branch --show-current) \
+benchmarking/automation/venv/bin/python -u benchmarking/automation/orchestrator.py \
+  --substrate-dir . --env-file .ate-dev-env.sh \
   --dest gs://<results-bucket>/<prefix> \
-  --tests $S/benchmarking/automation/tests.yaml \
+  --tests benchmarking/automation/tests.yaml \
   --test-name ateapi_cold_resume_pause_fake_smoke \
-  --target-cluster-dir $D/target-clusters \
-  --manifests-dir $S/benchmarking/automation/manifests \
   --junit-output $D/junit.xml 2>&1 | tee $D/orchestrator.log
 ```
 
