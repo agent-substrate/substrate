@@ -28,7 +28,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
@@ -251,9 +250,9 @@ func TestGetWorkloadStats(t *testing.T) {
 		ActorTemplateName:     "template-a",
 		SandboxClass:          "microvm",
 		Source:                ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT,
-		MemoryCurrentBytes:    proto.Uint64(157286400),
+		MemoryCurrentBytes:    157286400,
 		MemoryPeakBytes:       209715200,
-		MemoryWorkingSetBytes: proto.Uint64(136314880),
+		MemoryWorkingSetBytes: 136314880,
 		CpuUsageUsec:          1234567,
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {

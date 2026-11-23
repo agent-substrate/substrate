@@ -24,8 +24,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/apierror"
@@ -220,8 +218,7 @@ func (s *AteWorkerService) readDeadFinal(ctx context.Context, h *hostedActor) {
 	if err != nil {
 		return
 	}
-	sample.MemoryCurrentBytes = nil
-	sample.MemoryWorkingSetBytes = nil
+	markMemoryUnmeasured(sample)
 	h.usage.Store(sample)
 }
 
@@ -289,10 +286,16 @@ func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*atewor
 	if err == nil && raw.Empty {
 		// No process is left in the cgroup, as after the sandbox died: its
 		// memory went with them, so none was measured. The CPU counter stays.
-		sample.MemoryCurrentBytes = nil
-		sample.MemoryWorkingSetBytes = nil
+		markMemoryUnmeasured(sample)
 	}
 	return sample, raw, err
+}
+
+// markMemoryUnmeasured says s carries no memory usage or working set.
+func markMemoryUnmeasured(s *ateworkerpb.WorkloadStatsSample) {
+	s.MemoryCurrentBytes = 0
+	s.MemoryWorkingSetBytes = 0
+	s.MemoryUnmeasured = true
 }
 
 // sampleSandbox reads the sandbox cgroup and builds the sample attributed to
@@ -323,9 +326,9 @@ func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*a
 		SandboxClass: string(atev1.SandboxClassGvisor),
 		Source:       ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 
-		MemoryCurrentBytes:    proto.Uint64(sample.MemoryCurrentBytes),
+		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
 		MemoryPeakBytes:       sample.MemoryPeakBytes,
-		MemoryWorkingSetBytes: proto.Uint64(sample.MemoryWorkingSetBytes),
+		MemoryWorkingSetBytes: sample.MemoryWorkingSetBytes,
 		CpuUsageUsec:          sample.CPUUsageUsec,
 
 		ObservedAtUnixNano: observedAt.UnixNano(),

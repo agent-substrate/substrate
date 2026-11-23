@@ -83,12 +83,11 @@ func UsageAttrs(pool Pool, kind string, s *ateworkerpb.WorkloadStatsSample) []sl
 	if s.GetSource() == ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
 		return attrs
 	}
-	// Unset after a gVisor sandbox died: measured CPU, no memory.
-	if s.MemoryCurrentBytes != nil {
-		attrs = append(attrs, slog.Uint64(string(ateattr.StatsMemoryUsageKey), s.GetMemoryCurrentBytes()))
-	}
-	if s.MemoryWorkingSetBytes != nil {
-		attrs = append(attrs, slog.Uint64(string(ateattr.StatsMemoryWorkingSetKey), s.GetMemoryWorkingSetBytes()))
+	// Not measured after a gVisor sandbox died: measured CPU, no memory.
+	if !s.GetMemoryUnmeasured() {
+		attrs = append(attrs,
+			slog.Uint64(string(ateattr.StatsMemoryUsageKey), s.GetMemoryCurrentBytes()),
+			slog.Uint64(string(ateattr.StatsMemoryWorkingSetKey), s.GetMemoryWorkingSetBytes()))
 	}
 	attrs = append(attrs, slog.Float64(string(ateattr.StatsCPUTimeKey), float64(s.GetCpuUsageUsec())/1e6))
 	if peak := s.GetMemoryPeakBytes(); peak > 0 {

@@ -23,8 +23,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	"go.opentelemetry.io/otel/attribute"
 
 	"go.ate.dev/substrate/internal/actorevent"
@@ -39,9 +37,9 @@ func measuredSample() *ateworkerpb.WorkloadStatsSample {
 		Atespace: "ns", ActorName: "a", ActorUid: "uid-1", ActorTemplateAtespace: "ns", ActorTemplateName: "t",
 		SandboxClass:          "gvisor",
 		Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
-		MemoryCurrentBytes:    proto.Uint64(40 << 20),
+		MemoryCurrentBytes:    40 << 20,
 		MemoryPeakBytes:       48 << 20,
-		MemoryWorkingSetBytes: proto.Uint64(32 << 20),
+		MemoryWorkingSetBytes: 32 << 20,
 		CpuUsageUsec:          1_500_000,
 		ObservedAtUnixNano:    1_700_000_000_000_000_000,
 		EpochUnixNano:         1_699_999_990_000_000_000,
@@ -102,13 +100,13 @@ func TestUsageAttrsMeasured(t *testing.T) {
 	}
 }
 
-// TestUsageAttrsUnsetMemory pins that a measured sample with its memory unset,
-// as after a gVisor sandbox died, writes its CPU and peak but no memory usage or
-// working set, rather than measured zeros.
-func TestUsageAttrsUnsetMemory(t *testing.T) {
+// TestUsageAttrsMemoryUnmeasured pins that a measured sample whose memory was
+// not measured, as after a gVisor sandbox died, writes its CPU and peak but no
+// memory usage or working set, rather than measured zeros.
+func TestUsageAttrsMemoryUnmeasured(t *testing.T) {
 	t.Parallel()
 	s := measuredSample()
-	s.MemoryCurrentBytes, s.MemoryWorkingSetBytes = nil, nil
+	s.MemoryCurrentBytes, s.MemoryWorkingSetBytes, s.MemoryUnmeasured = 0, 0, true
 	got := attrMap(UsageAttrs(testPool, ateattr.StatsKindFinal, s))
 	checkShape(t, got)
 	for _, k := range []attribute.Key{ateattr.StatsMemoryUsageKey, ateattr.StatsMemoryWorkingSetKey} {

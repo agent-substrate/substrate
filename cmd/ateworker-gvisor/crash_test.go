@@ -126,8 +126,8 @@ func TestSweepAfterDeathLeavesMemoryOut(t *testing.T) {
 			t.Errorf("periodic %s = %q, want absent", key, got)
 		}
 	}
-	if got := h.usage.Latest(); got.MemoryCurrentBytes != nil || got.MemoryWorkingSetBytes != nil {
-		t.Errorf("stored memory = %d/%d, want both unset", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes())
+	if got := h.usage.Latest(); !got.GetMemoryUnmeasured() || got.GetMemoryCurrentBytes() != 0 || got.GetMemoryWorkingSetBytes() != 0 {
+		t.Errorf("stored memory = %d/%d unmeasured=%v, want zero and unmeasured", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes(), got.GetMemoryUnmeasured())
 	}
 }
 
@@ -138,8 +138,8 @@ func TestReadDeadFinal(t *testing.T) {
 	if got.GetCpuUsageUsec() != 2000000 {
 		t.Errorf("CPU = %d, want the 2000000 read after the death", got.GetCpuUsageUsec())
 	}
-	if got.MemoryCurrentBytes != nil || got.MemoryWorkingSetBytes != nil {
-		t.Errorf("memory = %d/%d, want both unset: not measured at the death", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes())
+	if !got.GetMemoryUnmeasured() || got.GetMemoryCurrentBytes() != 0 || got.GetMemoryWorkingSetBytes() != 0 {
+		t.Errorf("memory = %d/%d unmeasured=%v, want zero and unmeasured: not measured at the death", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes(), got.GetMemoryUnmeasured())
 	}
 }
 

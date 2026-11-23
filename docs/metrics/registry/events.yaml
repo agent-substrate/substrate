@@ -167,13 +167,17 @@ groups:
         requirement_level: required
       - ref: ate.stats.memory.usage
         requirement_level:
-          conditionally_required: ate.stats.source is not unspecified.
+          conditionally_required: >
+            ate.stats.source is not unspecified, and the reading is not of a
+            gVisor sandbox with no process left.
       - ref: ate.stats.memory.peak
         requirement_level:
           conditionally_required: ate.stats.source is not unspecified and the source reports a peak.
       - ref: ate.stats.memory.working_set
         requirement_level:
-          conditionally_required: ate.stats.source is not unspecified.
+          conditionally_required: >
+            ate.stats.source is not unspecified, and the reading is not of a
+            gVisor sandbox with no process left.
       - ref: ate.stats.cpu.time
         requirement_level:
           conditionally_required: ate.stats.source is not unspecified.

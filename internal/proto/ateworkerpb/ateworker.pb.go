@@ -1848,9 +1848,8 @@ type WorkloadStatsSample struct {
 	// which means "not measured" rather than "measured as zero".
 	//
 	// memory_current_bytes and memory_working_set_bytes are absolute. They are
-	// unset, while the CPU is measured, after a gVisor sandbox died: its cgroup
-	// keeps the CPU counter, but the memory went with the processes.
-	MemoryCurrentBytes *uint64 `protobuf:"varint,8,opt,name=memory_current_bytes,json=memoryCurrentBytes,proto3,oneof" json:"memory_current_bytes,omitempty"`
+	// zero and not measured when memory_unmeasured is set.
+	MemoryCurrentBytes uint64 `protobuf:"varint,8,opt,name=memory_current_bytes,json=memoryCurrentBytes,proto3" json:"memory_current_bytes,omitempty"`
 	// High-water mark of memory_current_bytes, as the source reports it: the
 	// cgroup source restarts it on a restore, the guest-agent source brings the
 	// guest's own back with it. Also zero when the runtime cannot report a peak:
@@ -1860,7 +1859,7 @@ type WorkloadStatsSample struct {
 	// memory_current_bytes less the reclaimable page cache, floored at zero. This
 	// is the figure to compare against a memory limit; memory_current_bytes
 	// drifts upward with cache the kernel would drop for free under pressure.
-	MemoryWorkingSetBytes *uint64 `protobuf:"varint,10,opt,name=memory_working_set_bytes,json=memoryWorkingSetBytes,proto3,oneof" json:"memory_working_set_bytes,omitempty"`
+	MemoryWorkingSetBytes uint64 `protobuf:"varint,10,opt,name=memory_working_set_bytes,json=memoryWorkingSetBytes,proto3" json:"memory_working_set_bytes,omitempty"`
 	// Cumulative CPU time since the activation began (epoch_unix_nano), for
 	// every source, and never decreasing within it. The cgroup source restarts on
 	// its own; the guest-agent source counts from its first read after a restore
@@ -1871,8 +1870,13 @@ type WorkloadStatsSample struct {
 	// The activation this sample belongs to, as the unix-nano time it began. A
 	// Run or Restore starts one.
 	EpochUnixNano int64 `protobuf:"varint,13,opt,name=epoch_unix_nano,json=epochUnixNano,proto3" json:"epoch_unix_nano,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Set when memory_current_bytes and memory_working_set_bytes were not
+	// measured although source is set: the reading is of a gVisor sandbox with no
+	// process left, as after it died. Its cgroup keeps the CPU counter and the
+	// memory peak, but the memory went with the processes.
+	MemoryUnmeasured bool `protobuf:"varint,14,opt,name=memory_unmeasured,json=memoryUnmeasured,proto3" json:"memory_unmeasured,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *WorkloadStatsSample) Reset() {
@@ -1955,8 +1959,8 @@ func (x *WorkloadStatsSample) GetSource() StatsSource {
 }
 
 func (x *WorkloadStatsSample) GetMemoryCurrentBytes() uint64 {
-	if x != nil && x.MemoryCurrentBytes != nil {
-		return *x.MemoryCurrentBytes
+	if x != nil {
+		return x.MemoryCurrentBytes
 	}
 	return 0
 }
@@ -1969,8 +1973,8 @@ func (x *WorkloadStatsSample) GetMemoryPeakBytes() uint64 {
 }
 
 func (x *WorkloadStatsSample) GetMemoryWorkingSetBytes() uint64 {
-	if x != nil && x.MemoryWorkingSetBytes != nil {
-		return *x.MemoryWorkingSetBytes
+	if x != nil {
+		return x.MemoryWorkingSetBytes
 	}
 	return 0
 }
@@ -1994,6 +1998,13 @@ func (x *WorkloadStatsSample) GetEpochUnixNano() int64 {
 		return x.EpochUnixNano
 	}
 	return 0
+}
+
+func (x *WorkloadStatsSample) GetMemoryUnmeasured() bool {
+	if x != nil {
+		return x.MemoryUnmeasured
+	}
+	return false
 }
 
 type GetWorkloadStatsResponse struct {
@@ -2259,7 +2270,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x17RestoreWorkloadResponse\x12!\n" +
 	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
-	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\x82\x05\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xef\x04\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2268,16 +2279,15 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x04 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12#\n" +
 	"\rsandbox_class\x18\x06 \x01(\tR\fsandboxClass\x12.\n" +
-	"\x06source\x18\a \x01(\x0e2\x16.ateworker.StatsSourceR\x06source\x125\n" +
-	"\x14memory_current_bytes\x18\b \x01(\x04H\x00R\x12memoryCurrentBytes\x88\x01\x01\x12*\n" +
-	"\x11memory_peak_bytes\x18\t \x01(\x04R\x0fmemoryPeakBytes\x12<\n" +
+	"\x06source\x18\a \x01(\x0e2\x16.ateworker.StatsSourceR\x06source\x120\n" +
+	"\x14memory_current_bytes\x18\b \x01(\x04R\x12memoryCurrentBytes\x12*\n" +
+	"\x11memory_peak_bytes\x18\t \x01(\x04R\x0fmemoryPeakBytes\x127\n" +
 	"\x18memory_working_set_bytes\x18\n" +
-	" \x01(\x04H\x01R\x15memoryWorkingSetBytes\x88\x01\x01\x12$\n" +
+	" \x01(\x04R\x15memoryWorkingSetBytes\x12$\n" +
 	"\x0ecpu_usage_usec\x18\v \x01(\x04R\fcpuUsageUsec\x121\n" +
 	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\x12&\n" +
-	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNanoB\x17\n" +
-	"\x15_memory_current_bytesB\x1b\n" +
-	"\x19_memory_working_set_bytes\"R\n" +
+	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\x12+\n" +
+	"\x11memory_unmeasured\x18\x0e \x01(\bR\x10memoryUnmeasured\"R\n" +
 	"\x18GetWorkloadStatsResponse\x126\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1e.ateworker.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"Z\n" +
@@ -2401,7 +2411,6 @@ func file_internal_proto_ateworkerpb_ateworker_proto_init() {
 	}
 	file_internal_proto_ateworkerpb_ateworker_proto_msgTypes[3].OneofWrappers = []any{}
 	file_internal_proto_ateworkerpb_ateworker_proto_msgTypes[17].OneofWrappers = []any{}
-	file_internal_proto_ateworkerpb_ateworker_proto_msgTypes[20].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

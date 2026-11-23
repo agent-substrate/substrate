@@ -634,9 +634,8 @@ message WorkloadStatsSample {
   // which means "not measured" rather than "measured as zero".
   //
   // memory_current_bytes and memory_working_set_bytes are absolute. They are
-  // unset, while the CPU is measured, after a gVisor sandbox died: its cgroup
-  // keeps the CPU counter, but the memory went with the processes.
-  optional uint64 memory_current_bytes = 8;
+  // zero and not measured when memory_unmeasured is set.
+  uint64 memory_current_bytes = 8;
   // High-water mark of memory_current_bytes, as the source reports it: the
   // cgroup source restarts it on a restore, the guest-agent source brings the
   // guest's own back with it. Also zero when the runtime cannot report a peak:
@@ -646,7 +645,7 @@ message WorkloadStatsSample {
   // memory_current_bytes less the reclaimable page cache, floored at zero. This
   // is the figure to compare against a memory limit; memory_current_bytes
   // drifts upward with cache the kernel would drop for free under pressure.
-  optional uint64 memory_working_set_bytes = 10;
+  uint64 memory_working_set_bytes = 10;
   // Cumulative CPU time since the activation began (epoch_unix_nano), for
   // every source, and never decreasing within it. The cgroup source restarts on
   // its own; the guest-agent source counts from its first read after a restore
@@ -659,6 +658,12 @@ message WorkloadStatsSample {
   // The activation this sample belongs to, as the unix-nano time it began. A
   // Run or Restore starts one.
   int64 epoch_unix_nano = 13;
+
+  // Set when memory_current_bytes and memory_working_set_bytes were not
+  // measured although source is set: the reading is of a gVisor sandbox with no
+  // process left, as after it died. Its cgroup keeps the CPU counter and the
+  // memory peak, but the memory went with the processes.
+  bool memory_unmeasured = 14;
 }
 
 message GetWorkloadStatsResponse {
