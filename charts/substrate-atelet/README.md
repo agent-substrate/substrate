@@ -26,11 +26,16 @@ helm upgrade --install substrate ./charts/substrate \
 ## Values
 
 This chart reads the same value paths as the substrate chart for
-`objectStorePlugin.credentialsSecret`, `objectStorePlugin.extraEnv`, `preview`,
-`otel`, `image`, `imagePullSecrets` and `global`, so one values file can
-configure both releases. The `atelet` and `objectStorePlugin.node` values are
-only in this chart. `atelet.serviceAccount.annotations` sets annotations on the
-atelet ServiceAccount, for workload identity.
+`objectStorePlugin.image`, `objectStorePlugin.credentialsSecret`,
+`objectStorePlugin.extraEnv`, `objectStorePlugin.extraVolumes`,
+`objectStorePlugin.extraVolumeMounts`, `preview`, `otel`, `image`,
+`imagePullSecrets` and `global`, so one values file can configure both
+releases. The `atelet` and `objectStorePlugin.node` values are only in this
+chart. `atelet.serviceAccount.annotations` and `atelet.podLabels` set
+annotations on the atelet ServiceAccount and labels on the atelet pods, for
+workload identity. `objectStorePlugin.node.args` and
+`objectStorePlugin.node.startupProbe` replace the arguments and the startup
+probe of the in-tree plugin, for another plugin.
 
 Set `substrateReleaseName` to the substrate release's name. It defaults to
 `substrate`. atelet's objects take their names from it, because the substrate

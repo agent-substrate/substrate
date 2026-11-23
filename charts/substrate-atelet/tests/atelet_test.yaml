@@ -187,3 +187,53 @@ tests:
       path: metadata.annotations
       value:
         eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/atelet
+- it: runs another object-store plugin
+  template: atelet.yaml
+  documentSelector:
+    path: kind
+    value: DaemonSet
+  set:
+    objectStorePlugin.image: example.com/azure-blob-plugin:v1
+    objectStorePlugin.node.args:
+    - --socket=/run/objectstore-plugin/node.sock
+    objectStorePlugin.node.startupProbe:
+      exec:
+        command: [/plugin, healthcheck]
+    objectStorePlugin.extraVolumes:
+    - name: plugin-config
+      configMap:
+        name: plugin-config
+    objectStorePlugin.extraVolumeMounts:
+    - name: plugin-config
+      mountPath: /etc/plugin
+    atelet.podLabels:
+      azure.workload.identity/use: "true"
+  asserts:
+  - equal:
+      path: spec.template.spec.initContainers[0].image
+      value: example.com/azure-blob-plugin:v1
+  - equal:
+      path: spec.template.spec.initContainers[0].args
+      value:
+      - --socket=/run/objectstore-plugin/node.sock
+  - equal:
+      path: spec.template.spec.initContainers[0].startupProbe
+      value:
+        exec:
+          command: [/plugin, healthcheck]
+  - contains:
+      path: spec.template.spec.initContainers[0].volumeMounts
+      content:
+        name: plugin-config
+        mountPath: /etc/plugin
+  - contains:
+      path: spec.template.spec.volumes
+      content:
+        name: plugin-config
+        configMap:
+          name: plugin-config
+  - equal:
+      path: spec.template.metadata.labels
+      value:
+        app: atelet
+        azure.workload.identity/use: "true"

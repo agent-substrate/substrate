@@ -98,7 +98,19 @@ roles for service accounts, set `ateApi.serviceAccount.annotations` here and
 `atelet.serviceAccount.annotations` in the substrate-atelet release. The pods
 get the identity when they start, so restart ate-api-server and atelet after
 you change the annotations. GKE Workload Identity Federation needs no
-annotations: grant access to the ServiceAccounts as IAM principals.
+annotations: grant access to the ServiceAccounts as IAM principals. For
+workload identity that also needs pod labels, such as Azure Workload Identity,
+set `ateApi.podLabels` and `atelet.podLabels`.
+
+To run another plugin, set `objectStorePlugin.image`, and set
+`objectStorePlugin.control.args` and `objectStorePlugin.control.startupProbe`
+here and `objectStorePlugin.node.args` and `objectStorePlugin.node.startupProbe`
+in the substrate-atelet release. Empty args and probes use the ones of the
+in-tree plugin. The chart owns the socket: the plugin must serve the
+`objectstore.v1` API on `/run/objectstore-plugin/control.sock` in the API
+server pods and on `/run/objectstore-plugin/node.sock` in the atelet pods.
+`objectStorePlugin.extraVolumes` and `objectStorePlugin.extraVolumeMounts` add
+volumes for the plugin.
 
 For development, `hack/install-rustfs.sh` deploys RustFS in `ate-system` from
 `manifests/ate-install/kind/rustfs.yaml`, with an `ate-snapshots` bucket and the
@@ -180,6 +192,12 @@ See `values.yaml` for the full set; the important keys:
 | `objectStorePlugin.extraEnv` | `[]` | Environment of the object-store plugin, which selects and configures the object store. Set the same values in the substrate-atelet release. See "Object store" |
 | `objectStorePlugin.credentialsSecret` | `""` | Secret whose keys the object-store plugin gets as environment variables. Set the same value in the substrate-atelet release |
 | `ateApi.serviceAccount.annotations` | `{}` | Annotations on the ate-api-server ServiceAccount, for workload identity. See "Object store" |
+| `ateApi.podLabels` | `{}` | Labels on the ate-api-server pods, for workload identity. See "Object store" |
+| `objectStorePlugin.image` | `""` | Image of another object-store plugin, as a full reference. Empty uses the in-tree plugin. See "Object store" |
+| `objectStorePlugin.control.args` | `[]` | Arguments of the API server's object-store plugin. Empty uses the in-tree plugin's arguments |
+| `objectStorePlugin.control.startupProbe` | `{}` | Startup probe of the API server's object-store plugin. Empty uses the in-tree plugin's probe |
+| `objectStorePlugin.extraVolumes` | `[]` | Volumes added to the API server pods for the object-store plugin |
+| `objectStorePlugin.extraVolumeMounts` | `[]` | Volume mounts added to the object-store plugin container |
 | `objectStorePlugin.control.resources` | see `values.yaml` | Resources for the API server's object-store sidecar |
 | `ateApi.logLevel` | `info` | API server log level in its mounted config; one of `debug`, `info`, `warn`, or `error` |
 | `ateApi.authorization.bootstrapOwners` | `[]` | Global owners; empty defaults to the release's shared `ate-client` ServiceAccount |

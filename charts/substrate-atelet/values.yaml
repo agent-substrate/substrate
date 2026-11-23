@@ -45,6 +45,9 @@ atelet:
   # EKS IAM roles for service accounts.
   serviceAccount:
     annotations: {}
+  # Labels added to the atelet pods, for workload identity such as Azure
+  # Workload Identity.
+  podLabels: {}
   extraArgs: []
   extraEnv: []
   resources:
@@ -59,6 +62,10 @@ atelet:
 # object store: configure it through the plugin's environment. Use the same
 # credentialsSecret and extraEnv as the substrate release.
 objectStorePlugin:
+  # Image of the plugin, as a full reference. Empty uses the in-tree
+  # objectstore-plugin component image. Another plugin also needs its own
+  # args and startupProbe.
+  image: ""
   # Secret whose keys the plugin gets as environment variables, such as
   # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Empty adds none.
   credentialsSecret: ""
@@ -66,7 +73,16 @@ objectStorePlugin:
   # default, or s3. The S3 backend reads the AWS SDK settings, such as
   # AWS_REGION, AWS_ENDPOINT_URL and AWS_S3_USE_PATH_STYLE.
   extraEnv: []
+  # Volumes added to the pod, and mounts added to the plugin container.
+  extraVolumes: []
+  extraVolumeMounts: []
+  # The sidecar in the atelet pods. It must serve the objectstore.v1
+  # NodeProvider and AssetProvider APIs on /run/objectstore-plugin/node.sock.
   node:
+    # Arguments of the plugin. Empty uses the in-tree plugin's arguments.
+    args: []
+    # Startup probe of the plugin. Empty uses the in-tree plugin's probe.
+    startupProbe: {}
     resources:
       requests:
         cpu: 50m

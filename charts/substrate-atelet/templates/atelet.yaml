@@ -147,6 +147,9 @@ spec:
     metadata:
       labels:
         app: atelet
+        {{- with .Values.atelet.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
@@ -173,9 +176,12 @@ spec:
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       initContainers:
       - name: objectstore-plugin
-        image: {{ include "substrate.componentImage" (list "objectstore-plugin" .) }}
+        image: {{ .Values.objectStorePlugin.image | default (include "substrate.componentImage" (list "objectstore-plugin" .)) }}
         restartPolicy: Always
         args:
+        {{- with .Values.objectStorePlugin.node.args }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
         - node
         - --socket=/run/objectstore-plugin/node.sock
         - --root=/var/lib/ate
@@ -183,7 +189,11 @@ spec:
         - --asset-staging-capacity=8Gi
         - '--exchange-address={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:8445'
         - '--exchange-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
+        {{- end }}
         startupProbe:
+        {{- with .Values.objectStorePlugin.node.startupProbe }}
+          {{- toYaml . | nindent 10 }}
+        {{- else }}
           exec:
             command:
             - /ko-app/objectstore-plugin
@@ -191,6 +201,7 @@ spec:
             - --socket=/run/objectstore-plugin/node.sock
           periodSeconds: 2
           failureThreshold: 30
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           runAsUser: 0
@@ -226,6 +237,9 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns.podcert.ate.dev
           readOnly: true
+        {{- with .Values.objectStorePlugin.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       containers:
       - name: atelet
         image: {{ include "substrate.componentImage" (list "atelet" .) }}
@@ -337,6 +351,9 @@ spec:
       volumes:
       - name: objectstore-plugin
         emptyDir: {}
+      {{- with .Values.objectStorePlugin.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
       # --asset-staging-capacity bounds this volume.
       - name: asset-staging
         emptyDir: {}

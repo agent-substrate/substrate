@@ -81,6 +81,9 @@ spec:
     metadata:
       labels:
         app: ate-api-server
+        {{- with .Values.ateApi.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         checksum/api-config: {{ .Values.ateApi.logLevel | sha256sum }}
         checksum/api-envvars: {{ include (print $.Template.BasePath "/ate-api-server-envvars.yaml") . | sha256sum }}
@@ -92,19 +95,26 @@ spec:
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       initContainers:
       - name: objectstore-plugin
-        image: {{ include "substrate.componentImage" (list "objectstore-plugin" .) }}
+        image: {{ .Values.objectStorePlugin.image | default (include "substrate.componentImage" (list "objectstore-plugin" .)) }}
         restartPolicy: Always
         args:
+        {{- with .Values.objectStorePlugin.control.args }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
         - control
         - --socket=/run/objectstore-plugin/control.sock
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
         - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
         - '--ateapi-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
+        {{- end }}
         ports:
         - name: exchange
           containerPort: 8445
         startupProbe:
+        {{- with .Values.objectStorePlugin.control.startupProbe }}
+          {{- toYaml . | nindent 10 }}
+        {{- else }}
           exec:
             command:
             - /ko-app/objectstore-plugin
@@ -112,6 +122,7 @@ spec:
             - --socket=/run/objectstore-plugin/control.sock
           periodSeconds: 2
           failureThreshold: 30
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
@@ -150,6 +161,9 @@ spec:
           mountPath: /run/objectstore-plugin
         - { name: servicedns, mountPath: /run/servicedns.podcert.ate.dev, readOnly: true }
         - { name: podidentity, mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
+        {{- with .Values.objectStorePlugin.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       containers:
       - name: ate-api-server
         securityContext:
@@ -253,6 +267,9 @@ spec:
       volumes:
       - name: objectstore-plugin
         emptyDir: {}
+      {{- with .Values.objectStorePlugin.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
       - name: servicedns
         projected:
           sources:

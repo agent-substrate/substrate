@@ -62,6 +62,10 @@ sandboxConfigs:
 # model the object store: configure it through the plugin's environment. Set
 # the same credentialsSecret and extraEnv in the substrate-atelet release.
 objectStorePlugin:
+  # Image of the plugin, as a full reference. Empty uses the in-tree
+  # objectstore-plugin component image. Another plugin also needs its own
+  # args and startupProbe.
+  image: ""
   # Secret whose keys the plugin gets as environment variables, such as
   # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Empty adds none.
   credentialsSecret: ""
@@ -72,7 +76,16 @@ objectStorePlugin:
   # Required for GCS: the Google service account the exchange impersonates
   # for actor-scoped snapshot transfers. Unused by S3.
   transferServiceAccount: ""
+  # Volumes added to the pod, and mounts added to the plugin container.
+  extraVolumes: []
+  extraVolumeMounts: []
+  # The sidecar in the API server pods. It must serve the objectstore.v1
+  # ControlProvider API on /run/objectstore-plugin/control.sock.
   control:
+    # Arguments of the plugin. Empty uses the in-tree plugin's arguments.
+    args: []
+    # Startup probe of the plugin. Empty uses the in-tree plugin's probe.
+    startupProbe: {}
     resources: {}
 
 # Additional arguments appended to the ateapi defaults.
@@ -85,6 +98,9 @@ ateApi:
   # such as EKS IAM roles for service accounts.
   serviceAccount:
     annotations: {}
+  # Labels added to the ate-api-server pods, for workload identity such as
+  # Azure Workload Identity.
+  podLabels: {}
   logLevel: info
   authorization:
     # Empty defaults to the release's shared ate-client principal. Use explicit
