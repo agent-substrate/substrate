@@ -60,21 +60,38 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
    The setup still runs in full (victim runs, writes, suspends; attacker takes
    the worker). The filter only picks which assertions execute.
 
-4. A failed run keeps its namespaces so you can read the worker logs:
+4. The fixture namespaces do not outlive the test, even a failed one:
+   `e2e.DeploySubstrateFixture` deletes them in `t.Cleanup`. To read the
+   worker logs of a failing run, follow them while the test runs (see
+   [Watch a run](#watch-a-run)):
 
    ```
    kubectl get ns | grep ate-e2e
-   kubectl -n <ns> logs -l ate.dev/worker-pool -c ateworker
-   KIND_CLUSTER_NAME=kind hack/cleanup-e2e.sh   # reclaim when done
+   kubectl -n <ns> logs -l ate.dev/worker-pool -c worker -f
+   ```
+
+   Only an interrupted run (Ctrl-C, a killed process) leaves namespaces
+   behind. Reclaim them with:
+
+   ```
+   KIND_CLUSTER_NAME=kind hack/cleanup-e2e.sh
    ```
 
    `cleanup-e2e.sh` removes namespaces labeled `ate.dev/e2e`. Of this suite's
    fixtures only `actor-isolation.yaml.tmpl` carries that label, so delete
-   `ate-e2e-sec-a` and `ate-e2e-sec-b` by hand if the cross-atespace test
-   left them behind.
+   `ate-e2e-sec-a` and `ate-e2e-sec-b` by hand if an interrupted
+   cross-atespace test left them behind.
 
-Fast, no cluster needed. This is what CI's `run-tests` and `verify` jobs do, minus the
-JUnit wrapping, and it also type-checks every E2E suite:
+## Watch a run
+
+Namespaces are `ate-e2e-sec-actor` for `TestActorIsolation` and
+`ate-e2e-sec-a` plus `ate-e2e-sec-b` for `TestCrossAtespaceIsolation`. The
+micro-VM lane inserts `-microvm` after `ate-e2e`. Worker pods are labeled
+`ate.dev/worker-pool=<pool>`; the pools are `actor` and `shared`.
+
+Start these before launching the test.
+
+Lifecycle:
 
 ```
 # Fixture namespaces appear and vanish; this is the run's heartbeat.
@@ -103,14 +120,14 @@ The worker host:
 
 ```
 # Sandbox lifecycle, checkpoints and restores.
-kubectl logs -n ate-e2e-sec-actor -l ate.dev/worker-pool=actor -c ateworker -f
+kubectl logs -n ate-e2e-sec-actor -l ate.dev/worker-pool=actor -c worker -f
 
-# The per-actor layout under /var/lib/ateworker-gvisor/actors that the
+# The per-actor layout under /var/lib/ate/actors that the
 # host-state probes target. Only the running actor has durable-dir and
 # system-info; atelet removes both at suspend, and a suspended actor's UID
 # directory keeps just sandbox-assets.json.
 POD=$(kubectl get pods -n ate-e2e-sec-actor -l ate.dev/worker-pool=actor -o name | head -1)
-kubectl exec -n ate-e2e-sec-actor "$POD" -c ateworker -- ls -la /var/lib/ateworker-gvisor/actors
+kubectl exec -n ate-e2e-sec-actor "$POD" -c worker -- ls -la /var/lib/ate/actors
 ```
 
 Control plane and snapshots:
@@ -129,8 +146,8 @@ The PR workflow (`.github/workflows/pr-workflow.yaml`) runs three checks:
 E2E matrix. Every one of them compiles this suite, so a build error here
 fails all three.
 
-Fast, no cluster needed. This is what `run-tests` does, minus the JUnit
-wrapping, and it type-checks every e2e suite:
+Fast, no cluster needed. This is what CI's `run-tests` and `verify` jobs do, minus the
+JUnit wrapping, and it also type-checks every E2E suite:
 
 ```
 go vet ./... && go test -race ./... && hack/verify-all.sh && (cd tools/apitool && go test -race ./...)
