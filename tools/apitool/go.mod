@@ -15,6 +15,7 @@ require (
 	go.ate.dev/substrate v0.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.12
 	k8s.io/apiextensions-apiserver v0.38.0-beta.0
+	k8s.io/gengo/v2 v2.0.0-20260408192533-25e2208e0dc3
 	sigs.k8s.io/yaml v1.6.0
 )
 

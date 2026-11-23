@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"k8s.io/gengo/v2/codetags"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
@@ -183,6 +184,71 @@ message Widget {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("API mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuild_Tags(t *testing.T) {
+	got := buildAPI(t, `
+service Widgets {
+  // +k8s:customValidation
+  rpc GetWidget(Widget) returns (Widget);
+}
+
+// +k8s:customValidation
+message Widget {
+  // size is the size.
+  //
+  // +ate:preview=Sizes
+  // +k8s:ifDisabled(Sizes)=+k8s:forbidden
+  // +k8s:optional
+  // +k8s:maximum=2 # keep this in sync with the Size enum
+  Size size = 1;
+}
+
+// +k8s:customValidation
+enum Size {
+  // +k8s:customValidation
+  SIZE_UNSPECIFIED = 0;
+}
+`)
+
+	custom := []codetags.Tag{{Name: "k8s:customValidation"}}
+	wantFieldTags := []codetags.Tag{
+		{Name: "ate:preview", Value: "Sizes", ValueType: codetags.ValueTypeString},
+		{
+			Name:      "k8s:ifDisabled",
+			Args:      []codetags.Arg{{Value: "Sizes", Type: codetags.ArgTypeString}},
+			ValueType: codetags.ValueTypeTag,
+			ValueTag:  &codetags.Tag{Name: "k8s:forbidden"},
+		},
+		{Name: "k8s:optional"},
+		{Name: "k8s:maximum", Value: "2", ValueType: codetags.ValueTypeInt},
+	}
+	checks := map[string]struct{ got, want []codetags.Tag }{
+		"method":     {got.Services[0].Methods[0].Tags, custom},
+		"message":    {got.Messages[0].Tags, custom},
+		"field":      {got.Messages[0].Fields[0].Tags, wantFieldTags},
+		"enum":       {got.Enums[0].Tags, custom},
+		"enum value": {got.Enums[0].Values[0].Tags, custom},
+	}
+	for elem, tc := range checks {
+		if diff := cmp.Diff(tc.want, tc.got); diff != "" {
+			t.Errorf("%s tags mismatch (-want +got):\n%s", elem, diff)
+		}
+	}
+}
+
+func TestBuild_InvalidTag(t *testing.T) {
+	source := `syntax = "proto3";
+package fixture;
+
+message Widget {
+  // +k8s:ifDisabled(Sizes=+k8s:forbidden
+  string size = 1;
+}
+`
+	if _, err := model.Build(t.Context(), source); err == nil {
+		t.Error("Build() error = nil, want an error for the unparseable directive")
 	}
 }
 

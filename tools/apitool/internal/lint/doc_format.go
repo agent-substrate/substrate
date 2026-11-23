@@ -106,13 +106,13 @@ func internalNotesBalanced(comment string) bool {
 }
 
 // textAfterDirectives returns the first non-blank line after comment's
-// first +k8s: or +ate: directive that isn't a directive itself.
+// first directive that isn't a directive itself.
 func textAfterDirectives(comment string) (string, bool) {
 	inDirectives := false
 	for line := range strings.SplitSeq(comment, "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case strings.HasPrefix(trimmed, "+k8s:"), strings.HasPrefix(trimmed, "+ate:"):
+		case model.IsDirective(line):
 			inDirectives = true
 		case inDirectives && trimmed != "":
 			return trimmed, true
