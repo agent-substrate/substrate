@@ -493,6 +493,13 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"test {name!r} has invalid type {ttype!r} "
                 f"(want one of {list(TEST_TYPES)})"
             )
+        templates = t.get("workloadTemplates", [])
+        if not isinstance(templates, list) or not all(
+            isinstance(n, str) and re.fullmatch(r"[a-z0-9-]+", n) for n in templates
+        ):
+            raise ValueError(
+                f"test {name!r}: workloadTemplates must be a list of template names"
+            )
         TYPES[ttype].validate(t)
         if ttype == "locust":
             # A malformed --metadata fails here rather than mid-sweep.
@@ -547,6 +554,7 @@ def deploy_workloads(
     worker_memory: str = "",
     fake_atelet_args: Iterable[str] = (),
     actor_cpu: str = "",
+    templates: Iterable[str] = (),
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -577,7 +585,12 @@ def deploy_workloads(
     # An isolate block's tuning of fake-atelet, on the fake data plane.
     cmd += list(fake_atelet_args)
     # deploy.sh itself blocks until every template's golden snapshot exists.
-    run(cmd)
+    # Without workloadTemplates it deploys its default set.
+    templates = list(templates)
+    if templates:
+        run(cmd, env={**os.environ, "WORKLOAD_TEMPLATES": " ".join(templates)})
+    else:
+        run(cmd)
 
 
 def teardown_test_workloads(test_types: Iterable[str]) -> None:
@@ -787,6 +800,7 @@ def main() -> None:
                         test.get("workerMemory", ""),
                         isolate_workload_args(test),
                         test.get("actorCPU", ""),
+                        test.get("workloadTemplates", ()),
                     )
                 try:
                     status = run_test(

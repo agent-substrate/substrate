@@ -327,6 +327,20 @@ class DeployWorkloadsTest(unittest.TestCase):
             ]
         )
 
+    @mock.patch("orchestrator.run")
+    def test_templates_go_to_deploy_sh(self, run):
+        orchestrator.deploy_workloads(templates=["glutton", "glutton-node"])
+        self.assertEqual(run.call_args.kwargs["env"]["WORKLOAD_TEMPLATES"], "glutton glutton-node")
+
+    def test_validate_rejects_bad_templates(self):
+        base = {"name": "t", "type": "locust", "targetCluster": "dev",
+                "file": "f", "duration": "1m", "users": 1}
+        for templates in ("glutton", ["glutton node"], [1]):
+            with self.subTest(templates=templates):
+                with self.assertRaisesRegex(ValueError, "workloadTemplates"):
+                    orchestrator.validate_and_normalize_tests([{**base, "workloadTemplates": templates}])
+        orchestrator.validate_and_normalize_tests([{**base, "workloadTemplates": ["glutton-node"]}])
+
 
 class RunnerSizingTest(unittest.TestCase):
     TMPL = os.path.join(os.path.dirname(__file__), "manifests", "runner-job.yaml.tmpl")
