@@ -189,9 +189,10 @@ keeps building its own tmpfs upper, as before.
 
 **Teardown**: `UnmountBundlesUnder(bundleDir)` lazily detaches the rootfs and
 image volume mounts in each of an actor's bundles (checked with `statx`
-`STATX_ATTR_MOUNT_ROOT`) before atelet wipes them. ateworker-gvisor calls it on the `RunWorkload` and
-`RestoreWorkload` failure paths and in `terminateWorkload`; ateworker-microvm
-calls it in `coldBootActor`, `cleanupFailedRestoreRootfs` and `teardownActor`.
+`STATX_ATTR_MOUNT_ROOT`) before atelet wipes them. ateworker-gvisor calls it
+on the `RunWorkload` and `RestoreWorkload` failure paths and in
+`terminateWorkload`; ateworker-microvm calls it in `coldBootActor`,
+`cleanupFailedRestoreRootfs` and `teardownActor`.
 
 ## Garbage collection
 

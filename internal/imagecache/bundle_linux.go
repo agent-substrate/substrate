@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -335,9 +336,10 @@ func setOpaque(root *os.Root, rel string) error {
 }
 
 // maxUnmountPasses bounds how many rounds of detaches UnmountAllUnder and
-// UnmountBundlesUnder make. Each walk after the first finds mounts that an
+// UnmountBundlesUnder make. Each round after the first finds mounts that an
 // earlier detach uncovered, such as a lower mount stacked under the one statx
-// reported.
+// reported. SetupBundleRootfs detaches a stale mount before it mounts, so a
+// path rarely holds more than two.
 const maxUnmountPasses = 8
 
 // UnmountAllUnder lazily detaches every mount at or below dir in the calling
@@ -396,38 +398,32 @@ func unmountAllUnder(dir string, sys mountSys, find func(dir string, sys mountSy
 		if len(points) == 0 {
 			return err
 		}
+		errs := []error{err}
 		if pass == maxUnmountPasses {
-			errs := []error{err}
-			paths := make([]string, len(points))
-			for i, p := range points {
-				paths[i] = p.path
+			for _, p := range points {
 				if p.statErr != nil {
 					errs = append(errs, fmt.Errorf("while checking %q: %w", p.path, p.statErr))
 				}
 			}
-			errs = append(errs, fmt.Errorf("mounts remain under %q after %d passes: %q", dir, maxUnmountPasses, paths))
+			errs = append(errs, fmt.Errorf("mounts remain under %q after %d passes: %q", dir, maxUnmountPasses, mountPaths(points)))
 			return errors.Join(errs...)
 		}
-		errs := []error{err}
 		progress := false
 		// Deepest first, so nested mounts unmount before their parents.
 		sort.Slice(points, func(i, j int) bool { return len(points[i].path) > len(points[j].path) })
 		for _, p := range points {
 			uerr := sys.unmount(p.path, unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW)
 			notMounted := errors.Is(uerr, unix.EINVAL) || errors.Is(uerr, os.ErrNotExist)
-			switch {
-			case uerr == nil:
+			// A mount that was detached since the walk, or cannot be
+			// detached, also returns EINVAL. The next walk tells which.
+			if uerr == nil || (notMounted && p.statErr == nil) {
 				progress = true
-			case p.statErr != nil && notMounted:
+				continue
+			}
+			if p.statErr != nil {
 				errs = append(errs, fmt.Errorf("while checking %q: %w", p.path, p.statErr))
-			case p.statErr != nil:
-				errs = append(errs, fmt.Errorf("while checking %q: %w", p.path, p.statErr),
-					fmt.Errorf("while unmounting %q: %w", p.path, uerr))
-			case notMounted:
-				// Detached by someone else since the walk, or a mount that
-				// cannot be detached. The next walk tells which.
-				progress = true
-			default:
+			}
+			if !notMounted {
 				errs = append(errs, fmt.Errorf("while unmounting %q: %w", p.path, uerr))
 			}
 		}
@@ -435,6 +431,16 @@ func unmountAllUnder(dir string, sys mountSys, find func(dir string, sys mountSy
 			return errors.Join(errs...)
 		}
 	}
+}
+
+// mountPaths returns the sorted paths of points.
+func mountPaths(points []mountPoint) []string {
+	paths := make([]string, len(points))
+	for i, p := range points {
+		paths[i] = p.path
+	}
+	slices.Sort(paths)
+	return paths
 }
 
 // statxAt queries file type and mount-root attribute metadata for path relative
@@ -472,11 +478,8 @@ func bundleMountPoints(dir string, sys mountSys) ([]mountPoint, error) {
 		}
 		points = appendIfMount(points, sys, filepath.Join(bundle, "rootfs"))
 		volumes := filepath.Join(bundle, "volumes")
-		if !isDir(sys, volumes, &errs) {
-			continue
-		}
 		names, err := readDirNames(volumes)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ELOOP) {
 			errs = append(errs, err)
 		}
 		for _, name := range names {
@@ -514,11 +517,11 @@ func isDir(sys mountSys, path string, errs *[]error) bool {
 }
 
 // appendIfMount appends path to points if it is a mount root, or with statErr
-// set if statx fails on it with anything but ENOENT or ENOTDIR.
+// set if statx fails on it with anything but ENOENT.
 func appendIfMount(points []mountPoint, sys mountSys, path string) []mountPoint {
 	sx, err := sys.statx(unix.AT_FDCWD, path)
 	switch {
-	case errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOTDIR):
+	case errors.Is(err, os.ErrNotExist):
 		return points
 	case err != nil:
 		return append(points, mountPoint{path: path, statErr: err})
