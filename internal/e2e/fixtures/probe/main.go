@@ -608,15 +608,6 @@ func netinfo(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, netInfoResponse{Interfaces: out})
 }
 
-// echoheaders returns the HTTP request headers received by the probe.
-func echoheaders(w http.ResponseWriter, r *http.Request) {
-	headers := make(map[string]string, len(r.Header))
-	for name, values := range r.Header {
-		headers[name] = strings.Join(values, ", ")
-	}
-	writeJSON(w, map[string]any{"headers": headers})
-}
-
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -758,7 +749,6 @@ func main() {
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/fetch", fetch)
 	mux.HandleFunc("/netinfo", netinfo)
-	mux.HandleFunc("/echoheaders", echoheaders)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/lookup", lookup)

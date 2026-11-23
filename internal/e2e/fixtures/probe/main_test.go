@@ -673,22 +673,3 @@ func TestNetInfo(t *testing.T) {
 		t.Fatal("netinfo returned 0 interfaces")
 	}
 }
-
-func TestEchoHeaders(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/echoheaders", nil)
-	req.Header.Set("X-Actor-Token", "jwt-value")
-	rec := httptest.NewRecorder()
-	echoheaders(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var resp struct {
-		Headers map[string]string `json:"headers"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decoding echoheaders response: %v", err)
-	}
-	if got := resp.Headers["X-Actor-Token"]; got != "jwt-value" {
-		t.Errorf("X-Actor-Token = %q, want %q", got, "jwt-value")
-	}
-}
