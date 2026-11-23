@@ -312,9 +312,10 @@ Two habits from `RegisterWorkerCount` in ateapi: if the source is unavailable,
 return nil and observe nothing this cycle rather than observing zero; and seed
 the series an alert depends on with an explicit zero, so "no idle workers" is a
 `0` and not a missing series. Seed from what the source knows. ateapi learns a
-pool's sandbox class from its workers, so a pool whose workers have not reported
-one gets no zero series; the `ate.workerpool.workers` section of
-`docs/guides/observability.md` gives the query that allows for that.
+pool and its sandbox class from its workers, so a pool with no `Worker` or whose
+workers have not reported a class gets no zero series. The
+`ate.workerpool.workers` section of `docs/guides/observability.md` gives the
+query that allows for both.
 
 Keep the callback cheap and lock-free where you can. It runs on every collection
 (every 10 s on kind, every 60 s in production) and on every Prometheus scrape.

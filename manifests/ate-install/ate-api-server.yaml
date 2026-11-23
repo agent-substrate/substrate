@@ -27,6 +27,9 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get"]
+# ate-api-server no longer reads WorkerPools, but ate-setup deploy apiserver
+# applies this ClusterRole before rolling the Deployment. Keep workerpools
+# until the next minor release so older replicas still start during an upgrade.
 - apiGroups: ["ate.dev"]
   resources: ["workerpools", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
