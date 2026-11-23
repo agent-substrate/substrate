@@ -443,7 +443,7 @@ func TestUpdateTagStatus(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence)
 
 	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
 	tag := storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, "v1", actor))

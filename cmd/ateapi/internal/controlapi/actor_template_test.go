@@ -468,7 +468,7 @@ func TestResolveActorTemplate_NotFound(t *testing.T) {
 // metadata is rejected.
 func TestUpdateActorTemplateMetadata(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence)
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
