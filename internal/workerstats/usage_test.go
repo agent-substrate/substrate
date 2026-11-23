@@ -23,6 +23,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"go.ate.dev/substrate/internal/actorevent"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -95,6 +97,27 @@ func TestUsageAttrsMeasured(t *testing.T) {
 	}
 	if got := got[string(ateattr.ActorEpochKey)].Int64(); got != 1_699_999_990_000_000_000 {
 		t.Errorf("epoch = %d", got)
+	}
+}
+
+// TestUsageAttrsMemoryUnmeasured pins that a measured sample whose memory was
+// not measured, as after a gVisor sandbox died, writes its CPU and peak but no
+// memory usage or working set, rather than measured zeros.
+func TestUsageAttrsMemoryUnmeasured(t *testing.T) {
+	t.Parallel()
+	s := measuredSample()
+	s.MemoryCurrentBytes, s.MemoryWorkingSetBytes, s.MemoryUnmeasured = 0, 0, true
+	got := attrMap(UsageAttrs(testPool, ateattr.StatsKindFinal, s))
+	checkShape(t, got)
+	for _, k := range []attribute.Key{ateattr.StatsMemoryUsageKey, ateattr.StatsMemoryWorkingSetKey} {
+		if _, ok := got[string(k)]; ok {
+			t.Errorf("record carries %q, want it absent", k)
+		}
+	}
+	for _, k := range []attribute.Key{ateattr.StatsCPUTimeKey, ateattr.StatsMemoryPeakKey} {
+		if _, ok := got[string(k)]; !ok {
+			t.Errorf("record is missing %q", k)
+		}
 	}
 }
 
