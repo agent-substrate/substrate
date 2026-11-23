@@ -212,6 +212,13 @@ class DeployWorkloadsFakeAteletTest(unittest.TestCase):
 
 
 class SubstrateArgsTest(unittest.TestCase):
+    def test_cluster_overrides_belong_in_the_env_file(self):
+        for arg in ("--context=other", "--kubeconfig", "--kind", "--kind-cluster-name", "--config"):
+            with self.subTest(arg=arg), self.assertRaisesRegex(ValueError, "target env file"):
+                orchestrator.validate_and_normalize_tests([
+                    {"name": "bench", "targetCluster": "dev", "ateArgs": [arg]},
+                ])
+
     def test_ate_args_only(self):
         self.assertEqual(
             orchestrator.substrate_args({"ateArgs": ["--cluster-size=size10"]}),
@@ -946,6 +953,23 @@ class TargetClusterCredentialsTest(unittest.TestCase):
                 self.assertEqual(run.call_count, expected_calls)
                 workloads.assert_not_called()
                 substrate.assert_not_called()
+
+    def test_failed_target_script_logs_diagnostic_and_removes_copy(self):
+        (self.root / "bench.sh").write_text("echo 'fixture diagnostic' >&2\nfalse\n")
+        test = {"name": "sample", "targetCluster": "bench"}
+        args = argparse.Namespace(
+            substrate_dir=str(self.root), env_file=None, target_cluster_dir=str(self.root),
+        )
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch("orchestrator.sys.stderr") as stderr,
+            mock.patch("orchestrator.prepare_target_cluster") as prepare,
+        ):
+            result, = orchestrator.run_tests([test], args, "tag", 0, self.snapshot)
+        self.assertEqual(result[1], "config-error")
+        stderr.write.assert_any_call("fixture diagnostic\n")
+        prepare.assert_not_called()
+        self.assertFalse((self.root / orchestrator.ENV_FILE_NAME).exists())
 
     def test_env_file_override_pins_workloads_and_cleanup(self):
         env_file = self.root / orchestrator.ENV_FILE_NAME

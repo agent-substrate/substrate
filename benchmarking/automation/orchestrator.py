@@ -209,12 +209,16 @@ def select_tests(tests: list[dict], names: list[str]) -> list[dict]:
 
 def source_env(path: Path) -> None:
     # env -0 preserves multi-line values, including exported Bash functions.
-    result = subprocess.run(
-        ["bash", str(Path(__file__).with_name("source-target-env.sh")), str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["bash", str(Path(__file__).with_name("source-target-env.sh")), str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(e.stderr, end="", file=sys.stderr, flush=True)
+        raise
     sourced = dict(entry.split("=", 1) for entry in result.stdout.split("\0") if "=" in entry)
     os.environ.clear()
     os.environ.update(sourced)
@@ -565,6 +569,10 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         name = t.get("name")
         if not t.get("targetCluster"):
             raise ValueError(f"test {name!r} missing required 'targetCluster' field")
+        for arg in t.get("ateArgs", []):
+            flag = str(arg).partition("=")[0]
+            if flag in ("--kubeconfig", "--context", "--kind", "--kind-cluster-name", "--config"):
+                raise ValueError(f"test {name!r}: {flag} in ateArgs belongs in the target env file")
         sandbox_class = t.get("sandboxClass", "gvisor")
         if sandbox_class not in SANDBOX_CLASSES:
             raise ValueError(
