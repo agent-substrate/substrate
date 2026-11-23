@@ -156,14 +156,16 @@ type netInfoResponse struct {
 	Error      string             `json:"error"`
 }
 
-// echoFetchResult mirrors the probe's /fetch response when calling /echoheaders.
+// echoFetchResult mirrors the probe's /fetch response when it fetches the echo
+// origin's /echoheaders.
 type echoFetchResult struct {
 	Status string `json:"status"`
 	Body   string `json:"body"`
 	Error  string `json:"error"`
 }
 
-// echoedHeaders mirrors the probe's /echoheaders response.
+// echoedHeaders mirrors the /echoheaders response of the echo origin
+// (testserver), carried in the body of the probe's /fetch response.
 type echoedHeaders struct {
 	Headers map[string]string `json:"headers"`
 }
@@ -188,9 +190,21 @@ func TestActorIsolation(t *testing.T) {
 	}
 	defer rc.Close()
 
+	// The echo origin MintedActorCertificateBoundToAssignedActor fetches from
+	// through the egress gateway. It is deployed before the victim so the
+	// victim can use egress too: a policy has to be in place before an actor
+	// resumes.
+	var echoHost string
+	var victimRules, attackerRules []*ateapi.EgressRule
+	if supportsEgressActorJWTInjection() {
+		echoHost = e2e.DeployServerPod(t, ctx, echoServer).SvcName()
+		victimRules = append(victimRules, e2e.EgressAllowHTTP(echoHost, echoHost+".cluster.local"))
+		attackerRules = append(attackerRules, actorJWTEchoRule(echoHost))
+	}
+
 	// Victim: runs first on the single shared worker. Record its UID and
 	// worker.
-	createAndResumeActor(t, ctx, clients, atespace, victim)
+	createAndResumeActor(t, ctx, clients, atespace, victim, victimRules...)
 	victimActor := resources.ActorRef{Atespace: atespace, Name: victim}
 	victimUID := actorUID(t, ctx, clients, atespace, victim)
 	victimWorker := assignedWorker(t, ctx, clients, atespace, victim)
@@ -215,21 +229,25 @@ func TestActorIsolation(t *testing.T) {
 			victimActor, victimWhoami, victim, victim, atespace, victimUID)
 	}
 
+	// Have the victim use egress once, so the worker's atunnel holds an egress
+	// client certificate and gateway connection for the victim when the
+	// attacker takes the worker over. MintedActorCertificateBoundToAssignedActor
+	// then fails if that state outlives the victim.
+	if echoHost != "" {
+		echoURL := "http://" + echoHost + "/echoheaders"
+		if got := fetchEchoHeadersWithRetry(t, ctx, rc, victimActor, echoURL, nil); got.Error != "" || got.Status != "200" {
+			diagnoseEgressDNS(t, ctx, clients, rc, victimActor, echoHost)
+			t.Fatalf("control: victim %s /fetch %s returned status=%q error=%q body=%q, want 200 — the victim never used egress, so the worker holds no victim egress state to leak",
+				victimActor, echoURL, got.Status, got.Error, got.Body)
+		}
+	}
+
 	// Suspend the victim to free the worker. The durable marker stays on the
 	// worker; the snapshot goes to object storage. Record the snapshot URI for
 	// post-delete bucket check.
 	victimSnapshotURI := suspendDurably(t, ctx, clients, atespace, victim)
 
 	// Attacker: a second actor in the SAME atespace takes the freed worker.
-	// MintedActorCertificateBoundToAssignedActor fetches from an echo origin
-	// through the egress gateway, and the policy that allows it has to be in
-	// place before the attacker resumes.
-	var echoHost string
-	var attackerRules []*ateapi.EgressRule
-	if supportsEgressActorJWTInjection() {
-		echoHost = e2e.DeployServerPod(t, ctx, echoServer).SvcName()
-		attackerRules = append(attackerRules, actorJWTEchoRule(echoHost))
-	}
 	createAndResumeActor(t, ctx, clients, atespace, attacker, attackerRules...)
 	attackerActor := resources.ActorRef{Atespace: atespace, Name: attacker}
 	attackerUID := actorUID(t, ctx, clients, atespace, attacker)
@@ -903,17 +921,30 @@ func testActorNetworkIsolatedToPrivateVeth(t *testing.T, ctx context.Context, cl
 	// Direct pod-IP access to port 80 on the worker pod must fail because the
 	// actor's listener lives inside the isolated actor netns, not the worker
 	// pod's CNI netns.
-	body, err := clients.K8s.CoreV1().RESTClient().Get().
-		Namespace(workerNS).
-		Resource("pods").
-		Name(workerPod + ":80").
-		SubResource("proxy").
-		Suffix("healthz").
-		Do(ctx).
-		Raw()
-	if err == nil {
+	//
+	// Control first: the same apiserver proxy path has to reach a port the
+	// worker pod does listen on (8080, the worker's /readyz). Without it a
+	// proxy that cannot reach the pod at all, for RBAC or NetworkPolicy
+	// reasons, would pass the check below for the wrong reason.
+	proxyGet := func(port, path string) ([]byte, error) {
+		return clients.K8s.CoreV1().RESTClient().Get().
+			Namespace(workerNS).
+			Resource("pods").
+			Name(workerPod + ":" + port).
+			SubResource("proxy").
+			Suffix(path).
+			Do(ctx).
+			Raw()
+	}
+	if body, err := proxyGet("8080", "readyz"); err != nil {
+		t.Fatalf("control: apiserver proxy to %s/%s:8080/readyz failed (body %q): %v — the proxy cannot reach the worker pod, so a failure on port 80 would prove nothing",
+			workerNS, workerPod, body, err)
+	}
+	if body, err := proxyGet("80", "healthz"); err == nil {
 		t.Errorf("direct HTTP access to %s/%s:80/healthz on the worker pod succeeded (body %q) — actor listener is exposed on the worker pod network",
 			workerNS, workerPod, body)
+	} else {
+		t.Logf("direct HTTP access to %s/%s:80/healthz refused as expected: %v", workerNS, workerPod, err)
 	}
 }
 
@@ -958,16 +989,28 @@ func actorJWTEchoRule(echoHost string) *ateapi.EgressRule {
 // resumed; the actor JWT the gateway injects comes back in its /echoheaders body.
 func testMintedActorCertificateBoundToAssignedActor(t *testing.T, ctx context.Context, clients *e2e.Clients, rc *e2e.RouterClient, atespace string, attackerActor resources.ActorRef, attackerUID, victimUID, echoHost string) {
 	t.Helper()
-	if !supportsEgressActorJWTInjection() {
-		t.Skip("Egress ActorJwt header injection is only supported on the Envoy dataplane")
+
+	// The gateway half of this test reads the injected actor JWT and the
+	// gateway's access log, which only the Envoy dataplane provides. The
+	// projected identity files are read-only on every dataplane.
+	gateway := supportsEgressActorJWTInjection()
+	if !gateway {
+		t.Log("Egress ActorJwt header injection is only supported on the Envoy dataplane; checking only that the projected identity files cannot be overwritten")
 	}
 
 	echoURL := "http://" + echoHost + "/echoheaders"
+	// Bound the access-log scan to this test, with slack for clock skew
+	// against the gateway's node. Each step then waits for a line that was
+	// not there before its own request, so one step cannot pass on another
+	// step's line.
+	logSince := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	assertCertifiedAttackerIdentity := func(step string, forgedToken string) {
 		t.Helper()
-		since := metav1.Now()
+		logged := countEgressGatewayAuthLines(t, ctx, clients, logSince, attackerActor)
+		// Both headers claim the victim: the routing header names it and the
+		// token is forged. The gateway must act on neither.
 		headers := []string{
-			atenet.TargetActorHeader + ":" + attackerActor.String(),
+			atenet.TargetActorHeader + ":" + resources.ActorRef{Atespace: atespace, Name: victim}.String(),
 			actorTokenHeader + ":" + forgedToken,
 		}
 		got := fetchEchoHeadersWithRetry(t, ctx, rc, attackerActor, echoURL, headers)
@@ -976,7 +1019,7 @@ func testMintedActorCertificateBoundToAssignedActor(t *testing.T, ctx context.Co
 			t.Fatalf("%s: probe /fetch %s returned status=%q error=%q body=%q, want 200",
 				step, echoURL, got.Status, got.Error, got.Body)
 		}
-		assertEgressGatewayAuthenticatedActor(t, ctx, clients, since, attackerActor)
+		waitForNewEgressGatewayAuthLine(t, ctx, clients, logSince, attackerActor, logged)
 
 		var echoed echoedHeaders
 		if err := json.Unmarshal([]byte(got.Body), &echoed); err != nil {
@@ -1007,7 +1050,9 @@ func testMintedActorCertificateBoundToAssignedActor(t *testing.T, ctx context.Co
 
 	// Step 1: verify the certificate minted for the worker on reuse carries the
 	// assigned attacker's identity, not the victim's.
-	assertCertifiedAttackerIdentity("initial egress on reused worker", "forged-"+victim)
+	if gateway {
+		assertCertifiedAttackerIdentity("initial egress on reused worker", "forged-"+victim)
+	}
 
 	// Step 2: attempt to overwrite projected identity files inside the sandbox to
 	// claim the victim's identity, and verify both that the writes are refused
@@ -1021,10 +1066,9 @@ func testMintedActorCertificateBoundToAssignedActor(t *testing.T, ctx context.Co
 		t.Errorf("attacker %s /whoami after attempted identity overwrite = %+v, want file=%q uid=%q",
 			attackerActor, got, attackerActor.Name, attackerUID)
 	}
-	// Advance past Kubernetes PodLogOptions.SinceTime's 1s granularity so step 2's
-	// access-log check cannot match step 1's log line.
-	time.Sleep(1100 * time.Millisecond)
-	assertCertifiedAttackerIdentity("egress after attempted /run/ate/actor-id overwrite", "spoofed-"+victim+"-"+victimUID)
+	if gateway {
+		assertCertifiedAttackerIdentity("egress after attempted /run/ate/actor-id overwrite", "spoofed-"+victim+"-"+victimUID)
+	}
 }
 
 // workerTunnel names the reused worker pod whose atunnel listener (:443) is
@@ -1087,6 +1131,10 @@ func (wt *workerTunnel) doRouterGet(t *testing.T, ctx context.Context, target re
 	return resp, body
 }
 
+// workerTunnelRefusalAttempts bounds the tries the refused client in
+// testOnlyRouterCanOpenWorkerTunnel gets, each on a fresh port-forward.
+const workerTunnelRefusalAttempts = 3
+
 // testOnlyRouterCanOpenWorkerTunnel verifies on the reused worker's atunnel
 // listener that a request presenting atenet-router's pod-identity
 // certificate succeeds (200 OK), while a request presenting a valid
@@ -1109,17 +1157,29 @@ func testOnlyRouterCanOpenWorkerTunnel(t *testing.T, ctx context.Context, wt *wo
 	nonRouterCert := mintPodIdentityCertificate(t, wt.ca, nonRouterSPIFFE)
 	nonRouterClient := newWorkerTunnelClient(wt.roots, nonRouterCert)
 
-	resp, err := nonRouterClient.Do(wt.newRequest(t, ctx, attackerActor))
-	if err == nil {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		t.Fatalf("worker tunnel %s/%s accepted connection from non-router identity %s: status %d, body %q",
-			wt.workerNS, wt.workerPod, nonRouterSPIFFE, resp.StatusCode, body)
-	}
-	var opErr *net.OpError
-	if !errors.As(err, &opErr) || opErr.Op != "remote error" || !strings.Contains(opErr.Err.Error(), "bad certificate") {
-		t.Errorf("worker tunnel %s/%s rejected non-router identity %s with %v, want the bad-certificate TLS alert from VerifyConnection",
-			wt.workerNS, wt.workerPod, nonRouterSPIFFE, err)
+	// atunnel closes right after its alert, and over a port-forward that close
+	// sometimes reaches the client before the alert does. Such an attempt
+	// proves neither acceptance nor refusal, so it is retried on a fresh
+	// port-forward (newRequest opens one per request), as the ingressauth
+	// suite does for the router's listeners.
+	for attempt := 1; ; attempt++ {
+		resp, err := nonRouterClient.Do(wt.newRequest(t, ctx, attackerActor))
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("worker tunnel %s/%s accepted connection from non-router identity %s: status %d, body %q",
+				wt.workerNS, wt.workerPod, nonRouterSPIFFE, resp.StatusCode, body)
+		}
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "remote error" && strings.Contains(opErr.Err.Error(), "bad certificate") {
+			t.Logf("worker tunnel refused non-router identity %s: %v", nonRouterSPIFFE, err)
+			return
+		}
+		if attempt == workerTunnelRefusalAttempts {
+			t.Fatalf("worker tunnel %s/%s rejected non-router identity %s with %v on attempt %d, want the bad-certificate TLS alert from VerifyConnection",
+				wt.workerNS, wt.workerPod, nonRouterSPIFFE, err, attempt)
+		}
+		t.Logf("attempt %d failed without the bad-certificate TLS alert; retrying on a fresh port-forward: %v", attempt, err)
 	}
 }
 
@@ -1242,25 +1302,35 @@ func fetchEchoHeadersWithRetry(t *testing.T, ctx context.Context, rc *e2e.Router
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	var last echoFetchResult
+	var lastErr error
 	for {
+		// A transport error is retried like a 503: right after a resume the
+		// router's port-forward can reset before the actor answers.
 		resp, err := rc.Get(ctx, actor, path)
 		if err != nil {
-			t.Fatalf("GET %s for %s: %v", path, actor, err)
-		}
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			t.Fatalf("reading %s for %s: %v", path, actor, readErr)
-		}
-		if resp.StatusCode == http.StatusOK {
-			if err := json.Unmarshal(body, &last); err != nil {
-				t.Fatalf("decoding /fetch for %s: %v (body %q)", actor, err, body)
-			}
-			if last.Error == "" && last.Status == "200" {
-				return last
+			lastErr = fmt.Errorf("GET %s for %s: %w", path, actor, err)
+		} else {
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			switch {
+			case readErr != nil:
+				lastErr = fmt.Errorf("reading %s for %s: %w", path, actor, readErr)
+			case resp.StatusCode != http.StatusOK:
+				lastErr = fmt.Errorf("GET %s for %s: status %d, body %q", path, actor, resp.StatusCode, body)
+			default:
+				lastErr = nil
+				if err := json.Unmarshal(body, &last); err != nil {
+					t.Fatalf("decoding /fetch for %s: %v (body %q)", actor, err, body)
+				}
+				if last.Error == "" && last.Status == "200" {
+					return last
+				}
 			}
 		}
 		if time.Now().After(deadline) {
+			if lastErr != nil {
+				t.Fatalf("%v (still failing after 30s)", lastErr)
+			}
 			return last
 		}
 		time.Sleep(time.Second)
@@ -1296,11 +1366,12 @@ func parseActorJWTClaims(t *testing.T, step, token string) actoridjwt.WireClaims
 	return claims
 }
 
-// assertEgressGatewayAuthenticatedActor checks the Envoy atenet-egress access
-// log to confirm the gateway authenticated the worker's outbound CONNECT tunnel
-// as actor (via its spiffe://substrate-actor.local/worker-for-actor/<atespace>/<name>
-// client certificate).
-func assertEgressGatewayAuthenticatedActor(t *testing.T, ctx context.Context, clients *e2e.Clients, since metav1.Time, actor resources.ActorRef) {
+// countEgressGatewayAuthLines counts the Envoy atenet-egress access-log lines
+// since `since` that show the gateway authenticated a worker's outbound CONNECT
+// tunnel as actor (by its
+// spiffe://substrate-actor.local/worker-for-actor/<atespace>/<name> client
+// certificate).
+func countEgressGatewayAuthLines(t *testing.T, ctx context.Context, clients *e2e.Clients, since metav1.Time, actor resources.ActorRef) int {
 	t.Helper()
 	sysNS := e2e.SystemNamespace()
 	pods, err := clients.K8s.CoreV1().Pods(sysNS).List(ctx, metav1.ListOptions{LabelSelector: "app=atenet-egress"})
@@ -1312,24 +1383,40 @@ func assertEgressGatewayAuthenticatedActor(t *testing.T, ctx context.Context, cl
 	}
 
 	wantSPIFFE := resources.WorkerForActorSPIFFEID(actor).String()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		for _, pod := range pods.Items {
-			logs, err := clients.K8s.CoreV1().Pods(sysNS).GetLogs(pod.Name, &corev1.PodLogOptions{
-				Container: "envoy",
-				SinceTime: &since,
-			}).DoRaw(ctx)
-			if err != nil {
-				t.Fatalf("reading logs of %s/%s: %v", sysNS, pod.Name, err)
-			}
-			for line := range strings.SplitSeq(string(logs), "\n") {
-				if strings.Contains(line, "[egress] ") && strings.Contains(line, wantSPIFFE) {
-					return
-				}
+	count := 0
+	for _, pod := range pods.Items {
+		logs, err := clients.K8s.CoreV1().Pods(sysNS).GetLogs(pod.Name, &corev1.PodLogOptions{
+			Container: "envoy",
+			SinceTime: &since,
+		}).DoRaw(ctx)
+		if err != nil {
+			t.Fatalf("reading logs of %s/%s: %v", sysNS, pod.Name, err)
+		}
+		for line := range strings.SplitSeq(string(logs), "\n") {
+			if strings.Contains(line, "[egress] ") && strings.Contains(line, wantSPIFFE) {
+				count++
 			}
 		}
+	}
+	return count
+}
+
+// waitForNewEgressGatewayAuthLine waits until the gateway has logged more
+// lines authenticating actor than the before lines counted ahead of the
+// request under test. The access log carries nothing that identifies a single
+// request, so a line the gateway logs late for an earlier request of the same
+// actor still counts; taking the count right before each request keeps that
+// window as small as the log allows.
+func waitForNewEgressGatewayAuthLine(t *testing.T, ctx context.Context, clients *e2e.Clients, since metav1.Time, actor resources.ActorRef, before int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if countEgressGatewayAuthLines(t, ctx, clients, since, actor) > before {
+			return
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for atenet-egress access log authenticating %s (%s)", actor, wantSPIFFE)
+			t.Fatalf("timed out waiting for a new atenet-egress access log line authenticating %s (%s); %d such lines before the request and none since",
+				actor, resources.WorkerForActorSPIFFEID(actor), before)
 		}
 		time.Sleep(time.Second)
 	}
