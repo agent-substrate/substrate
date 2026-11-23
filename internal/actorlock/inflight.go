@@ -16,34 +16,29 @@ package actorlock
 
 import (
 	"context"
+	"maps"
 	"sync"
 )
 
-// InFlight tracks lifecycle RPCs by actor for shutdown cancellation and draining.
+// InFlight tracks lifecycle RPCs by actor so shutdown can wait for them.
 type InFlight struct {
 	mu sync.Mutex
-	// Callers must serialize RPCs for each actor with Locks.
-	rpcs map[string]*rpc
+	// RPC name by actor UID. Callers must serialize RPCs for each actor with
+	// Locks.
+	rpcs map[string]string
 	// Closed and replaced on each registry change to wake waiters.
 	changed chan struct{}
 }
 
-type rpc struct {
-	name string
-	// Nil for an RPC that must run to completion.
-	cancel context.CancelFunc
-}
-
 // NewInFlight returns an empty set.
 func NewInFlight() *InFlight {
-	return &InFlight{rpcs: map[string]*rpc{}, changed: make(chan struct{})}
+	return &InFlight{rpcs: map[string]string{}, changed: make(chan struct{})}
 }
 
 // Add records an RPC for actorUID and returns the function that clears it.
-// cancel is nil for an RPC that must finish, such as a checkpoint saving state.
-func (f *InFlight) Add(actorUID, name string, cancel context.CancelFunc) func() {
+func (f *InFlight) Add(actorUID, name string) func() {
 	f.mu.Lock()
-	f.rpcs[actorUID] = &rpc{name: name, cancel: cancel}
+	f.rpcs[actorUID] = name
 	f.notifyLocked()
 	f.mu.Unlock()
 
@@ -53,20 +48,6 @@ func (f *InFlight) Add(actorUID, name string, cancel context.CancelFunc) func() 
 		delete(f.rpcs, actorUID)
 		f.notifyLocked()
 	}
-}
-
-// CancelStartups cancels startup RPCs and returns their actor UIDs.
-func (f *InFlight) CancelStartups() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var canceled []string
-	for actorUID, r := range f.rpcs {
-		if r.cancel != nil {
-			r.cancel()
-			canceled = append(canceled, actorUID)
-		}
-	}
-	return canceled
 }
 
 // WaitIdle waits for all RPCs to finish, returning false on cancellation.
@@ -92,11 +73,7 @@ func (f *InFlight) WaitIdle(ctx context.Context) bool {
 func (f *InFlight) Names() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make(map[string]string, len(f.rpcs))
-	for actorUID, r := range f.rpcs {
-		out[actorUID] = r.name
-	}
-	return out
+	return maps.Clone(f.rpcs)
 }
 
 func (f *InFlight) notifyLocked() {

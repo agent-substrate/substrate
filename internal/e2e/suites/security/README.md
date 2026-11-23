@@ -73,16 +73,8 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
    `ate-e2e-sec-a` and `ate-e2e-sec-b` by hand if the cross-atespace test
    left them behind.
 
-## Watch a run
-
-Namespaces are `ate-e2e-sec-actor` for `TestActorIsolation` and
-`ate-e2e-sec-a` plus `ate-e2e-sec-b` for `TestCrossAtespaceIsolation`. The
-micro-VM lane inserts `-microvm` after `ate-e2e`. Worker pods are labeled
-`ate.dev/worker-pool=<pool>`; the pools are `actor` and `shared`.
-
-Start these before launching the test.
-
-Lifecycle:
+Fast, no cluster needed. This is what CI's `run-tests` and `verify` jobs do, minus the
+JUnit wrapping, and it also type-checks every E2E suite:
 
 ```
 # Fixture namespaces appear and vanish; this is the run's heartbeat.
@@ -132,9 +124,10 @@ kubectl logs -n ate-system -l app=ateapi -f
 
 ## Run the GitHub checks locally
 
-The PR workflow (`.github/workflows/pr-workflow.yaml`) has two jobs:
-`run-tests` and the `e2e-test` matrix, one entry per dataplane. Both compile
-this suite, so a build error here fails both.
+The PR workflow (`.github/workflows/pr-workflow.yaml`) runs three checks:
+`run-tests`, `E2E (<dataplane>)`, and `e2e-test`, which only aggregates the
+E2E matrix. Every one of them compiles this suite, so a build error here
+fails all three.
 
 Fast, no cluster needed. This is what `run-tests` does, minus the JUnit
 wrapping, and it type-checks every e2e suite:

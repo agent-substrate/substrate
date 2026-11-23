@@ -209,6 +209,31 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
+// Verify that GOMAXPROCS is stripped out from runsc's env.
+func TestCommandCapsGOMAXPROCS(t *testing.T) {
+	t.Setenv("GOMAXPROCS", "64")
+	t.Setenv("ATE_TEST_INHERITED", "1")
+
+	r := &runsc{path: "/usr/local/bin/runsc"}
+	cmd := r.command(context.Background(), []string{"state", "app"})
+
+	if want := []string{"/usr/local/bin/runsc", "state", "app"}; !slices.Equal(cmd.Args, want) {
+		t.Errorf("command args = %v, want %v", cmd.Args, want)
+	}
+	var maxProcs []string
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "GOMAXPROCS=") {
+			maxProcs = append(maxProcs, e)
+		}
+	}
+	if want := []string{"GOMAXPROCS=2"}; !slices.Equal(maxProcs, want) {
+		t.Errorf("command environment has %v, want %v", maxProcs, want)
+	}
+	if !slices.Contains(cmd.Env, "ATE_TEST_INHERITED=1") {
+		t.Error("command environment lost the worker's other variables")
+	}
+}
+
 func TestBuildArgsEnableCoreTags(t *testing.T) {
 	r := &runsc{
 		path:           "/usr/bin/runsc",

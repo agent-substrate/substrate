@@ -434,7 +434,10 @@ groups:
                 not a failure. Thus it has no error.type key. The cause can be
                 full workers, or no worker that meets the constraints, such as a
                 wrong sandbox class or a required node that is gone. Only the
-                first cause needs more workers.
+                first cause needs more workers. An actor that is larger than
+                each worker that meets its constraints gets the error outcome
+                with FailedPrecondition, because more workers of the same size
+                do not help.
             - id: error
               stability: development
               value: error
@@ -634,6 +637,30 @@ groups:
               value: skipped
               brief: The pass could not size the cache and removed nothing. It retries on the next tick.
 
+  - id: registry.ate.dns
+    type: attribute_group
+    brief: >
+      The labels of the DNS relay of the sandbox. The relay checks each DNS
+      query of the actor against the egress policy of the actor.
+    attributes:
+      - id: ate.dns.decision
+        stability: development
+        brief: The decision of the egress policy on one DNS query.
+        type:
+          members:
+            - id: allowed
+              stability: development
+              value: allowed
+              brief: A rule of the policy allows the name. The relay sends the query to the resolvers of the worker pod.
+            - id: denied
+              stability: development
+              value: denied
+              brief: >
+                No rule allows the name, or the relay could not fetch the
+                policy and holds no earlier copy. The relay answers NXDOMAIN.
+                Thus the actor sees the same error as for a name that does not
+                exist.
+
   - id: registry.ate.stats
     type: attribute_group
     brief: The labels of the resource measurements of the actors.
@@ -679,16 +706,22 @@ groups:
               value: final
               brief: >
                 The last sample of an activation, written when a checkpoint, a
-                terminate, a graceful shutdown, or a re-host on ateworker-microvm
-                ends it. When the sandbox is still running, ateworker reads the
-                stats just before the teardown; when no read runs, or the read
-                fails or times out, it repeats the newest measured sample, or
-                writes a pending record when there is none.
+                terminate, a graceful shutdown, a sandbox that dies on its own,
+                or a re-host on ateworker-microvm ends it. When the sandbox is
+                still running, ateworker reads the stats just before the
+                teardown. After a gVisor sandbox dies, it reads the CPU and memory
+                peak, and leaves memory usage and working set out. When no read runs,
+                or the read fails or times out, it repeats the newest measured
+                sample, or writes a pending record when there is none.
       - id: ate.stats.memory.usage
         stability: development
         type: int
         brief: The memory in use, in bytes. Absolute, not per activation.
-        note: Logs only. The log field of the instrument ate.actor.stats.memory.usage.
+        note: >
+          Logs only. The log field of the instrument
+          ate.actor.stats.memory.usage. Absent on a gVisor record read after
+          the sandbox died, as its final record: its cgroup keeps the CPU, but
+          its memory went with its processes, so no one measured it.
         examples: [41943040]
       - id: ate.stats.memory.peak
         stability: development
@@ -702,7 +735,10 @@ groups:
         stability: development
         type: int
         brief: The memory in use less the reclaimable page cache, in bytes.
-        note: Logs only. The log field of the instrument ate.actor.stats.memory.working_set.
+        note: >
+          Logs only. The log field of the instrument
+          ate.actor.stats.memory.working_set. Absent on a gVisor record read
+          after the sandbox died, as ate.stats.memory.usage is.
         examples: [33554432]
       - id: ate.stats.cpu.time
         stability: development
@@ -857,17 +893,26 @@ groups:
       pool, and the counts can be fractional while the replicas disagree.
       Within one replica you can add the counts together. The sum across the
       states is the size of the pool. The sum across the pools is the size of
-      the fleet. Thus this instrument is an UpDownCounter
-      and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
-      full pool or an empty pool reports 0. An absent series would stop an alert
-      on idle == 0.
+      the fleet. Thus this instrument is an UpDownCounter and not a gauge. For
+      each worker with a known class, ateapi sets every state of that pool and
+      class to 0. Thus a full pool reports 0 for idle, and an alert on
+      idle == 0 fires. A pool with no Worker has no series here; atecontroller
+      reports ate.workerpool.desired_workers and ate.workerpool.ready_workers
+      for every WorkerPool, and the idle query in docs/guides/observability.md
+      uses ate.workerpool.desired_workers to take a pool with no Worker as 0
+      idle.
       The states count workers, not actor slots. A worker with 1 of 20 slots
       used and one with 19 of 20 are both partial. Do not read utilization of
       the pool from this instrument.
-      A worker with the class unknown is not capacity of the pool: the scheduler
-      puts no actor on it. Thus a query that asks how much capacity a pool has
-      must keep ate.sandbox.class, because a sum across the classes adds that
-      worker back into the total.
+      A worker counts under the class unknown from its creation, and again from
+      each restart, until its process registers and reports a class. Such a
+      worker is not capacity of the pool: the scheduler puts no actor on it.
+      Thus a query that asks how much capacity a pool has must keep
+      ate.sandbox.class, because a sum across the classes adds that worker back
+      into the total. An unknown worker seeds no series. Thus a pool whose
+      workers all count under unknown has no series for its class, and an alert
+      on idle == 0 alone does not fire for it. The idle query in
+      docs/guides/observability.md takes such a pool as 0 idle too.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -949,9 +994,15 @@ groups:
     stability: development
     brief: The time of one attempt of the scheduler to assign a worker during a resume.
     note: >
-      One resume gives one record. ateapi retries an attempt that loses a race
+      One resume gives at most one record. ateapi retries an attempt that loses a race
       for a worker, and records only the last attempt. If the retries run out,
       the outcome is error, and error.type is the code that the caller gets.
+      If a pinned actor has no room on its node, ateapi tries to detach it from
+      that node, and the attempt on that node gives no record. Before the
+      detach, ateapi asks the scheduler for a worker on any node. If there is
+      none, that check gives the record. If the detach fails after the check,
+      the resume gives no record. After a detach that succeeds, the next
+      attempt gives the record.
       The buckets are smaller than the buckets of the lifecycle histogram.
       This step is a read of the cache and some writes to the store. It is not
       a restore of some seconds. But the buckets go to 5 s. Thus you can see a
@@ -1599,6 +1650,35 @@ groups:
         requirement_level: required
 
   # ---------------------------------------------------------------------------
+  # Metrics. ateworker
+  # ---------------------------------------------------------------------------
+
+  - id: metric.ate.dns.queries
+    type: metric
+    metric_name: ate.dns.queries
+    instrument: counter
+    unit: "{query}"
+    stability: development
+    brief: The number of actor DNS queries that the DNS relay of the sandbox checked against the egress policy, by decision.
+    note: >
+      The sandbox keeps the search domains of the worker pod and ndots:5. Thus
+      a stub resolver tries the search domains before most names, and most
+      lookups cause denials, even when a rule allows the name. Compare the
+      denied rate with its usual level. A rise means that egress policies block
+      names that actors look up. The actor sees only "bad address" or "could
+      not resolve host". The relay does not count a query that it drops or
+      rejects before the policy check, such as a malformed query.
+    annotations:
+      substrate:
+        emitted_by: [ateworker-gvisor, ateworker-microvm]
+        golden_signals: [traffic, errors]
+        code_anchor: internal/atunnel/dns/metrics.go
+        cuj: Actors cannot resolve external names. Does an egress policy deny them?
+    attributes:
+      - ref: ate.dns.decision
+        requirement_level: required
+
+  # ---------------------------------------------------------------------------
   # Metrics. Upstream instrumentation
   # ---------------------------------------------------------------------------
 
@@ -1611,9 +1691,8 @@ groups:
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
-      not make it. This instrument is the only metric of ateworker. ateworker has it on
-      the gRPC interface that atelet calls. credprovider is the
-      kubernetes-secrets credential provider in
+      not make it. ateworker has it on the gRPC interface that atelet calls.
+      credprovider is the kubernetes-secrets credential provider in
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:

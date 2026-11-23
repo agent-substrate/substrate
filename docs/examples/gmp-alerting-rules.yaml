@@ -292,7 +292,9 @@ spec:
   # - Look for workers in all states except "unschedulable." Ignore unknown
   #   sandbox classes.
   # - Sum across all (remaining) workload states (e.g. excluding
-  #   "unschedulable"). Alert if this is lower than the lowest number of
+  #   "unschedulable"). Fall back to 0 when a pool has no registered worker
+  #   with a known sandbox class, so pools with no Worker or only unknown
+  #   workers still fire. Alert if this is lower than the lowest number of
   #   desired workers over the last five minutes.
   # - Each replica of ate-api-server emits these metrics, so we need a way to
   #   resolve disagreements between them on the correct number of actual and
@@ -337,9 +339,15 @@ spec:
     rules:
     - alert: SubstrateWorkerPoolCapacityNotDelivered
       expr: |
-        sum by (ate_workerpool_namespace, ate_workerpool_name) (
-          max by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (
-            aterules:workerpool_actual_workers:label_replaced
+        (
+          sum by (ate_workerpool_namespace, ate_workerpool_name) (
+            max by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (
+              aterules:workerpool_actual_workers:label_replaced
+            )
+          )
+          or
+          0 * min by (ate_workerpool_namespace, ate_workerpool_name) (
+            aterules:workerpool_desired_workers:label_replaced
           )
         )
         <

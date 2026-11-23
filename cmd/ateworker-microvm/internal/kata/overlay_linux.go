@@ -137,7 +137,9 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		// which cannot produce decodable file handles.
 		"--inode-file-handles=never",
 		"--cache=auto",
-		"--thread-pool-size=1",
+		// No thread pool: the queue thread serves each request under the vring
+		// lock, so a snapshot's GET_VRING_BASE waits for the request in flight.
+		"--thread-pool-size=0",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
 		// The default (abort) makes a snapshot unrestorable if the guest still
@@ -464,6 +466,12 @@ func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec
 		OCI:         pbSpec,
 	}); err != nil {
 		return fmt.Errorf("creating rootfs container %q: %w", cid, err)
+	}
+	// The agent gives every non-tty process a stdin pipe and keeps the write end
+	// open, so a read from stdin would block forever. Close it so the workload
+	// reads EOF, as it does from /dev/null on gVisor.
+	if err := a.CloseStdin(ctx, cid, cid); err != nil {
+		return fmt.Errorf("closing stdin of rootfs container %q: %w", cid, err)
 	}
 	if err := a.StartContainer(ctx, cid); err != nil {
 		return fmt.Errorf("starting rootfs container %q: %w", cid, err)

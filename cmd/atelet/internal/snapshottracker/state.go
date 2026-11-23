@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -119,4 +120,66 @@ func savedActorUIDs() ([]string, error) {
 		actorUIDs = append(actorUIDs, entry.Name())
 	}
 	return actorUIDs, nil
+}
+
+// MigrateSnapshotStateFiles moves each actor's snapshot state file from
+// ateletpath.NextSnapshotStateFile, where a future release keeps it, to
+// ateletpath.ActorSnapshotStateFile. atelet calls it once at startup, before
+// it creates the tracker: only one atelet runs on a node, so a file there was
+// written before this atelet started, and from then on only
+// ActorSnapshotStateFile is used. It syncs each moved file before removing the
+// original, so a crash in between leaves two identical copies, which the next
+// startup moves again. A file whose actor directory is gone is removed, as
+// saveLocked keeps no state for such an actor. The actor's snapshot directory
+// is then removed too if that left it empty, since nothing else removes it once
+// the actor has detached or is gone.
+func MigrateSnapshotStateFiles() error {
+	entries, err := os.ReadDir(nodepath.SnapshotsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while listing %s: %w", nodepath.SnapshotsDir, err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := migrateSnapshotStateFile(entry.Name()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateSnapshotStateFile(actorUID string) error {
+	from := ateletpath.NextSnapshotStateFile(actorUID)
+	data, err := os.ReadFile(from)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while reading %s: %w", from, err)
+	}
+	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); errors.Is(err, os.ErrNotExist) {
+		slog.Warn("Removing the snapshot state file of an actor whose directory is gone", slog.String("actorUID", actorUID), slog.String("path", from))
+	} else if err != nil {
+		return fmt.Errorf("while checking the actor directory: %w", err)
+	} else {
+		to := ateletpath.ActorSnapshotStateFile(actorUID)
+		if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+			return fmt.Errorf("while creating %s: %w", filepath.Dir(to), err)
+		}
+		if err := atomicfile.WriteSync(to, data, 0o600); err != nil {
+			return fmt.Errorf("while writing %s: %w", to, err)
+		}
+		slog.Info("Moved the actor's snapshot state file", slog.String("actorUID", actorUID), slog.String("from", from), slog.String("to", to))
+	}
+	if err := os.Remove(from); err != nil {
+		return fmt.Errorf("while removing %s: %w", from, err)
+	}
+	if err := os.Remove(ateletpath.ActorSnapshotPath(actorUID)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		slog.Warn("Failed to remove the actor's empty snapshot directory", slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+	return nil
 }

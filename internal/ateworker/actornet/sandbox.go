@@ -202,7 +202,7 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 			return err
 		}
 		veth := &netlink.Veth{
-			LinkAttrs: netlink.LinkAttrs{Name: gatewayVethName},
+			LinkAttrs: netlink.LinkAttrs{Name: gatewayVethName, NumTxQueues: 1, NumRxQueues: 1},
 			PeerName:  ActorVethName,
 			// Create the peer directly in the actor's namespace. Moving a
 			// netdev across namespaces afterwards costs several times the

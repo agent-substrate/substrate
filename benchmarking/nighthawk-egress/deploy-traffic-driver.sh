@@ -25,6 +25,9 @@ if [[ -f "${REPO_ROOT}/.ate-dev-env.sh" ]] && [[ -z "${NO_DEV_ENV:-}" ]]; then
   source "${REPO_ROOT}/.ate-dev-env.sh"
 fi
 
+# shellcheck source=benchmarking/lib/kubectl-ate.sh
+source "${REPO_ROOT}/benchmarking/lib/kubectl-ate.sh"
+
 ATESPACE="nighthawk"
 TEMPLATE_NAME="traffic-driver"
 ACTOR_NAME="tester"
@@ -32,7 +35,6 @@ POOL_MANIFEST="${SCRIPT_DIR}/traffic-driver.yaml.tmpl"
 NAMESPACE_MANIFEST="${SCRIPT_DIR}/namespace.yaml"
 MANIFEST="${SCRIPT_DIR}/traffic-driver-template.yaml.tmpl"
 EGRESS_POLICY_MANIFEST="${SCRIPT_DIR}/egress-policy.yaml"
-KUBECTL_ATE_BIN="kubectl-ate"
 WAIT_TIMEOUT_SECS=300
 CONTEXT="${KUBECTL_CONTEXT:-}"
 KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
@@ -97,12 +99,14 @@ if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# bash 3.2 treats an empty array as unset under nounset, so args expands
+# only when it has elements.
 run_kubectl() {
   local args=()
   if [[ -n "${CONTEXT}" ]]; then
     args+=(--context "${CONTEXT}")
   fi
-  kubectl "${args[@]}" "$@"
+  kubectl ${args[@]+"${args[@]}"} "$@"
 }
 
 run_kubectl_ate() {
@@ -110,7 +114,7 @@ run_kubectl_ate() {
   if [[ -n "${CONTEXT}" ]]; then
     args+=(--context "${CONTEXT}")
   fi
-  "${KUBECTL_ATE_BIN}" "${args[@]}" "$@"
+  "${KUBECTL_ATE_BIN}" ${args[@]+"${args[@]}"} "$@"
 }
 
 wait_template_ready() {
@@ -146,6 +150,7 @@ deploy() {
     exit 1
   fi
   export KO_DOCKER_REPO
+  build_kubectl_ate
 
   echo "Deploying namespace from ${NAMESPACE_MANIFEST}..."
   run_kubectl apply -f "${NAMESPACE_MANIFEST}"
@@ -183,6 +188,7 @@ deploy() {
 }
 
 delete() {
+  build_kubectl_ate
   echo "Suspending and deleting actor ${ATESPACE}/${ACTOR_NAME}..."
   run_kubectl_ate suspend actor "${ACTOR_NAME}" -a "${ATESPACE}" >/dev/null 2>&1 || true
   run_kubectl_ate delete actor "${ACTOR_NAME}" -a "${ATESPACE}" >/dev/null 2>&1 || true

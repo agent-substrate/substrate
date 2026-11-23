@@ -344,6 +344,12 @@ message ReportActorCrashedRequest {
   // +k8s:required
   // +k8s:maxLength=4096
   string message = 4;
+
+  // The API server-assigned identity of the execution that exited.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 5;
 }
 
 message ReportActorCrashedResponse {
@@ -600,6 +606,13 @@ message RunRequest {
   //
   // +k8s:required
   ActorSandboxRuntime sandbox_runtime = 12;
+
+  // The API server assigns a new UUID for each Run call.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1223,6 +1236,13 @@ message RestoreRequest {
   //
   // +k8s:required
   ActorSandboxRuntime sandbox_runtime = 12;
+
+  // The API server assigns a new UUID for each Restore call.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 13;
 }
 
 message RestoreResponse {

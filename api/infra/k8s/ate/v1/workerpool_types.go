@@ -78,7 +78,8 @@ type WorkerPoolPodTemplate struct {
 
 	// serviceAccountName for the worker pods. The ServiceAccount must exist
 	// in the WorkerPool's namespace. When omitted, the pods run as the
-	// "ateworker" ServiceAccount, which the controller creates.
+	// "ateworker" ServiceAccount, which the controller creates. Worker pods
+	// never get a ServiceAccount token, whichever ServiceAccount they use.
 	//
 	// +optional
 	// +kubebuilder:validation:MinLength=1
@@ -287,8 +288,4 @@ type WorkerPoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WorkerPool `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&WorkerPool{}, &WorkerPoolList{})
 }

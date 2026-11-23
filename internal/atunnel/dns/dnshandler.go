@@ -61,9 +61,10 @@ type dnsHandler struct {
 	pending *pendingRequests
 	limiter *limiter
 	allow   queryPolicy
+	metrics *metrics
 }
 
-func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy) *dnsHandler {
+func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, metrics *metrics) *dnsHandler {
 	if allow == nil {
 		allow = func(dnsmessage.Question) bool { return true }
 	}
@@ -71,6 +72,7 @@ func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy) *d
 		pending: pending,
 		limiter: lim,
 		allow:   allow,
+		metrics: metrics,
 	}
 }
 
@@ -122,7 +124,9 @@ func (h *dnsHandler) onRequestCommon(raw []byte) (dnsmessage.Header, dnsmessage.
 	// Note: NXDOMAIN seems to interact better with application stacks than other
 	// error codes such as REFUSED.
 	cq := canonicalizeQuestion(q)
-	if !h.allow(cq) {
+	allowed := h.allow(cq)
+	h.metrics.recordQuery(allowed)
+	if !allowed {
 		return hdr, dnsmessage.Question{}, action{
 			kind:    actionReply,
 			payload: protocol.NXDomainPacket(hdr, q),

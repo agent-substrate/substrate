@@ -52,7 +52,7 @@ RUN git init /src/envoy \
     && git -C /src/envoy fetch --depth 1 https://github.com/envoyproxy/envoy "${ENVOY_COMMIT}" \
     && git -C /src/envoy checkout FETCH_HEAD
 
-COPY benchmarking/nighthawk-ingress/protogen/generate_descriptor.sh /gen.sh
+COPY benchmarking/nighthawk_common/protogen/generate_descriptor.sh /gen.sh
 RUN bash /gen.sh /out/nighthawk.desc
 
 # --- Stage 2: ateapi Python clients ------------------------------------------

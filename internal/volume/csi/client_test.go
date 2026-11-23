@@ -17,10 +17,14 @@ package csi
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 func TestParseEndpoint(t *testing.T) {
@@ -152,5 +156,56 @@ func TestNewCSIClient_TCP(t *testing.T) {
 
 	if resp.GetName() != "mock-driver" {
 		t.Errorf("expected driver name 'mock-driver', got %q", resp.GetName())
+	}
+}
+
+// A call that starts while the driver socket is down succeeds once the driver
+// comes back, as when kubelet restarts a CSI node plugin.
+func TestNewCSIClient_WaitsForDriverRestart(t *testing.T) {
+	// Unix socket paths are length-limited; t.TempDir can exceed that on macOS.
+	dir, err := os.MkdirTemp("", "csisock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "csi.sock")
+
+	client, err := NewCSIClient("unix://"+sock, nil)
+	if err != nil {
+		t.Fatalf("failed to create CSI client: %v", err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Wait for the connection to fail against the missing socket, so the call
+	// below starts on a lost connection.
+	client.conn.Connect()
+	for state := client.conn.GetState(); state != connectivity.TransientFailure; state = client.conn.GetState() {
+		if !client.conn.WaitForStateChange(ctx, state) {
+			t.Fatalf("connection to a missing socket is %s, want %s", state, connectivity.TransientFailure)
+		}
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := client.GetPluginInfo(ctx, &csi.GetPluginInfoRequest{})
+		errc <- err
+	}()
+
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	csi.RegisterIdentityServer(grpcServer, &mockIdentityServer{})
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	defer grpcServer.Stop()
+
+	if err := <-errc; err != nil {
+		t.Errorf("GetPluginInfo across a driver restart = %v, want success", err)
 	}
 }

@@ -69,10 +69,6 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	// Set this first so an RPC that arrives while we drain is turned away.
 	s.shuttingDown.Store(true)
 
-	// Cancel an in-flight run or restore. Waiting for a cold boot to finish only to
-	// SIGTERM the guest it just produced is strictly worse than aborting it.
-	s.cancelStartups(ctx)
-
 	// One deadline covers the whole drain. Waiting for the lock and waiting out
 	// SIGTERM below both run against it, so the two phases split a single grace
 	// period rather than each getting one: an RPC that burns most of the budget
@@ -80,7 +76,9 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	// workloadGracePeriod however the time falls between them.
 	deadline := time.Now().Add(workloadGracePeriod)
 
-	// Let checkpoints finish saving state before stopping guests.
+	// Let in-flight boots, restores and checkpoints finish before stopping
+	// guests. Canceling a boot or restore would crash an actor that has not
+	// served yet.
 	waitCtx, waitCancel := context.WithDeadline(ctx, deadline)
 	defer waitCancel()
 	if !s.inFlight.WaitIdle(waitCtx) {

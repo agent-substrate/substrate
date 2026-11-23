@@ -32,7 +32,7 @@ import (
 )
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -249,7 +249,7 @@ var errAlreadyMarked = errors.New("already marked for deletion")
 // ensureMarkedDeleting sets the actor's delete_time, checking precondition,
 // and moves it to DELETING, returning the stored copy. Skips when a previous
 // attempt already marked the actor.
-func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (updated *ateapi.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (updated *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
@@ -379,7 +379,7 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapi.Actor
 	// Only the uid guards the delete. The mark already committed this
 	// incarnation to deletion, and a later write such as an UpdateActor RPC,
 	// which takes no actor lease, must not block removing the row.
-	precondition := store.DeletePreconditions{UID: actor.GetMetadata().GetUid()}
+	precondition := store.Precondition{UID: actor.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

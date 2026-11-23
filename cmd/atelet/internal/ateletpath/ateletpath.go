@@ -44,9 +44,10 @@ var (
 
 	// SandboxAssetScratchDir holds short-lived destination directories for
 	// asset fetches that have no actor and no worker directory to link into:
-	// the assets the worker sandbox syncer stages when checking a version.
-	// Wiped at startup. Under BasePath so the links the cache serves into it
-	// are on the cache's mount.
+	// the assets the worker sandbox syncer stages when checking a restorable
+	// version, and the runsc it probes for CPU features. Wiped at startup.
+	// Under BasePath so the links the cache serves into it are on the
+	// cache's mount.
 	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
 
 	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this
@@ -109,9 +110,23 @@ func ActorSandboxAssetsFile(actorUID string) string {
 func ActorSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
-		"snapshot-state.json",
+		snapshotStateFileName,
 	)
 }
+
+// NextSnapshotStateFile is where the next release keeps the actor's snapshot
+// state file: directly under ActorSnapshotPath. The file moves there over two
+// releases (see docs/reference/version-skew-policy.md). atelet moves a file it
+// finds here back to ActorSnapshotStateFile at startup, so a rollback from the
+// next release keeps the actor's snapshots.
+func NextSnapshotStateFile(actorUID string) string {
+	return filepath.Join(
+		ActorSnapshotPath(actorUID),
+		snapshotStateFileName,
+	)
+}
+
+const snapshotStateFileName = "snapshot-state.json"
 
 // SandboxAssetsDir holds the actor's sandbox runtime assets, one entry per
 // asset name, each a hard link (or a directory of hard links, for a gVisor

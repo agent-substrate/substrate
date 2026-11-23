@@ -20,12 +20,12 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 type dataplaneHealthCheck struct {
@@ -33,9 +33,12 @@ type dataplaneHealthCheck struct {
 	expectedBody string
 }
 
-// Both dataplanes resolve the worker address from ext_proc's dynamic
-// metadata (see ingress.OriginalDstMetadataKey). Actor identity is carried in
-// explicit headers, so ingress.New needs no per-dataplane routing mode.
+// ingress.New's Go ext_proc handler resolves the worker address and writes
+// it to ext_proc's dynamic metadata (see ingress.OriginalDstMetadataKey).
+// Only the Envoy dataplane calls it; agentgateway resolves the worker
+// address itself, in-process, via its own substrateIngress policy. Actor
+// identity is carried in explicit headers either way, so ingress.New needs
+// no per-dataplane routing mode.
 
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {
@@ -98,7 +101,7 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	if parkCfg.Enabled() {
 		// Envoy must keep a parked request open at least as long as the router
 		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
+		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + ingress.ExtProcTimeoutMargin)
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
@@ -118,6 +121,16 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	}
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
+	ingressCache := preview.IsEnabled(preview.GateIngressCache)
+	if ingressCache {
+		if err := s.cfg.IngressCache.validate(); err != nil {
+			return nil, err
+		}
+	}
+	xdsSrv.SetIngressCache(ingressCache, s.cfg.IngressCache)
+	slog.InfoContext(ctx, "Ingress cache", slog.Bool("enabled", ingressCache),
+		slog.Duration("ttl", s.cfg.IngressCache.TTL),
+		slog.Int("max_cached_actors", s.cfg.IngressCache.MaxCachedActors))
 
 	// The snapshot is a pure function of the configuration applied above, so it
 	// is built exactly once; an Envoy that connects later is served from the

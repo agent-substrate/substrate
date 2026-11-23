@@ -282,7 +282,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.Precondition{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -304,7 +304,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				stale := store.DeletePreconditions{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
+				stale := store.Precondition{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
 				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); apierror.Code(err) != codes.Aborted {
 					t.Fatalf("DeleteActorTemplate with a stale version = %v, want code Aborted", err)
 				}
@@ -463,11 +463,12 @@ func TestResolveActorTemplate_NotFound(t *testing.T) {
 	}
 }
 
-// TestUpdateActorTemplateMetadata pins the store's update behavior: the
-// server-assigned metadata is recomputed in place, and metadata identity is
-// immutable.
+// TestUpdateActorTemplateMetadata checks that a server-owned status write
+// bumps the version, and that an update or mark for deletion that changes
+// metadata is rejected.
 func TestUpdateActorTemplateMetadata(t *testing.T) {
 	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -479,8 +480,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	}
 	ref := resources.ActorTemplateRefFromActorTemplate(created)
 
-	// A server-owned status write passes validation and bumps the version.
-	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapi.ActorTemplate) error {
+	updated, err := impl.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapi.ActorTemplate) error {
 		tmpl.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
 			GoldenTag: &ateapi.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 		}}
@@ -493,27 +493,19 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 		t.Errorf("updated version = %d, want %d", got, want)
 	}
 
-	// A mutation that touches an immutable field is a server bug, rejected by
-	// the store.
 	for name, mutate := range map[string]func(*ateapi.ActorTemplate) error{
 		"atespace": func(tmpl *ateapi.ActorTemplate) error { tmpl.Metadata.Atespace = "ns2"; return nil },
 		"name":     func(tmpl *ateapi.ActorTemplate) error { tmpl.Metadata.Name = "tmpl-b"; return nil },
+		"uid": func(tmpl *ateapi.ActorTemplate) error {
+			tmpl.Metadata.Uid = "1e186271-b829-4085-b2b1-6b665c1a4f42"
+			return nil
+		},
 	} {
-		if _, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), mutate); err == nil {
-			t.Errorf("mutating %s succeeded, want error", name)
+		if _, err := impl.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), mutate); apierror.Code(err) != codes.Internal {
+			t.Errorf("UpdateActorTemplate mutating %s: error = %v, want an Internal error", name, err)
 		}
-	}
-
-	// Server-assigned metadata edits are overwritten, not errors: the store
-	// restores them from the stored value.
-	reverted, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), func(tmpl *ateapi.ActorTemplate) error {
-		tmpl.Metadata.Uid = "1e186271-b829-4085-b2b1-6b665c1a4f42"
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("UpdateActorTemplate with uid edit failed: %v", err)
-	}
-	if got, want := reverted.GetMetadata().GetUid(), created.GetMetadata().GetUid(); got != want {
-		t.Errorf("uid after update = %q, want %q", got, want)
+		if _, err := impl.MarkActorTemplateForDeletion(ctx, ref, store.Precondition{UID: updated.GetMetadata().GetUid(), Version: updated.GetMetadata().GetVersion()}, mutate); apierror.Code(err) != codes.Internal {
+			t.Errorf("MarkActorTemplateForDeletion mutating %s: error = %v, want an Internal error", name, err)
+		}
 	}
 }

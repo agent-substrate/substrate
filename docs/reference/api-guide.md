@@ -37,7 +37,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
-| `serviceAccountName` | `string` | `spec.serviceAccountName`; defaults to `ateworker`, which the controller creates |
+| `serviceAccountName` | `string` | `spec.serviceAccountName`; defaults to `ateworker`, which the controller creates. Worker pods never get a ServiceAccount token. |
 
 Keys in `ate.dev/` and its subdomains (for example, `policy.ate.dev/`) are
 reserved for controllers and cannot be set in `template.labels` or
@@ -52,9 +52,8 @@ metadata; they do not affect actor scheduling. Actor selectors match
 
 Substrate sets a fixed capability set for each sandbox runtime. Every worker
 drops `ALL` container-runtime default capabilities and adds back only the set
-below: 9 capabilities for gVisor and 11 for microVM. These permissions are not
-configurable per pool. Actor containers are configured separately through
-`ActorTemplate.containers[].securityContext`.
+below. These permissions are not configurable per pool. Actor containers are
+configured separately through `ActorTemplate.containers[].securityContext`.
 
 Workers run as UID/GID 0 with `privileged: false` and
 `allowPrivilegeEscalation: false`. They retain `SYS_ADMIN` and `NET_ADMIN` for
@@ -70,6 +69,7 @@ permissions described in [Security](../security/security.md).
 | `DAC_READ_SEARCH` | Not granted | Not granted; virtiofsd runs with file handles off (`--inode-file-handles=never`) and needs it only to open them |
 | `FSETID` | Not granted | Retained for virtiofsd's setgid-file behavior |
 | `NET_RAW` | Needed to open the sandbox's raw socket | Not granted |
+| `IPC_LOCK` | Lets runsc create each sandbox's pin ring, which holds the sandbox's resources so that they are released after the sandbox exits. Without it, the sandbox takes longer to exit | Not granted |
 | `SETFCAP`, `SETUID` | Needed to start runsc's gofer | Retained in virtiofsd's child set; `SETUID` is needed for non-root guest file creation |
 | `SETGID` | Needed to start runsc's gofer | Needed by virtiofsd to drop supplementary groups |
 | `DAC_OVERRIDE` | Needed to mount the rootfs overlay | Same |
@@ -751,7 +751,7 @@ Replaces the mutable fields of an existing actor with the ones in the request (`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
     *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
     *   `worker_selector` may be updated or cleared (`nil`) in any state, but not while another operation is changing the actor. The updated selector takes effect on the next `ResumeActor`.
-    *   A suspended actor with a local snapshot is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
+    *   A suspended actor with a local snapshot is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`. If at least one worker on any node is eligible and the actor is larger than each of them, it returns `FAILED_PRECONDITION`.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field (including by leaving one unset). `FAILED_PRECONDITION` if the actor is marked for deletion or if a change to `actor_template` breaks one of the rules above. `ABORTED` if either guard no longer matches the stored resource, or while another operation is changing the actor (retry the same request).
 
@@ -762,7 +762,14 @@ Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
-*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
+*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`, or if at least one worker is eligible and the actor is larger than each of them, even when empty. Unavailable workers count, so a short outage gives `RESOURCE_EXHAUSTED`. A new worker counts once it first registers. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
+
+The API server assigns a new UUID to each Run or Restore call and stores it in
+`status.worker_assignment.actor_execution_uid` when the Actor becomes RUNNING.
+Workers bind that UUID to the runtime they start. Executions started by an older
+API server can have an empty UID. Crash reports accept the execution UID field
+for protocol compatibility. Crash handling uses the Actor and Worker identities
+and will check the Actor execution UID in a future release.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.

@@ -39,7 +39,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 		return nil, fmt.Errorf("locking worker %s: %w", name, err)
 	}
 	worker := &ateapi.Worker{}
-	if err := proto.Unmarshal(protoBytes, worker); err != nil {
+	if err := unmarshalStored(protoBytes, worker); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return worker, nil
@@ -48,20 +48,22 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 // saveWorker writes back a Worker whose allocation just moved, at the next
 // version. This assumes the caller holds the row lock getWorkerForUpdate took.
 func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
-	read := proto.CloneOf(worker.GetMetadata())
-	setUpdateMetadata(worker.GetMetadata(), worker.GetMetadata())
+	currentUID := worker.GetMetadata().GetUid()
+	currentVersion := worker.GetMetadata().GetVersion()
+	worker.Metadata = setUpdateMetadata(worker.Metadata)
 	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
-	// Callers hold the row lock getWorkerForUpdate took, so this matches the
+	meta := worker.GetMetadata()
+	// Callers hold the row lock for this worker, so this matches the
 	// row they read. It is stated anyway so a caller that skipped the lock
 	// fails loudly instead of overwriting a newer Worker, and so a row that is
 	// gone is an error rather than an update of nothing.
 	tag, err := tx.Exec(ctx, `UPDATE workers SET version = $1, proto = $2 WHERE name = $3 AND uid = $4 AND version = $5`,
-		worker.GetMetadata().GetVersion(), protoBytes, read.GetName(), read.GetUid(), read.GetVersion())
+		meta.GetVersion(), protoBytes, meta.GetName(), currentUID, currentVersion)
 	if err != nil {
-		return fmt.Errorf("updating worker %s: %w", read.GetName(), err)
+		return fmt.Errorf("updating worker %s: %w", meta.GetName(), err)
 	}
 	if tag.RowsAffected() != 1 {
 		return store.ErrVersionConflict
@@ -74,7 +76,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	if actorUID == "" {
 		return nil, fmt.Errorf("binding an assignment with no actor_uid to worker %s", workerName)
 	}
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	if precondition.UID != actorUID {
@@ -110,7 +112,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		}
 		// The Actor's version check settles concurrent binds of it: every bind
 		// updates the Actor, so all but the first fail it.
-		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
+		if updated, err = updateActor(ctx, tx, actorRef, precondition, mutate, false); err != nil {
 			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -132,7 +134,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 }
 
 func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	actorUID := precondition.UID
@@ -144,7 +146,7 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 		}
 		// A row released since the caller read the Actor also moved the
 		// Actor on, so its version check fails here.
-		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
+		if updated, err = updateActor(ctx, tx, actorRef, precondition, mutate, false); err != nil {
 			return nil, err
 		}
 		return released, nil
@@ -190,7 +192,7 @@ func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Work
 		return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
 	}
 	assignment := &ateapi.ActorAssignment{}
-	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, fmt.Errorf("unmarshaling released assignment: %w", err)
 	}
 	worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
@@ -216,7 +218,7 @@ func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.
 		return nil, "", fmt.Errorf("getting assignment for actor %s: %w", actorUID, err)
 	}
 	assignment := &ateapi.ActorAssignment{}
-	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, "", fmt.Errorf("unmarshaling assignment: %w", err)
 	}
 	return assignment, workerName, nil
@@ -269,7 +271,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("scanning assignment of worker %s: %w", workerName, err)
 		}
 		assignment := &ateapi.ActorAssignment{}
-		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+		if err := unmarshalStored(protoBytes, assignment); err != nil {
 			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment of actor %s: %w", actorUID, err)
 		}
 		result = append(result, assignment)

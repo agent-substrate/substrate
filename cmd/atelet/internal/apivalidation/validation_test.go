@@ -251,6 +251,13 @@ func TestValidateRunRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
+		name: "valid execution_uid",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ExecutionUid = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5" }),
+	}, {
+		name: "invalid execution_uid",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.ExecutionUid = "invalid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("execution_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
 		name: "missing worker_pod_uid",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("worker_pod_uid"), "")},
@@ -599,6 +606,13 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}{{
 		name: "valid",
 		obj:  valid(),
+	}, {
+		name: "valid execution_uid",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.ExecutionUid = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5" }),
+	}, {
+		name: "invalid execution_uid",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.ExecutionUid = "invalid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("execution_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing object storage",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Object = nil }),

@@ -179,6 +179,10 @@ type routerConfig struct {
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
 
+	// IngressCache configures the ingress-cache filter. It only applies with
+	// the IngressCache preview gate.
+	IngressCache IngressCacheConfig
+
 	// CredentialProvider configures egress credential injection on the MITM leg.
 	// Only the egress gateway sets it, and only when injection is enabled: a
 	// CredentialProvider with no Addresses leaves the injector disabled, so a

@@ -29,6 +29,8 @@ import (
 	"net/url"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/atunnel/dns"
 	"go.ate.dev/substrate/internal/atunnel/egress"
@@ -93,6 +95,10 @@ func RegisterFlags(fs FlagSet) *Config {
 	return c
 }
 
+// tcpNotSentLowat is the TCP_NOTSENT_LOWAT of every atunnel TCP connection,
+// so a slow reader's backlog stays upstream, not in the kernel send queue.
+const tcpNotSentLowat = 16384
+
 // Tunnel is the atunnel state one worker shares across its actors.
 type Tunnel struct {
 	// Ingress proxies router traffic to the active actors.
@@ -112,8 +118,8 @@ type Tunnel struct {
 
 // Start builds the DNS relay and starts serving actor ingress, which proxies
 // to upstream inside each sandbox. Egress binds only in sandbox namespaces, so
-// nothing listens for it here.
-func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
+// nothing listens for it here. The DNS relay reports its metrics on meter.
+func Start(ctx context.Context, cfg Config, upstream string, meter metric.Meter) (*Tunnel, error) {
 	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
 		return nil, err
 	}
@@ -122,7 +128,7 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 		return nil, fmt.Errorf("while parsing atunnel upstream: %w", err)
 	}
 
-	dnsRelay, err := dns.NewRelay(resolvConfPath)
+	dnsRelay, err := dns.NewRelay(resolvConfPath, meter)
 	if err != nil {
 		return nil, fmt.Errorf("configuring DNS relay: %w", err)
 	}
@@ -149,7 +155,9 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	}
 
 	// Egress
-	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination)
+	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination, egress.WithConfigureAcceptedSock(func(conn net.Conn) error {
+		return linuxsys.SetTCPNotSentLowat(conn, tcpNotSentLowat)
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("configuring egress: %w", err)
 	}
@@ -169,12 +177,14 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 }
 
 // serve listens on address and runs serveFn on it, exiting the process if it
-// fails.
+// fails. Every connection it accepts gets TCP_NOTSENT_LOWAT tcpNotSentLowat.
 func serve(ctx context.Context, name, address string, serveFn func(context.Context, net.Listener) error) error {
-	lis, err := net.Listen("tcp", address)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("while opening %s listener: %w", name, err)
 	}
+	lis = &listenerWithOptions{Listener: lis}
 	go func() {
 		if err := serveFn(ctx, lis); err != nil {
 			serverboot.Fatal(ctx, "Failed to serve "+name, err)
@@ -182,6 +192,30 @@ func serve(ctx context.Context, name, address string, serveFn func(context.Conte
 	}()
 	slog.InfoContext(ctx, name+" serving", slog.String("address", address))
 	return nil
+}
+
+// listenerWithOptions sets TCP_NOTSENT_LOWAT on every connection it accepts. A
+// connection it can't be set on is closed, and the next one accepted. Setting
+// it on the listening socket isn't enough: Go opens MPTCP listeners by default
+// where the kernel enables MPTCP, and an MPTCP listener doesn't pass
+// TCP_NOTSENT_LOWAT to the TCP connections it accepts.
+type listenerWithOptions struct {
+	net.Listener
+}
+
+func (l *listenerWithOptions) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if err := linuxsys.SetTCPNotSentLowat(conn, tcpNotSentLowat); err != nil {
+			slog.Warn("atunnel failed to set TCP_NOTSENT_LOWAT on an accepted connection", slog.Any("err", err))
+			_ = conn.Close()
+			continue
+		}
+		return conn, nil
+	}
 }
 
 // ActorEgress is an actor's tunneled egress, ready to activate.
@@ -229,6 +263,7 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 		ServerName:           serverName,
 		GetClientCertificate: certificateSource.GetClientCertificate,
 		TrustBundlePath:      t.cfg.EgressTrustBundle,
+		DialControl:          linuxsys.TCPNotSentLowatControl(tcpNotSentLowat),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor egress client: %w", err)
@@ -252,7 +287,7 @@ func (t *Tunnel) ActivateEgress(actor resources.ActorAttribution, actorEgress *A
 // ActivateIngress starts admitting the actor's inbound traffic through dial.
 // Call it once the workload is ready to serve.
 func (t *Tunnel) ActivateIngress(actor resources.ActorAttribution, dial ingress.DialFunc) error {
-	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, dial); err != nil {
+	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, tunedDial(dial)); err != nil {
 		return fmt.Errorf("while activating actor ingress: %w", err)
 	}
 	return nil
@@ -270,4 +305,21 @@ func (t *Tunnel) Deactivate(ctx context.Context, actor resources.ActorAttributio
 		return fmt.Errorf("while deactivating actor networking: %w", err)
 	}
 	return nil
+}
+
+// tunedDial sets TCP_NOTSENT_LOWAT tcpNotSentLowat on every connection dial
+// opens. The sandbox dialer creates the socket inside the actor's namespace,
+// so the option goes on after connect.
+func tunedDial(dial ingress.DialFunc) ingress.DialFunc {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		if err := linuxsys.SetTCPNotSentLowat(conn, tcpNotSentLowat); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
 }

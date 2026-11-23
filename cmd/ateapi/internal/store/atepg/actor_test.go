@@ -143,3 +143,24 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateActor_DiscardsMetadataEdits(t *testing.T) {
+	ref := resources.ActorRef{Atespace: "team-a", Name: "a"}
+	testUpdateDiscardsMetadataEdits(t,
+		func(t *testing.T, s *Persistence) *ateapi.Actor {
+			created, err := s.CreateActor(t.Context(), &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
+				Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			return created
+		},
+		func(ctx context.Context, s *Persistence, pc store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+			return s.UpdateActor(ctx, ref, pc, mutate)
+		},
+		func(ctx context.Context, s *Persistence) (*ateapi.Actor, error) {
+			return s.GetActor(ctx, ref)
+		})
+}

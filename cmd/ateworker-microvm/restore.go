@@ -136,10 +136,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	// Register for startup cancellation before checking for shutdown.
-	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +147,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	p := actorBootParams{
+		executionUID:     req.GetExecutionUid(),
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
 		actorDirs:        req.GetActorDirs(),
@@ -523,7 +521,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		})
 
 	ra := &runningActor{
-		chProc: chProc, vfsdProc: vfsdProc,
+		executionUID: p.executionUID,
+		chProc:       chProc, vfsdProc: vfsdProc,
 		apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
 		preserveRestoreSource:   preserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,

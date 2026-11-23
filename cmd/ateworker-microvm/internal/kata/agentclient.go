@@ -146,6 +146,16 @@ func (a *AgentClient) CreateContainer(ctx context.Context, req *agentpb.CreateCo
 	return nil
 }
 
+// CloseStdin closes the agent's write end of a process's stdin pipe, so the
+// process reads EOF from stdin. Mirrors grpc.AgentService/CloseStdin.
+func (a *AgentClient) CloseStdin(ctx context.Context, containerID, execID string) error {
+	req := &agentpb.CloseStdinRequest{ContainerId: containerID, ExecId: execID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "CloseStdin", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent CloseStdin %q: %w", containerID, err)
+	}
+	return nil
+}
+
 // ReseedRandomDev feeds fresh entropy into the guest's random device: the agent
 // writes data into /dev/random and reseeds the kernel CRNG. This is how a restored
 // or cloned guest diverges from the entropy state frozen in its snapshot. Mirrors

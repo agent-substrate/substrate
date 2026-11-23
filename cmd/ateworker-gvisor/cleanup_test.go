@@ -18,9 +18,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -41,20 +41,13 @@ func newFakeRunsc(containers ...string) *fakeRunsc {
 	return f
 }
 
-func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
-	f.calls = append(f.calls, "state "+name)
-	if !f.containers[name] {
-		return errors.New("exit status 128")
+// cmdDelete succeeds for a container runsc has no record of, as
+// runsc delete -force does.
+func (f *fakeRunsc) cmdDelete(_ context.Context, names ...string) error {
+	f.calls = append(f.calls, "delete "+strings.Join(names, " "))
+	for _, name := range names {
+		delete(f.containers, name)
 	}
-	return nil
-}
-
-func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
-	f.calls = append(f.calls, "delete "+name)
-	if !f.containers[name] {
-		return errors.New("exit status 128")
-	}
-	delete(f.containers, name)
 	return nil
 }
 
@@ -68,11 +61,6 @@ func (f *fakeRunsc) cmdWait(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeRunsc) cmdList(context.Context) ([]string, error) {
-	f.calls = append(f.calls, "list")
-	return slices.Sorted(maps.Keys(f.containers)), nil
-}
-
 func assertCalls(t *testing.T, f *fakeRunsc, want ...string) {
 	t.Helper()
 	if !slices.Equal(f.calls, want) {
@@ -82,41 +70,29 @@ func assertCalls(t *testing.T, f *fakeRunsc, want ...string) {
 
 var appContainers = []*ateworkerpb.Container{{Name: "app"}}
 
-func TestCleanupContainers_DeletesEveryContainerRunscKnows(t *testing.T) {
-	f := newFakeRunsc("app", "_sandbox")
-
-	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
-		t.Fatalf("cleanupContainers: %v", err)
+// cleanupContainers deletes the application containers before the sandbox,
+// with one runsc command, whatever runsc still has a record of.
+func TestCleanupContainers(t *testing.T) {
+	tests := []struct {
+		name    string
+		present []string
+	}{
+		{name: "every container present", present: []string{"app", "_sandbox"}},
+		{name: "sandbox already gone", present: []string{"app"}},
+		{name: "everything already gone"},
 	}
-
-	// Happy path: no `runsc list` at all.
-	assertCalls(t, f, "state app", "state _sandbox", "delete app", "delete _sandbox")
-	if len(f.containers) != 0 {
-		t.Errorf("containers survived cleanup: %v", slices.Sorted(maps.Keys(f.containers)))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRunsc(tc.present...)
+			if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
+				t.Fatalf("cleanupContainers: %v", err)
+			}
+			assertCalls(t, f, "delete app _sandbox")
+			if len(f.containers) != 0 {
+				t.Errorf("containers survived cleanup: %v", slices.Sorted(maps.Keys(f.containers)))
+			}
+		})
 	}
-	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
-		t.Fatalf("repeated cleanupContainers: %v", err)
-	}
-}
-
-func TestCleanupContainers_SkipsContainersRunscHasNoRecordOf(t *testing.T) {
-	f := newFakeRunsc("app")
-
-	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
-		t.Fatalf("cleanupContainers: %v", err)
-	}
-
-	assertCalls(t, f, "state app", "state _sandbox", "list", "delete app")
-}
-
-func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
-	f := newFakeRunsc()
-
-	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
-		t.Fatalf("cleanupContainers: %v", err)
-	}
-
-	assertCalls(t, f, "state app", "list", "state _sandbox", "list")
 }
 
 // The sandbox must outlive the deletes of the
@@ -129,4 +105,29 @@ func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
 		want = append(want, "kill "+c.GetName()+" SIGKILL", "wait "+c.GetName())
 	}
 	assertCalls(t, f, want...)
+}
+
+func TestTerminateContainers(t *testing.T) {
+	containers := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
+	tests := []struct {
+		name          string
+		sandboxExited bool
+		wantStopCalls []string
+	}{
+		{name: "sandbox exited", sandboxExited: true},
+		{
+			name:          "sandbox exit unconfirmed",
+			wantStopCalls: []string{"kill app SIGKILL", "wait app", "kill sidecar SIGKILL", "wait sidecar"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRunsc("app", "sidecar", "_sandbox")
+			if err := terminateContainers(context.Background(), f, containers, tc.sandboxExited); err != nil {
+				t.Fatalf("terminateContainers: %v", err)
+			}
+			want := append(tc.wantStopCalls, "delete app sidecar _sandbox")
+			assertCalls(t, f, want...)
+		})
+	}
 }

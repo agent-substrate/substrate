@@ -505,6 +505,73 @@ func TestActorResumer_Parking(t *testing.T) {
 		})
 	})
 
+	t.Run("CallerStopsWaitingBeforeEnvoyTimeout", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			// firstErr, if set, fails the first attempt so the caller parks
+			// before the slow one.
+			firstErr  error
+			wantCalls int32
+		}{
+			{"Resolving", nil, 1},
+			{"Parked", status.Error(codes.ResourceExhausted, "no worker has room for the actor"), 2},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					const budget = 5 * time.Second
+					var calls atomic.Int32
+					proceed := make(chan struct{})
+					mock := &resumerMockClient{
+						resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+							if calls.Add(1) == 1 && tc.firstErr != nil {
+								return nil, tc.firstErr
+							}
+							// A restore slower than Envoy's timeout.
+							<-proceed
+							return &ateapi.ResumeActorResponse{
+								Actor:   &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: testActorName}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
+								Resumed: true,
+							}, nil
+						},
+					}
+					resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 2, Budget: budget}))
+
+					// Envoy closes the stream at its timeout.
+					envoyTimeout := budget + ExtProcTimeoutMargin
+					ctx, cancel := context.WithTimeout(t.Context(), envoyTimeout)
+					defer cancel()
+					start := time.Now()
+					_, _, err := resumer.ResumeActor(ctx, testActorRef)
+					if waited := time.Since(start); waited >= envoyTimeout {
+						t.Errorf("caller waited %v, want less than Envoy's %v timeout", waited, envoyTimeout)
+					}
+					var reqErr *extproc.ReqError
+					if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+						t.Fatalf("expected the router's 503, got %v", err)
+					}
+					if got := parkOutcomeFor(err); got != parkOutcomeTimeout {
+						t.Errorf("outcome = %q, want %q", got, parkOutcomeTimeout)
+					}
+
+					// A later caller joins the running attempt and is served.
+					errCh := make(chan error, 1)
+					go func() {
+						_, _, err := resumer.ResumeActor(t.Context(), testActorRef)
+						errCh <- err
+					}()
+					synctest.Wait()
+					close(proceed)
+					if err := <-errCh; err != nil {
+						t.Fatalf("later caller: unexpected error: %v", err)
+					}
+					if got := calls.Load(); got != tc.wantCalls {
+						t.Errorf("expected %d resume attempts, got %d", tc.wantCalls, got)
+					}
+				})
+			})
+		}
+	})
+
 	t.Run("LateNonRetryableErrorIsPreserved", func(t *testing.T) {
 		for _, tc := range []struct {
 			name string

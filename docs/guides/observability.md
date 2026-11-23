@@ -261,7 +261,7 @@ The stdout record carries the same flat `ate.*` keys as the OTLP event, dated wh
 jsonPayload.msg="Actor usage sampled" AND jsonPayload."ate.actor.uid"="8f2a…"
 ```
 
-* **The measurements** follow [the rules above](#the-same-records-over-otlp): absent while the actor is pending, CPU in seconds since the activation began, memory usage and working set absolute. An activation that ends any other way, as by a crash, has no `final` record, so take the highest CPU per epoch rather than wait for one. The `final` reading is taken just before the teardown, bounded on a microVM to 10ms. When it fails or times out, the `final` record repeats the newest measured sample, dated when that sample was read, or is pending when none was measured.
+* **The measurements** follow [the rules above](#the-same-records-over-otlp): absent while the actor is pending, CPU in seconds since the activation began, memory usage and working set absolute. An activation whose sandbox dies on its own still gets a `final` record when the ateworker tears it down: on gVisor its CPU and memory peak are read after the death and its memory usage and working set are absent, since the memory went with the processes, and on a microVM the newest sample stands in. An activation that ends any other way, as by a lost worker, has no `final` record, so take the highest CPU per epoch rather than wait for one. The `final` reading is taken just before the teardown, bounded on a microVM to 10ms. When it fails or times out, the `final` record repeats the newest measured sample, dated when that sample was read, or is pending when none was measured.
 * **Cadence**: `--usage-sample-interval` on the ateworker sets the timer (default `1m`, at least `50s`). Each sweep writes one periodic record per actor, and `GetActiveWorkloadStats` serves the latest sample rather than reading again.
 * **Trace context**: `initial` records come from the Run or Restore call (on a microVM, from a goroutine the call starts, so the record can land just before or after the call returns) and `final` records from the call that tears the activation down, a Checkpoint, a Terminate, or, on a microVM, the Run or Restore that re-hosts it; both carry that call's span, like any record in [Joining Logs to Traces](#joining-logs-to-traces). `periodic` records come from the sampler, and a shutdown's `final` records from the drain, which serve no request, so they carry none.
 * **Delivery is best-effort**: the stdout record ignores `--log-level` and sits behind a bounded queue, so a stalled log consumer costs records, with a warning, never the sampler.
@@ -305,6 +305,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.filecache.size` | atelet | up/down counter | bytes of disk a node-local file cache occupies, by `ate.filecache.name`, read on each collection; compare with `--sandbox-asset-cache-max-bytes` |
 | `ate.filecache.evictions` | atelet | counter | entries the eviction passes removed from a node-local file cache, by `ate.filecache.name`; a steady rate at the budget means the cache thrashes and actors pay for downloads again |
 | `ate.filecache.gc.passes` | atelet | counter | eviction passes over a node-local file cache, by `ate.filecache.name`, that had work to do, by outcome (`ate.filecache.gc.outcome`: `complete`, `shortfall`, `skipped`); a pass within budget is not counted |
+| `ate.dns.queries` | ateworker-gvisor & ateworker-microvm | counter | actor DNS queries the sandbox DNS relay checked against the actor's egress policy, by `ate.dns.decision` (`allowed` or `denied`); a denied query gets `NXDOMAIN`, and most lookups also cause denials for the worker pod's search domains, which resolvers try first |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 
@@ -324,6 +325,30 @@ For `ate.workerpool.workers`:
   ```
 
   When one backend receives several clusters, add `cluster` to both groupings, or same-named pools in different clusters merge.
+
+* A worker counts under `ate.sandbox.class` `unknown` until its process reports a class, and only a worker with a known class gives its pool zero-valued series for that class. A pool with no `Worker` at all (for example, when none of its pods is scheduled) has no series on `ate.workerpool.workers`. So `idle == 0` alone does not fire when every worker in a pool is `unknown` or when a pool has no `Worker`. Idle workers per pool, with both cases as 0:
+
+  ```promql
+  (
+    sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers", "ate.worker.state"="idle", "ate.sandbox.class"!="unknown"}
+      )
+    )
+    or
+    0 * sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      avg by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers"}
+      )
+    )
+    or
+    0 * max by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      {"ate.workerpool.desired_workers"} > 0
+    )
+  )
+  ```
+
+  Alert on `== 0`. The second branch covers a pool whose workers all report `unknown`. The third branch covers a pool with `spec.replicas > 0` and no `Worker` yet. That branch requires a backend that receives `atecontroller`'s metrics, which the kind Prometheus does not (see [Local Metrics with Prometheus](#local-metrics-with-prometheus-kind-cluster)).
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, `denied`, or `resume_error`. `denied` is a request the router refused by policy (a 403 or `PermissionDenied`), such as an egress request outside the actor's egress policy; `resume_error` is left for a resume that failed for any other reason, a router defect.
@@ -406,7 +431,7 @@ A queue that has never processed an item bridges as an exponential histogram wit
 
 ### Scraping instead of pushing
 
-ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=prometheus` on the components, so each series reaches the backend once. With `prometheus` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. `none` stops the push too. For now `/metrics` stays on for every value, including `otlp` and `none`. The health probes have moved to their own server on `:9091`, so `:9090` serves only `/metrics`; turning it off for `otlp` and `none` is tracked in [#2067](https://github.com/agent-substrate/substrate/issues/2067). The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`. Unset is `otlp,prometheus`, or `otlp` alone on ateworker. `otlp` keeps the push, and `prometheus` or `none` stops it. ateworker serves no `/metrics`, so there `prometheus` is skipped as unknown with a warning, and the push stays on unless the variable is `none`.
+ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=prometheus` on the components, so each series reaches the backend once. With `prometheus` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. `none` stops the push too. The credential provider is the exception to scraping: its NetworkPolicy admits only the egress gateway, so nothing can scrape its `/metrics`, and with `prometheus` or `none` in `ate-otel-config` its metrics leave the pod on no path. For now `/metrics` stays on for every value, including `otlp` and `none`. The health probes have moved to their own server on `:9091`, so `:9090` serves only `/metrics`; turning it off for `otlp` and `none` is tracked in [#2067](https://github.com/agent-substrate/substrate/issues/2067). The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`. Unset is `otlp,prometheus`, or `otlp` alone on ateworker. `otlp` keeps the push, and `prometheus` or `none` stops it. ateworker serves no `/metrics`, so there `prometheus` is skipped as unknown with a warning, and the push stays on unless the variable is `none`.
 
 `ate-controller` does not propagate its own value to the worker pods: ateworker serves no `/metrics`, and `none` would leave it exporting no metrics at all. To set the variable on ateworker, set `ATE_WORKER_OTEL_METRICS_EXPORTER` in `ate-otel-config` (or the controller's `--otel-metrics-exporter` flag).
 
@@ -430,7 +455,7 @@ To explore metrics locally:
 
 > **Note:** Storage is ephemeral (`emptyDir`), so metrics are lost when the Prometheus pod restarts.
 
-> **Note:** This Prometheus does not see every instrument. It scrapes the `/metrics` endpoint (`:9090`) of the pods annotated `prometheus.io/scrape`, which are `ate-api-server`, `atelet`, and `atenet-router`. From the collector it keeps only the `substrate_*` counts of the count connector and the collector's own `otelcol_*` counters ([`manifests/ate-install/kind/prometheus.yaml`](../../manifests/ate-install/kind/prometheus.yaml)), so that the scraped services are not counted twice. The metrics that ateworker (including its `rpc.server.call.duration`) and atecontroller (`ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`, and the bridged controller-runtime families) push over OTLP reach the collector but do not appear in this UI. The credential provider's metrics appear in neither: its pod carries no scrape annotation and does not read `ate-otel-config`, so its OTLP push goes to the SDK default `localhost:4317` and fails.
+> **Note:** This Prometheus does not see every instrument. It scrapes the `/metrics` endpoint (`:9090`) of the pods annotated `prometheus.io/scrape`, which are `ate-api-server`, `atelet`, and `atenet-router`. From the collector it keeps only the `substrate_*` counts of the count connector and the collector's own `otelcol_*` counters ([`manifests/ate-install/kind/prometheus.yaml`](../../manifests/ate-install/kind/prometheus.yaml)), so that the scraped services are not counted twice. The metrics that ateworker (including its `rpc.server.call.duration`) and atecontroller (`ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`, and the bridged controller-runtime families) push over OTLP reach the collector but do not appear in this UI. The credential provider's metrics also reach the collector but not this UI: its pod carries no scrape annotation, and its NetworkPolicy admits no scraper.
 
 > **Roadmap Note (Actor-Level Metrics):** The control plane latency, snapshot performance, and fleet utilization instruments above are in place. What remains is actor-level correlation: telemetry that an actor emits itself carries no Substrate-injected identity yet ([#853](https://github.com/agent-substrate/substrate/issues/853), [#761](https://github.com/agent-substrate/substrate/issues/761)).
 
@@ -484,7 +509,7 @@ To visualize traces locally:
 
 Telemetry is emitted over OTLP to your configured OpenTelemetry Collector.
 
-> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, and `atenet-egress` are pointed at the in-cluster `opentelemetry-collector` in `otel-system`, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally (Prometheus exporter on `:8889`, Jaeger UI for traces, and the collector's `debug` exporter for OTLP logs). The Kubernetes credential provider is the exception: it does not read the endpoint (see the [note on the Kind Prometheus](#2-metrics)).
+> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, `atenet-egress`, and `k8s-credential-provider` are pointed at the in-cluster `opentelemetry-collector` in `otel-system`, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally (Prometheus exporter on `:8889`, Jaeger UI for traces, and the collector's `debug` exporter for OTLP logs). The Kubernetes credential provider sends only metrics, so it is not among the sources of traces and OTLP logs, and its metrics are not in the Kind Prometheus UI (see the [note on the Kind Prometheus](#2-metrics)).
 >
 > Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >

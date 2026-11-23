@@ -52,7 +52,7 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 	}
 	res = writeContentResult{logicalBytes: size, populatedBytes: populated, sparse: true}
 
-	n := min(sparsePartCount(populated), maxParts)
+	n := min(sparsePartCount(populated, len(exts)), maxParts)
 	if n < 2 {
 		// Too small to be worth splitting; the plain streaming path handles it.
 		return res, errSparseTooSmall

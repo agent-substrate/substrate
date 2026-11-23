@@ -263,7 +263,7 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream, mp.Meter(serviceName))
 	if err != nil {
 		return err
 	}
@@ -291,8 +291,10 @@ func do(ctx context.Context) error {
 	)
 	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
+	var sandboxRuntimes register.SandboxRuntimes
 	readiness := &serverboot.Readiness{}
 	readiness.AddCheck("registered", ateworkerService.epoch.Registered)
+	readiness.AddCheck("sandbox-runtimes", sandboxRuntimes.Reported)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
 	// grace period) and propagate it into the sandbox so the actor can save its
@@ -333,7 +335,7 @@ func do(ctx context.Context) error {
 		ateworkerService.crashReporter = reporter
 	}
 	go func() {
-		err := register.Report(ctx, reportConfig, &ateworkerService.epoch)
+		err := register.Report(ctx, reportConfig, &ateworkerService.epoch, &sandboxRuntimes)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -358,7 +360,7 @@ const (
 // in the sandbox, so the SIGTERM handler knows which containers to signal and
 // wait on during graceful shutdown. The sandbox runs one workload at a time.
 type workloadSession struct {
-	rcmd       *runsc
+	rcmd       containerRuntime
 	containers []string
 }
 
@@ -368,7 +370,7 @@ type AteWorkerService struct {
 
 	// Serializes lifecycle RPCs per actor.
 	locks *actorlock.Locks
-	// Tracks lifecycle RPCs for shutdown cancellation and draining.
+	// Tracks lifecycle RPCs so shutdown can wait for them.
 	inFlight *actorlock.InFlight
 	// crashReporter reports actors whose sandbox died. Nil if it could not be
 	// set up.
@@ -413,6 +415,11 @@ type AteWorkerService struct {
 	// micro-VM runtime. nil means the real read.
 	readSandboxCgroup func(dir string) (cgroupstats.Sample, error)
 
+	// terminateDead overrides terminateWorkload for a sandbox that died, when
+	// set. Only tests set it: the real teardown needs the tunnel. nil means
+	// terminateWorkload.
+	terminateDead func(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxExited bool) error
+
 	// flags holds the watched JSON flag configuration.
 	flags *flagStore
 
@@ -447,8 +454,8 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
-func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.CancelFunc) (func(), error) {
-	release := s.inFlight.Add(actorUID, name, cancel)
+func (s *AteWorkerService) beginRPC(actorUID, name string) (func(), error) {
+	release := s.inFlight.Add(actorUID, name)
 	if err := s.rejectIfDraining(); err != nil {
 		release()
 		return nil, err
@@ -465,22 +472,10 @@ func (s *AteWorkerService) rejectIfDraining() error {
 	return nil
 }
 
-// cancelStartups cancels all boots and restores, leaving checkpoints running.
-func cancelStartups(ctx context.Context, inFlight *actorlock.InFlight) {
-	for _, actorUID := range inFlight.CancelStartups() {
-		slog.InfoContext(ctx, "Cancelling in-progress workload startup RPC due to graceful shutdown",
-			slog.String("actorUID", actorUID))
-	}
-}
-
 // gracefulShutdown propagates SIGTERM into the sandbox and waits for the application's
 // containers to exit.
 func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	s.shuttingDown.Store(true)
-	// If there is an active run or restore RPC, try to cancel it. This is considered
-	// less disruptive than waiting for it to complete and then immediately sending
-	// a SIGTERM.
-	cancelStartups(ctx, s.inFlight)
 
 	// One deadline covers the whole drain. Waiting for the lock and waiting out
 	// SIGTERM below both run against it, so the two phases split a single grace
@@ -489,7 +484,9 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	// workloadGracePeriod however the time falls between them.
 	deadline := time.Now().Add(workloadGracePeriod)
 
-	// Let checkpoints finish saving state before stopping containers.
+	// Let in-flight boots, restores and checkpoints finish before stopping
+	// containers. Canceling a boot or restore would crash an actor that has
+	// not served yet.
 	waitCtx, waitCancel := context.WithDeadline(ctx, deadline)
 	defer waitCancel()
 	if !s.inFlight.WaitIdle(waitCtx) {
@@ -514,7 +511,7 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	for _, session := range sessions {
 		for _, name := range session.containers {
 			wg.Add(1)
-			go func(rcmd *runsc, containerName string) {
+			go func(rcmd containerRuntime, containerName string) {
 				defer wg.Done()
 				if err := killContainer(ctx, rcmd, containerName, deadline); err != nil {
 					slog.WarnContext(ctx, "Failed to kill container during shutdown", slog.String("container", containerName), slog.Any("err", err))
@@ -542,9 +539,7 @@ var containerKillTimeout = 5 * time.Second
 type containerRuntime interface {
 	cmdKill(ctx context.Context, containerName, signal string) error
 	cmdWait(ctx context.Context, containerName string) error
-	cmdState(ctx context.Context, containerName string) error
-	cmdDelete(ctx context.Context, containerName string) error
-	cmdList(ctx context.Context) ([]string, error)
+	cmdDelete(ctx context.Context, containerNames ...string) error
 }
 
 // killContainer stops a container by sending SIGTERM, waiting until deadline, and
@@ -670,9 +665,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +694,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
+	hosted, err := s.hostActor(ctx, attribution, req.GetExecutionUid(), req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -832,8 +825,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
-	// Not cancelable: a checkpoint is saving the actor's state.
-	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
+	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload)()
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed, and the failing step its elapsed time.
@@ -852,7 +844,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
-	// Read before the snapshot: a MEMORY checkpoint stops the sandbox, and its
+	// Read before the snapshot: a checkpoint stops the sandbox, and its
 	// cgroup with it. The final record waits for the teardown.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted != nil {
@@ -886,6 +878,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
+	var sandboxExited bool
 
 	// Cleanup the containers after checkpointing. This also unhosts the actor,
 	// before the snapshot listing below can fail.
@@ -893,7 +886,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	terminate := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers)
+		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers, sandboxExited)
 		if err != nil {
 			slog.WarnContext(cleanupCtx, "failed to terminate workload after checkpoint",
 				slog.String("actor", attribution.Ref.String()),
@@ -906,6 +899,20 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	fsPaths := slices.Concat(rootfsFSCheckpointPaths(containers), durablePaths)
+	var sandbox *sandboxProcess
+	if hosted != nil {
+		sandbox = hosted.sandbox
+	}
+	if sandbox == nil {
+		// never pinned: fall back to the pidfile, still better than
+		// cleaning up before the sandbox exits
+		var err error
+		if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
+			slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
+		} else {
+			defer sandbox.Close()
+		}
+	}
 	var checkpointFn func(context.Context) error
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
@@ -914,19 +921,23 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, durablePaths)
-			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
+				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
+			sandboxExited = waitSandboxExited(ctx, sandbox)
+			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
-			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
+				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing container filesystems: %w", err)
 			}
+			sandboxExited = waitSandboxExited(ctx, sandbox)
+			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
@@ -934,20 +945,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		// rootfs bundle and durable-dir volumes into <checkpointPath>/fs when
 		// present.
 		checkpointFn = func(ctx context.Context) error {
-			var sandbox *sandboxProcess
 			if hosted != nil {
 				hosted.stopping.Store(true)
-				sandbox = hosted.sandbox
-			}
-			if sandbox == nil {
-				// never pinned: fall back to the pidfile, still better than
-				// cleaning up before the sandbox is reaped
-				var err error
-				if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
-					slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
-				} else {
-					defer sandbox.Close()
-				}
 			}
 			err := rcmd.cmdCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
 			if err != nil {
@@ -959,12 +958,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
-			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
-			if sandbox != nil {
-				if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
-					slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
-				}
-			}
+			sandboxExited = waitSandboxExited(ctx, sandbox)
 			timing.checkpoint = lap(&tLast)
 			return nil
 		}
@@ -1024,6 +1018,18 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	return resp, nil
 }
 
+// waitSandboxExited reports whether the checkpointed sandbox has exited.
+func waitSandboxExited(ctx context.Context, sandbox *sandboxProcess) bool {
+	if sandbox == nil {
+		return false
+	}
+	if err := sandbox.waitExited(ctx, sandboxExitTimeout); err != nil {
+		slog.WarnContext(ctx, "Sandbox did not exit after checkpoint", slog.Any("err", err))
+		return false
+	}
+	return true
+}
+
 // listSnapshotFiles returns the (relative) names of regular files directly under
 // dir, dir/fs, and dir/rootfs, which atelet ships to object storage as the
 // snapshot.
@@ -1071,42 +1077,11 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 	}
 	names = append(names, ocispec.SandboxID)
 
-	// Check state of all containers to mimic containerd.
-	// Without this, `runsc delete` occasionally throws an error.
-	present := make([]string, 0, len(names))
-	for _, name := range names {
-		if err := rcmd.cmdState(ctx, name); err != nil {
-			err = fmt.Errorf("while checking state of %q container: %w", name, err)
-			gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
-			if listErr != nil {
-				return errors.Join(err, listErr)
-			}
-			if gone {
-				slog.InfoContext(ctx, "runsc container already destroyed, skipping its cleanup", slog.String("container", name))
-				continue
-			}
-			return err
-		}
-		present = append(present, name)
-	}
-
-	for _, name := range present {
-		if err := rcmd.cmdDelete(ctx, name); err != nil {
-			return fmt.Errorf("while deleting %q container: %w", name, err)
-		}
+	if err := rcmd.cmdDelete(ctx, names...); err != nil {
+		return fmt.Errorf("while deleting containers %q: %w", names, err)
 	}
 
 	return nil
-}
-
-// isContainerAlreadyGone reports whether runsc no longer has a record of the
-// container.
-func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name string) (bool, error) {
-	ids, err := rcmd.cmdList(ctx)
-	if err != nil {
-		return false, err
-	}
-	return !slices.Contains(ids, name), nil
 }
 
 func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
@@ -1129,8 +1104,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	// Per-phase timing, recorded on the way out so a failed restore still
 	// reports the phases it completed, and the failing step its elapsed time.
@@ -1148,7 +1121,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown", attrs...)
 	}()
 
-	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload)
 	if err != nil {
 		return nil, err
 	}
@@ -1179,7 +1152,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
+	hosted, err := s.hostActor(ctx, attribution, req.GetExecutionUid(), req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
 	timing.netSetup = lap(&tLast)
 	if err != nil {
 		return nil, err
@@ -1355,12 +1328,9 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 
 	attribution := workerstats.ActorAttributionFromRequest(req)
 
-	hosted := s.lookupActor(attribution.UID)
-	if hosted != nil {
-		s.readFinal(ctx, hosted)
-	}
-	err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
-	s.recordFinalIfEnded(ctx, hosted)
+	err := s.endActivation(ctx, s.lookupActor(attribution.UID), s.readFinal, func() error {
+		return s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers(), false)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
@@ -1370,7 +1340,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
+func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxExited bool) error {
 	if hosted := s.lookupActor(actorUID); hosted != nil {
 		hosted.stopping.Store(true)
 	}
@@ -1391,13 +1361,9 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	// container without its record and the actor unrecoverable.
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	// Stop the containers before deleting them, to avoid leaving a live container
-	// with no bundle on disk. Best-effort: if they are already stopped, the
-	// delete succeeds anyway.
-	stopContainers(cleanupCtx, rcmd, containers)
 	// Keep this as best-effort cleanup: atelet resets the bundle and checkpoint
 	// directories after uploading the snapshot.
-	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
+	if err := terminateContainers(cleanupCtx, rcmd, containers, sandboxExited); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 
@@ -1420,6 +1386,14 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	}
 
 	return errors.Join(errs...)
+}
+
+func terminateContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container, sandboxExited bool) error {
+	// Stop any live containers before their bundles can be removed.
+	if !sandboxExited {
+		stopContainers(ctx, rcmd, containers)
+	}
+	return cleanupContainers(ctx, rcmd, containers)
 }
 
 func deleteContainers(ctx context.Context, rcmd *runsc, containers []string, operation string) {

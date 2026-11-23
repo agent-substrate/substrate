@@ -91,8 +91,9 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapi.ActorTemp
 type FixtureOption func(*fixtureConfig)
 
 type fixtureConfig struct {
-	templateValues map[string]string
-	imageUser      string
+	templateValues        map[string]string
+	imageUser             string
+	disableGoldenSnapshot bool
 }
 
 // WithTemplateValue replaces the inline placeholder ${name} in the fixture's
@@ -112,6 +113,12 @@ func WithImageUser(user string) FixtureOption {
 	return func(c *fixtureConfig) { c.imageUser = user }
 }
 
+// WithGoldenSnapshotDisabled disables golden snapshots on the fixture's
+// ActorTemplates, so actors created from them cold-boot.
+func WithGoldenSnapshotDisabled() FixtureOption {
+	return func(c *fixtureConfig) { c.disableGoldenSnapshot = true }
+}
+
 // SubstrateFixtureManifests names the two manifest templates a substrate
 // fixture is built from (both repo-relative, under internal/e2e/fixtures).
 type SubstrateFixtureManifests struct {
@@ -126,7 +133,8 @@ type SubstrateFixtureManifests struct {
 // it ko-applies the pool manifest, creates the fixture's atespace and
 // ActorTemplates through the ate API (ko-resolving the templates' ko:// image
 // references first), and blocks until every template's golden snapshot
-// exists. name distinguishes the caller (by convention its suite name): each
+// exists (unless WithGoldenSnapshotDisabled is passed). name distinguishes the
+// caller (by convention its suite name): each
 // suite gets its own copy of the fixture, so no suite's cleanup can delete it
 // out from under another running concurrently.
 //
@@ -183,6 +191,14 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 			}
 			tmpl.SnapshotConfig.StorageLocation = location
 		}
+		if cfg.disableGoldenSnapshot {
+			if tmpl.SnapshotConfig == nil {
+				tmpl.SnapshotConfig = &ateapi.SnapshotConfig{}
+			}
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{
+				Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED,
+			}
+		}
 	}
 
 	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
@@ -220,9 +236,11 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		created = append(created, c)
 	}
 
-	for _, tmpl := range created {
-		t.Logf("Waiting for ActorTemplate %s/%s golden snapshot...", atespace, tmpl.GetMetadata().GetName())
-		WaitForSubstrateTemplateReady(ctx, t, clients, atespace, tmpl.GetMetadata().GetName())
+	if !cfg.disableGoldenSnapshot {
+		for _, tmpl := range created {
+			t.Logf("Waiting for ActorTemplate %s/%s golden snapshot...", atespace, tmpl.GetMetadata().GetName())
+			WaitForSubstrateTemplateReady(ctx, t, clients, atespace, tmpl.GetMetadata().GetName())
+		}
 	}
 	return atespace, created
 }

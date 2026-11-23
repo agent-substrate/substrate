@@ -325,8 +325,28 @@ func TestValidateTagUpdateResult(t *testing.T) {
 		}
 		return tag
 	}
+	withSnapshot := func(state ateapi.SnapshotStorageState) func(*ateapi.Tag) {
+		return func(tag *ateapi.Tag) {
+			tag.Status = &ateapi.TagStatus{
+				ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef",
+				Snapshot: &ateapi.Snapshot{
+					Uuid:       "8c1f5a2e-3b7d-4e9a-a6c0-2d4f8b1e7a35",
+					Generation: 1,
+					Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+					Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapi.SnapshotStorage{
+						State:  state,
+						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/ns1/tags/tag1"},
+					},
+				},
+			}
+		}
+	}
+	pending := withSnapshot(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
+	completed := withSnapshot(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	tests := []struct {
 		name      string
+		oldVal    *ateapi.Tag // nil means storedTag()
 		newVal    *ateapi.Tag
 		wantError field.ErrorList
 	}{
@@ -403,10 +423,80 @@ func TestValidateTagUpdateResult(t *testing.T) {
 			newVal:    storedTag(func(tag *ateapi.Tag) { tag.Metadata = nil }),
 			wantError: field.ErrorList{field.Required(tagPath.Child("metadata"), "")},
 		},
+		{
+			name: "tag.status.snapshot recorded",
+			oldVal: storedTag(func(tag *ateapi.Tag) {
+				tag.Status = &ateapi.TagStatus{ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+			}),
+			newVal: storedTag(pending),
+		},
+		{
+			name:   "tag.status.snapshot completed",
+			oldVal: storedTag(pending),
+			newVal: storedTag(completed),
+		},
+		{
+			name:   "tag.status.snapshot moved back to pending",
+			oldVal: storedTag(completed),
+			newVal: storedTag(pending),
+			wantError: field.ErrorList{
+				field.Forbidden(tagPath.Child("status", "snapshot"), ""),
+			},
+		},
+		{
+			name:   "tag.status.snapshot repointed while completing",
+			oldVal: storedTag(pending),
+			newVal: storedTag(completed, func(tag *ateapi.Tag) {
+				tag.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://bucket/elsewhere"
+			}),
+			wantError: field.ErrorList{
+				field.Forbidden(tagPath.Child("status", "snapshot"), ""),
+			},
+		},
+		{
+			name:   "tag.status.snapshot repointed",
+			oldVal: storedTag(completed),
+			newVal: storedTag(completed, func(tag *ateapi.Tag) {
+				tag.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://bucket/elsewhere"
+			}),
+			wantError: field.ErrorList{
+				field.Forbidden(tagPath.Child("status", "snapshot"), ""),
+			},
+		},
+		{
+			name:   "tag.status.snapshot cleared",
+			oldVal: storedTag(completed),
+			newVal: storedTag(completed, func(tag *ateapi.Tag) { tag.Status.Snapshot = nil }),
+			wantError: field.ErrorList{
+				field.Invalid(tagPath.Child("status", "snapshot"), nil, "").WithOrigin("update"),
+			},
+		},
+		{
+			name:   "tag.status cleared",
+			oldVal: storedTag(completed),
+			newVal: storedTag(),
+			wantError: field.ErrorList{
+				field.Invalid(tagPath.Child("status"), nil, "").WithOrigin("update"),
+			},
+		},
+		{
+			name:   "tag.status.actor_template_uid changed",
+			oldVal: storedTag(completed),
+			newVal: storedTag(completed, func(tag *ateapi.Tag) {
+				tag.Status.ActorTemplateUid = "fedcba98-7654-3210-fedc-ba9876543210"
+			}),
+			wantError: field.ErrorList{
+				field.Invalid(tagPath.Child("status", "actor_template_uid"), nil, "").WithOrigin("immutable"),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateTagUpdate(ctx, tagPath, tt.newVal, storedTag()), tt.wantError)
+			oldVal := tt.oldVal
+			if oldVal == nil {
+				oldVal = storedTag()
+			}
+			assertValidateErr(t, ValidateTagUpdate(ctx, tagPath, tt.newVal, oldVal), tt.wantError)
 		})
 	}
 }

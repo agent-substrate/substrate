@@ -1053,6 +1053,15 @@ message WorkerAssignment {
   // +k8s:customValidation # a SPIFFE ID
   // +k8s:update=NoModify
   string worker_spiffe_id = 10;
+
+  // actor_execution_uid identifies the Actor's current execution on this Worker.
+  // Each Run or Restore call starts an execution with a new UUID. The field is
+  // empty until the Actor becomes RUNNING and for executions started by an
+  // older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string actor_execution_uid = 11;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -1066,8 +1075,13 @@ message TagStatus {
   // moves between snapshots and is usable only once COMPLETED. Unset until it
   // is recorded; a tag whose creation failed first never gets one.
   //
+  // (-- Custom validation allows an update to record the snapshot once, and then
+  // only to move its durable_snapshot from PENDING to COMPLETED. --)
+  //
   // +k8s:optional
+  // +k8s:update=NoUnset
   // +k8s:subfield(durable_snapshot)=+k8s:required
+  // +k8s:customValidation
   Snapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
@@ -1075,6 +1089,7 @@ message TagStatus {
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string actor_template_uid = 2;
 }
 
@@ -1097,6 +1112,7 @@ message Tag {
   // status is set by the control plane; it is ignored on write.
   //
   // +k8s:optional
+  // +k8s:update=NoUnset
   TagStatus status = 2;
 
   // scope controls who may create an Actor from this tag.
@@ -2982,6 +2998,14 @@ message ReportActorCrashedRequest {
   // +k8s:required
   // +k8s:maxLength=4096
   string message = 4;
+
+  // execution_uid identifies the runtime that exited.
+  // Accepted for protocol compatibility; crash handling uses the Actor and
+  // Worker identities.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 5;
 }
 
 message ReportActorCrashedResponse {

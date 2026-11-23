@@ -283,7 +283,6 @@ func main() {
 	}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolLister := ateFactory.Ate().V1().WorkerPools().Lister()
 	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
@@ -300,7 +299,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
 
-	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
+	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
 	}
 	if err := controlapi.RegisterActorCrashes(otel.Meter("ateapi")); err != nil {
@@ -343,7 +342,7 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
-	controlSrv := controlapi.NewRPCService(
+	controlSrv, controlImpl := controlapi.NewRPCService(
 		persistence,
 		workerCache,
 		csiDriverConfigLister,
@@ -359,7 +358,7 @@ func main() {
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
+	templateReconciler := controlapi.NewActorTemplateReconciler(controlImpl, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's worker restarts.
@@ -379,7 +378,7 @@ func main() {
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-		ateinterceptors.ServerUnaryInterceptor,
+		ateinterceptors.NewServerUnaryInterceptor(config.GetIncludeErrorDebugInfo()),
 		authz.UnaryServerInterceptor(authorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		preview.UnaryServerInterceptor,
@@ -394,6 +393,11 @@ func main() {
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
+		}),
+		// Clients ping every minute while an RPC waits. The default
+		// MinTime of 5 minutes would close their connections during long RPCs.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime: 30 * time.Second,
 		}),
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(

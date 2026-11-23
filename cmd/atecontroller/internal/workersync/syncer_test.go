@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -1354,7 +1355,8 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 // The syncer builds its requests from pod and pool state, so a request the API
 // rejects as invalid would be resent verbatim on every retry. INVALID_ARGUMENT
 // is therefore dropped, while every other code — including the UNAVAILABLE a
-// transport failure surfaces as — requeues.
+// transport failure surfaces as — requeues. A call that hangs times out and
+// requeues too.
 func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 	ctx := context.Background()
 	ns, podName, poolName := "ns-syncer-classify", "worker-classify-1", "pool1"
@@ -1362,30 +1364,44 @@ func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 	tests := []struct {
 		name         string
 		code         codes.Code
+		hang         bool
 		wantRequeues int
 	}{
 		{name: "invalid argument is dropped", code: codes.InvalidArgument, wantRequeues: 0},
 		{name: "unavailable requeues", code: codes.Unavailable, wantRequeues: 1},
+		{name: "hung call times out and requeues", hang: true, wantRequeues: 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			api := newFakeControl()
-			api.setCreateHook(func(*ateapi.Worker) error {
-				return status.Error(tc.code, "rejected")
-			})
-			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
-			key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"))
+			synctest.Test(t, func(t *testing.T) {
+				api := newFakeControl()
+				api.setCreateHook(func(ctx context.Context, _ *ateapi.Worker) error {
+					if !tc.hang {
+						return status.Error(tc.code, "rejected")
+					}
+					select {
+					case <-ctx.Done():
+						return status.FromContextError(ctx.Err()).Err()
+					case <-time.After(time.Hour):
+						t.Error("CreateWorker was not canceled within an hour")
+						return status.Error(codes.Unavailable, "gave up")
+					}
+				})
+				s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
+				defer s.queue.ShutDown()
+				key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"))
 
-			s.queue.Add(key)
-			if !s.processNextWorkItem(ctx) {
-				t.Fatal("processNextWorkItem reported the queue was shut down")
-			}
-			if got := s.queue.NumRequeues(key); got != tc.wantRequeues {
-				t.Errorf("queue requeues = %d, want %d", got, tc.wantRequeues)
-			}
-			if got := api.names(); len(got) != 0 {
-				t.Errorf("registry holds %v, want nothing written for a rejected create", got)
-			}
+				s.queue.Add(key)
+				if !s.processNextWorkItem(ctx) {
+					t.Fatal("processNextWorkItem reported the queue was shut down")
+				}
+				if got := s.queue.NumRequeues(key); got != tc.wantRequeues {
+					t.Errorf("queue requeues = %d, want %d", got, tc.wantRequeues)
+				}
+				if got := api.names(); len(got) != 0 {
+					t.Errorf("registry holds %v, want nothing written for a rejected create", got)
+				}
+			})
 		})
 	}
 }

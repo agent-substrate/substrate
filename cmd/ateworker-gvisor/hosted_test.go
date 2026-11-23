@@ -19,12 +19,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	"google.golang.org/grpc/codes"
-	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
@@ -43,7 +45,7 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)}, 0)
+			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)}, "", 0)
 		}()
 	}
 	wg.Wait()
@@ -56,20 +58,25 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 // Re-admitting an actor that is already hosted keeps its slot, so it succeeds
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
+	const firstUID = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5"
+	const nextUID = "a6ba5a75-ad36-48fc-ad2e-e845527a25b1"
 	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
-	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0)
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, firstUID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0)
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, nextUID, 0)
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
+	}
+	if first.executionUID != firstUID || again.executionUID != nextUID {
+		t.Errorf("execution UIDs = %q, %q, want %q, %q", first.executionUID, again.executionUID, firstUID, nextUID)
 	}
 	if again == first {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, 0); apierror.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, "", 0); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {
@@ -85,69 +92,96 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 		maxActors: 1,
 		draining:  1,
 	}
-	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil, 0); err == nil {
+	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, "", nil, 0); err == nil {
 		t.Error("admitted an actor while a draining one still held the only place")
 	}
 }
 
-// TestGracefulShutdownWaitsForInFlightRPCs verifies checkpoints finish before shutdown.
-func TestGracefulShutdownWaitsForInFlightRPCs(t *testing.T) {
-	s := &AteWorkerService{
-		locks:    actorlock.New(),
-		inFlight: actorlock.NewInFlight(),
-		actors:   map[string]*hostedActor{},
-	}
-	release := s.inFlight.Add("actor-a", rpcCheckpointWorkload, nil)
+// TestGracefulShutdownStopsAnActorRestoredDuringTheWait checks that an actor
+// whose restore finishes while shutdown waits still gets SIGTERM.
+func TestGracefulShutdownStopsAnActorRestoredDuringTheWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := &AteWorkerService{
+			locks:     actorlock.New(),
+			inFlight:  actorlock.NewInFlight(),
+			actors:    map[string]*hostedActor{},
+			maxActors: 1,
+			readSandboxCgroup: func(string) (cgroupstats.Sample, error) {
+				return cgroupstats.Sample{}, fs.ErrNotExist
+			},
+		}
+		release := s.inFlight.Add("actor-a", rpcRestoreWorkload)
 
-	returned := make(chan struct{})
-	go func() {
-		defer close(returned)
-		s.gracefulShutdown(context.Background())
-	}()
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			s.gracefulShutdown(context.Background())
+		}()
+		synctest.Wait()
 
-	select {
-	case <-returned:
-		t.Fatal("gracefulShutdown returned while a checkpoint was still in flight")
-	case <-time.After(250 * time.Millisecond):
-	}
+		// The restore finishes.
+		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, "", 0); err != nil {
+			t.Fatal(err)
+		}
+		f := newFakeRunsc("app")
+		s.setSession("actor-a", &workloadSession{rcmd: f, containers: []string{"app"}})
+		release()
+		<-returned
 
-	release()
-	select {
-	case <-returned:
-	case <-time.After(30 * time.Second):
-		t.Error("gracefulShutdown did not return after the checkpoint finished")
-	}
+		assertCalls(t, f, "kill app SIGTERM", "wait app")
+	})
 }
 
-func TestGracefulShutdownCancelsEveryStartup(t *testing.T) {
-	s := &AteWorkerService{
-		locks:    actorlock.New(),
-		inFlight: actorlock.NewInFlight(),
-		actors:   map[string]*hostedActor{},
-	}
-	canceled := make(chan string, 2)
-	for _, uid := range []string{"actor-a", "actor-b"} {
-		defer s.inFlight.Add(uid, rpcRunWorkload, func() { canceled <- uid })()
-	}
-
-	cancelStartups(context.Background(), s.inFlight)
-
-	seen := map[string]bool{}
-	for range 2 {
-		select {
-		case uid := <-canceled:
-			seen[uid] = true
-		case <-time.After(5 * time.Second):
-			t.Fatalf("only %v were canceled", seen)
+// TestGracefulShutdownLetsASuspendFinish checks that shutdown never signals an
+// actor whose checkpoint is in flight.
+func TestGracefulShutdownLetsASuspendFinish(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := &AteWorkerService{
+			locks:     actorlock.New(),
+			inFlight:  actorlock.NewInFlight(),
+			actors:    map[string]*hostedActor{},
+			maxActors: 1,
+			readSandboxCgroup: func(string) (cgroupstats.Sample, error) {
+				return cgroupstats.Sample{}, fs.ErrNotExist
+			},
 		}
-	}
+		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, "", 0); err != nil {
+			t.Fatal(err)
+		}
+		f := newFakeRunsc("app")
+		s.setSession("actor-a", &workloadSession{rcmd: f, containers: []string{"app"}})
+		release := s.inFlight.Add("actor-a", rpcCheckpointWorkload)
+
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			s.gracefulShutdown(context.Background())
+		}()
+		synctest.Wait()
+
+		select {
+		case <-returned:
+			t.Fatal("gracefulShutdown returned while the checkpoint was in flight")
+		default:
+		}
+		assertCalls(t, f)
+
+		// The checkpoint finishes and unhosts the actor.
+		if err := s.unhostActor(context.Background(), "actor-a"); err != nil {
+			t.Fatal(err)
+		}
+		release()
+		<-returned
+
+		assertCalls(t, f)
+	})
 }
 
 // TestBeginRPCRegistersBeforeCheckingForADrain checks registration and drain rejection.
 func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 	s := &AteWorkerService{locks: actorlock.New(), inFlight: actorlock.NewInFlight()}
 
-	release, err := s.beginRPC("actor-a", rpcRunWorkload, func() {})
+	release, err := s.beginRPC("actor-a", rpcRunWorkload)
 	if err != nil {
 		t.Fatalf("beginRPC on a live ateworker: %v", err)
 	}
@@ -158,7 +192,7 @@ func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 
 	// Draining: refused, and nothing left behind for shutdown to wait on.
 	s.shuttingDown.Store(true)
-	if _, err := s.beginRPC("actor-b", rpcRunWorkload, func() {}); err == nil {
+	if _, err := s.beginRPC("actor-b", rpcRunWorkload); err == nil {
 		t.Error("beginRPC admitted an RPC while draining")
 	}
 	if got := s.inFlight.Names(); len(got) != 0 {
