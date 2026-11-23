@@ -310,6 +310,71 @@ def run_metadata() -> dict[str, Any]:
     return md
 
 
+# ate-setup's pinned microVM releases, relative to the substrate checkout.
+MICROVM_STEPS_GO = "cmd/ate-setup/internal/steps/microvm.go"
+
+
+def microvm_versions(substrate_dir: str = ".") -> dict[str, str]:
+    """The Kata and Cloud Hypervisor releases ate-setup installs, read from
+    the checkout the orchestrator deployed."""
+    src = (Path(substrate_dir) / MICROVM_STEPS_GO).read_text()
+    out = {}
+    for key, const in (
+        ("kata_version", "defaultKataVersion"),
+        ("cloud_hypervisor_version", "defaultCloudHypervisorVersion"),
+    ):
+        m = re.search(rf'\b{const}\s*=\s*"([^"]+)"', src)
+        if not m:
+            raise ValueError(f"{const} not found in {MICROVM_STEPS_GO}")
+        out[key] = m.group(1)
+    return out
+
+
+def worker_cpu_platforms() -> str | None:
+    """The CPU platforms of the GCE instances that run worker pods, comma
+    joined, or None when no worker node is a GCE instance. The Kubernetes API
+    has no CPU model, so this asks Compute Engine; a failed lookup is logged
+    and leaves the node out."""
+    pods = run(
+        ["kubectl", "get", "pods", "-n", "benchmark-workloads", "-l", "ate.dev/worker-pool",
+         "-o", "jsonpath={.items[*].spec.nodeName}"],
+        stdout=subprocess.PIPE, text=True,
+    ).stdout.split()
+    platforms = set()
+    for node in sorted(set(pods)):
+        provider_id = run(
+            ["kubectl", "get", "node", node, "-o", "jsonpath={.spec.providerID}"],
+            stdout=subprocess.PIPE, text=True,
+        ).stdout.strip()
+        # gce://<project>/<zone>/<instance>
+        m = re.fullmatch(r"gce://([^/]+)/([^/]+)/([^/]+)", provider_id)
+        if not m:
+            continue
+        project, zone, instance = m.groups()
+        r = run_no_check(
+            ["gcloud", "compute", "instances", "describe", instance, "--zone", zone,
+             "--project", project, "--format", "value(cpuPlatform)"],
+            stdout=subprocess.PIPE, text=True,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            print(f"Warning: no CPU platform for node {node}", flush=True)
+            continue
+        platforms.add(r.stdout.strip())
+    return ",".join(sorted(platforms)) or None
+
+
+def dataplane_metadata(test: dict[str, Any]) -> dict[str, Any]:
+    """Facts about the worker nodes and the sandbox, read after the deploy,
+    for the runner's --metadata."""
+    md: dict[str, Any] = {}
+    if test.get("sandboxClass") == "microvm":
+        md.update(microvm_versions())
+    platforms = worker_cpu_platforms()
+    if platforms:
+        md["cpu_platform"] = platforms
+    return md
+
+
 def split_metadata_flag(test: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
     """Separates a test's own --metadata from the rest of its flags.
 
@@ -628,10 +693,12 @@ def run_test(
     # flag; the test's keys win over the run's.
     if test_type(test) == "locust":
         flags, own = split_metadata_flag(test)
-        flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+        flags += ["--metadata", json.dumps({**run_metadata(), **dataplane_metadata(test), **own})]
         # The whole entry, so runner features (such as observers or evaluations)
         # read what they need without adding a new flag per field.
         flags += ["--test-entry", json.dumps(test)]
+        for template in test.get("workloadTemplates", []):
+            flags += ["--golden-template", template]
     manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)

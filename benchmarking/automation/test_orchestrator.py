@@ -853,16 +853,18 @@ class RunMetadataTest(unittest.TestCase):
                  self.assertRaisesRegex(ValueError, "BENCHMARK_METADATA"):
                 orchestrator.run_metadata()
 
-    def submitted_args(self, ttype, flags=("--x",)):
+    def submitted_args(self, ttype, flags=("--x",), **fields):
         """The extra args run_test hands to render_template for a test type."""
 
         class Rendered(Exception):
             pass
 
         fake = mock.Mock(job_tmpl=mock.Mock(return_value="t"), job_subs=mock.Mock(return_value={}))
-        test = {"name": "n", "type": ttype, "duration": "1m", "flags": list(flags)}
+        test = {"name": "n", "type": ttype, "duration": "1m", "flags": list(flags), **fields}
         with mock.patch.dict(orchestrator.TYPES, {ttype: fake}), \
              mock.patch.dict(os.environ, CLUSTER_ENV, clear=True), \
+             mock.patch.object(orchestrator, "dataplane_metadata",
+                               return_value={"cpu_platform": "Intel Sapphire Rapids"}), \
              mock.patch.object(orchestrator, "render_template", side_effect=Rendered) as render, \
              self.assertRaises(Rendered):
             orchestrator.run_test(test, "img", "dest", "abcdef0123", 1700000000)
@@ -872,6 +874,11 @@ class RunMetadataTest(unittest.TestCase):
         args = self.submitted_args("locust")
         self.assertEqual(args[:2], ["--x", "--metadata"])
         self.assertEqual(json.loads(args[2])["cluster_name"], "c")
+
+    def test_locust_job_gets_dataplane_metadata_and_golden_templates(self):
+        args = self.submitted_args("locust", workloadTemplates=["glutton-node"])
+        self.assertEqual(json.loads(args[2])["cpu_platform"], "Intel Sapphire Rapids")
+        self.assertEqual(args[-2:], ["--golden-template", "glutton-node"])
 
     def test_other_types_do_not(self):
         self.assertEqual(self.submitted_args("nighthawk-ingress"), ["--x"])
@@ -905,17 +912,8 @@ class RunMetadataTest(unittest.TestCase):
             orchestrator.validate_and_normalize_tests([test])
 
     def test_locust_job_gets_the_whole_test_entry(self):
-        class Rendered(Exception):
-            pass
-
-        fake = mock.Mock(job_tmpl=mock.Mock(return_value="t"), job_subs=mock.Mock(return_value={}))
+        args = self.submitted_args("locust", observers=[{"name": "pprof"}])
         test = {"name": "n", "type": "locust", "duration": "1m", "flags": ["--x"], "observers": [{"name": "pprof"}]}
-        with mock.patch.dict(orchestrator.TYPES, {"locust": fake}), \
-             mock.patch.dict(os.environ, CLUSTER_ENV, clear=True), \
-             mock.patch.object(orchestrator, "render_template", side_effect=Rendered) as render, \
-             self.assertRaises(Rendered):
-            orchestrator.run_test(test, "img", "dest", "abcdef0123", 1700000000)
-        args = render.call_args.args[2]
         self.assertEqual(json.loads(args[args.index("--test-entry") + 1]), test)
 
     def test_every_job_gets_the_invocation_run_ts(self):
@@ -946,6 +944,32 @@ class RunMetadataTest(unittest.TestCase):
         text = orchestrator.render_template(RunnerSizingTest.TMPL, subs, ["--metadata", md])
         job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
         self.assertEqual(job["spec"]["template"]["spec"]["containers"][0]["args"][-1], md)
+
+
+class DataplaneMetadataTest(unittest.TestCase):
+    def test_microvm_versions_reads_the_checkout(self):
+        root = Path(__file__).resolve().parents[2]
+        versions = orchestrator.microvm_versions(str(root))
+        self.assertRegex(versions["kata_version"], r"^\d+\.\d+")
+        self.assertRegex(versions["cloud_hypervisor_version"], r"^v\d+")
+
+    @mock.patch("orchestrator.run_no_check")
+    @mock.patch("orchestrator.run")
+    def test_worker_cpu_platforms(self, run, run_no_check):
+        out = lambda s: subprocess.CompletedProcess([], 0, stdout=s)
+        run.side_effect = [
+            out("node-a node-b node-a"),
+            out("gce://p/us-central1-a/node-a"),
+            out("kind://docker/kind/node-b"),
+        ]
+        run_no_check.return_value = out("Intel Sapphire Rapids\n")
+        self.assertEqual(orchestrator.worker_cpu_platforms(), "Intel Sapphire Rapids")
+        self.assertEqual(run_no_check.call_count, 1)
+        self.assertIn("node-a", run_no_check.call_args.args[0])
+
+    @mock.patch("orchestrator.worker_cpu_platforms", return_value=None)
+    def test_gvisor_has_no_microvm_versions(self, _):
+        self.assertEqual(orchestrator.dataplane_metadata({"sandboxClass": "gvisor"}), {})
 
 
 if __name__ == "__main__":
