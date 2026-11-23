@@ -87,8 +87,7 @@ const (
 	dataMount     = "/data"
 	durableVolume = "data"
 
-	writtenByProbe = "written by probe"
-	neverWritten   = dataMount + "/never-written"
+	neverWritten = dataMount + "/never-written"
 
 	// Durable markers written inside /data by the victim and attacker actors
 	// in the same atespace.
@@ -205,9 +204,9 @@ func TestActorIsolation(t *testing.T) {
 		victimTmpfsMarker,
 	} {
 		writeFile(t, ctx, rc, victimActor, path)
-		if got := readFile(t, ctx, rc, victimActor, path); got.Content != writtenByProbe {
+		if got := readFile(t, ctx, rc, victimActor, path); got.Content != markerContent(victimActor) {
 			t.Fatalf("control: victim %s reading its OWN %s = %q (error %q), want %q — the probe cannot see its own written state, so nothing below is meaningful",
-				victimActor, path, got.Content, got.Error, writtenByProbe)
+				victimActor, path, got.Content, got.Error, markerContent(victimActor))
 		}
 	}
 	victimWhoami := whoami(t, ctx, rc, victimActor)
@@ -250,9 +249,9 @@ func TestActorIsolation(t *testing.T) {
 		attackerTmpfsMarker,
 	} {
 		writeFile(t, ctx, rc, attackerActor, path)
-		if got := readFile(t, ctx, rc, attackerActor, path); got.Content != writtenByProbe {
+		if got := readFile(t, ctx, rc, attackerActor, path); got.Content != markerContent(attackerActor) {
 			t.Fatalf("control: attacker %s reading its OWN %s = %q (error %q), want %q",
-				attackerActor, path, got.Content, got.Error, writtenByProbe)
+				attackerActor, path, got.Content, got.Error, markerContent(attackerActor))
 		}
 	}
 
@@ -324,6 +323,13 @@ func TestActorIsolation(t *testing.T) {
 			}
 		}
 
+		// The file descriptor part of the claim. The probe holds
+		// /run/ate/actor-id open from startup, and the attacker restored that
+		// open descriptor from the golden snapshot onto the worker the victim
+		// just left. The baseline /whoami above already requires it to read
+		// the attacker's identity; this repeats the read so the subtest fails
+		// on its own if the descriptor, or the projected files, still resolve
+		// to the victim's.
 		gotWhoami := whoami(t, ctx, rc, attackerActor)
 		if gotWhoami.Held == victim || gotWhoami.File == victim || gotWhoami.UID == victimUID {
 			t.Errorf("attacker %s /whoami = %+v, carries previous actor %s (uid %s) state across worker reuse",
@@ -393,6 +399,12 @@ func testProjectedIdentityNotInSnapshot(t *testing.T, ctx context.Context, clien
 	// The tag needs a durable snapshot to capture.
 	suspendDurably(t, ctx, clients, atespace, sourceName)
 
+	// Clear a clone leaked by an interrupted run before its tag: the clone was
+	// created from the tag, so it goes first.
+	cloneRef := &ateapi.ObjectRef{Atespace: atespace, Name: cloneName}
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: cloneRef})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: cloneRef})
+
 	tagRef := &ateapi.ObjectRef{Atespace: atespace, Name: "actor-snapshot-tag"}
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
@@ -412,9 +424,6 @@ func testProjectedIdentityNotInSnapshot(t *testing.T, ctx context.Context, clien
 		t.Fatalf("tag %s/%s has no snapshot uri", atespace, tagRef.GetName())
 	}
 
-	cloneRef := &ateapi.ObjectRef{Atespace: atespace, Name: cloneName}
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: cloneRef})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: cloneRef})
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
 		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: cloneRef})
@@ -435,9 +444,10 @@ func testProjectedIdentityNotInSnapshot(t *testing.T, ctx context.Context, clien
 	// Positive control: the clone carries the snapshot source's durable data,
 	// proving it actually restored from the source actor's checkpoint.
 	cloneActor := resources.ActorRef{Atespace: atespace, Name: cloneName}
-	if got := readFile(t, ctx, rc, cloneActor, attackerDurableMarker); got.Content != writtenByProbe {
+	sourceContent := markerContent(resources.ActorRef{Atespace: atespace, Name: sourceName})
+	if got := readFile(t, ctx, rc, cloneActor, attackerDurableMarker); got.Content != sourceContent {
 		t.Fatalf("control: clone %s restored from tag %s reads %s = %q (error %q), want %q — the clone did not restore the source snapshot",
-			cloneActor, tagRef.GetName(), attackerDurableMarker, got.Content, got.Error, writtenByProbe)
+			cloneActor, tagRef.GetName(), attackerDurableMarker, got.Content, got.Error, sourceContent)
 	}
 
 	cloneUID := actorUID(t, ctx, clients, atespace, cloneName)
@@ -525,9 +535,7 @@ func testDeletedActorSnapshotsRemoved(t *testing.T, ctx context.Context, clients
 	// exact same name starts with a new UID and cannot recover the deleted
 	// actor's durable or ephemeral markers. Free the single shared worker first.
 	for _, active := range []string{attacker, cloneName} {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
-			Actor: &ateapi.ObjectRef{Atespace: atespace, Name: active},
-		})
+		suspendIfActive(t, ctx, clients, atespace, active)
 	}
 	createAndResumeActor(t, ctx, clients, atespace, victim)
 	requireReusedWorker(t, ctx, clients, atespace, victim, victimWorker)
@@ -681,7 +689,38 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	t.Fatalf("timed out waiting for actor %s/%s to reach state %v", atespace, name, want)
 }
 
-// writeFile writes the probe's fixed body at path and fails the test if the
+// suspendIfActive frees the worker actor name holds, if it holds one. An actor
+// that does not exist (a subtest filtered out by -run never created it) or is
+// already SUSPENDED is left alone. Any other actor is suspended and awaited,
+// so a failed suspend fails here instead of surfacing later as a misleading
+// capacity timeout on the next resume.
+func suspendIfActive(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) {
+	t.Helper()
+	ref := &ateapi.ObjectRef{Atespace: atespace, Name: name}
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
+	if status.Code(err) == codes.NotFound {
+		return
+	}
+	if err != nil {
+		t.Fatalf("GetActor %s/%s: %v", atespace, name, err)
+	}
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		return
+	}
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("SuspendActor %s/%s (state %v): %v", atespace, name, actor.GetStatus().GetState(), err)
+	}
+	waitForActorState(t, ctx, clients, atespace, name, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+}
+
+// markerContent is the body writeFile gives every file actor writes. It names
+// the writer, so a read that returns another actor's file under the reader's
+// own path does not pass for the reader's own.
+func markerContent(actor resources.ActorRef) string {
+	return "written by " + actor.String()
+}
+
+// writeFile writes markerContent(actor) at path and fails the test if the
 // write did not land, so a later negative assertion cannot pass on missing
 // state.
 func writeFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, path string) {
@@ -695,20 +734,20 @@ func writeFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor re
 // to be refused; it returns the probe's report instead of failing.
 func writeFileAllowingFailure(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, path string) fileResponse {
 	t.Helper()
-	return probeFileOp(t, ctx, rc, actor, "/writefile", path)
+	return probeFileOp(t, ctx, rc, actor, "/writefile", url.Values{"path": {path}, "content": {markerContent(actor)}})
 }
 
 func readFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, path string) fileResponse {
 	t.Helper()
-	return probeFileOp(t, ctx, rc, actor, "/readfile", path)
+	return probeFileOp(t, ctx, rc, actor, "/readfile", url.Values{"path": {path}})
 }
 
 // probeFileOp calls one of the probe's file endpoints. A transport or HTTP
 // failure is fatal rather than returned: the probe never ran the operation,
 // which is not the same as the actor being denied.
-func probeFileOp(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, endpoint, path string) fileResponse {
+func probeFileOp(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, endpoint string, query url.Values) fileResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, actor, endpoint+"?path="+url.QueryEscape(path))
+	resp, err := rc.Get(ctx, actor, endpoint+"?"+query.Encode())
 	if err != nil {
 		t.Fatalf("GET %s for %s: %v", endpoint, actor, err)
 	}

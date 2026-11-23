@@ -111,7 +111,7 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapi.DeleteAtesp
 	return s.impl.DeleteAtespace(ctx, req.Atespace.Name, toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Atespace, error) {
+func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string, precondition store.Precondition) (*ateapi.Atespace, error) {
 	deleted, err := s.store.DeleteAtespace(ctx, name, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

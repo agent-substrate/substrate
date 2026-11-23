@@ -21,6 +21,10 @@ option go_package = "go.ate.dev/substrate/pkg/proto/ateconfigpb";
 // The unified configuration object for ate-api-server.
 message APIConfig {
   APILogging logging = 1;
+
+  // When true, ate-api-server attaches the full server-side error as a
+  // google.rpc.DebugInfo detail on gRPC error responses. Defaults to false.
+  bool include_error_debug_info = 2;
 }
 
 message APILogging {

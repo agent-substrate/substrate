@@ -31,6 +31,7 @@ kind: ServiceAccount
 metadata:
   name: atenet-egress
   namespace: ate-system
+automountServiceAccountToken: false
 #
 # No RBAC is bound to this ServiceAccount on purpose: the ext_proc sidecar runs
 # with --mode=egress, which serves the egress ext_proc handler and nothing else
@@ -77,6 +78,14 @@ data:
           socket_address: { address: "::", ipv4_compat: true, port_value: 443 }
         # Limit single I/O read to 64 Kb to prevent overly active actors from starving other actors.
         per_connection_buffer_limit_bytes: 65535
+        # TCP_NOTSENT_LOWAT on the sockets from atunnel, as on the forward
+        # proxy clusters below.
+        socket_options:
+        - description: TCP_NOTSENT_LOWAT
+          level: 6   # IPPROTO_TCP
+          name: 25   # TCP_NOTSENT_LOWAT
+          int_value: 16384
+          state: STATE_PREBIND
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
@@ -1030,6 +1039,17 @@ data:
       - name: egress_forward_proxy
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT: accept writes only while fewer than 16 KiB wait
+        # unsent, so data for a slow destination stays upstream instead of in
+        # the kernel. SO_SNDBUF and SO_RCVBUF stay unset: a fixed size turns
+        # off autotuning and caps a connection at about the size per round trip.
+        upstream_bind_config:
+          socket_options:
+          - description: TCP_NOTSENT_LOWAT
+            level: 6   # IPPROTO_TCP
+            name: 25   # TCP_NOTSENT_LOWAT
+            int_value: 16384
+            state: STATE_PREBIND
         # Fits 1000 destinations x 32 worker threads x 2 requests at once per
         # destination per thread = 64000 connections.
         circuit_breakers:
@@ -1077,6 +1097,14 @@ data:
       - name: egress_forward_proxy_grpc
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - description: TCP_NOTSENT_LOWAT
+            level: 6   # IPPROTO_TCP
+            name: 25   # TCP_NOTSENT_LOWAT
+            int_value: 16384
+            state: STATE_PREBIND
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
@@ -1111,6 +1139,14 @@ data:
       - name: egress_forward_proxy_cleartext
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - description: TCP_NOTSENT_LOWAT
+            level: 6   # IPPROTO_TCP
+            name: 25   # TCP_NOTSENT_LOWAT
+            int_value: 16384
+            state: STATE_PREBIND
         # Sized like egress_forward_proxy, for the same reason.
         circuit_breakers:
           thresholds:
@@ -1146,6 +1182,14 @@ data:
       - name: egress_forward_proxy_passthrough
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # TCP_NOTSENT_LOWAT, as on egress_forward_proxy.
+        upstream_bind_config:
+          socket_options:
+          - description: TCP_NOTSENT_LOWAT
+            level: 6   # IPPROTO_TCP
+            name: 25   # TCP_NOTSENT_LOWAT
+            int_value: 16384
+            state: STATE_PREBIND
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
@@ -1211,6 +1255,7 @@ spec:
         app: atenet-egress
     spec:
       serviceAccountName: atenet-egress
+      automountServiceAccountToken: false
       # sdsmint and envoy containers must share a UID: sdsmint creates the SDS socket mode
       # 0600, and Envoy has to be able to open it. The stock Envoy image runs as
       # UID 101 and ko's distroless base as 65532, so left alone they would not

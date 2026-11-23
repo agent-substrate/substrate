@@ -86,7 +86,8 @@ func AteletOTLPSocketPath() string {
 
 // WorkersDir is the parent of every per-worker directory, so listing it is how
 // a scraper with no prior knowledge discovers the node's workers. atelet
-// creates WorkerPath(podUID) once it writes the pod's sandbox runtimes file and
+// creates WorkerPath(podUID) when it first stages the pod's default sandbox
+// runtime under it, before it writes the pod's sandbox runtimes file, and
 // removes it when the pod is deleted; the worker also MkdirAlls it at boot. A
 // directory may exist before its worker listens on its socket.
 func WorkersDir() string {

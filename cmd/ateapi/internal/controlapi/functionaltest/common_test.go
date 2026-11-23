@@ -84,6 +84,7 @@ var (
 
 type testContext struct {
 	service         *controlapi.RPCService
+	impl            *controlapi.ServiceImpl
 	client          ateapi.ControlClient
 	noOptInClient   ateapi.ControlClient // never sends preview.Header
 	k8sClient       kubernetes.Interface
@@ -220,7 +221,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 
 	objectStore := objectstoretest.New()
 
-	service := controlapi.NewRPCService(
+	service, impl := controlapi.NewRPCService(
 		persistence,
 		wc,
 		csiDriverConfigLister,
@@ -312,6 +313,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 
 	return &testContext{
 		service:         service,
+		impl:            impl,
 		client:          client,
 		noOptInClient:   ateapi.NewControlClient(noOptInConn),
 		k8sClient:       k8sClient,

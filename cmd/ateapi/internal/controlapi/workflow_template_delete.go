@@ -30,7 +30,7 @@ import (
 // DeleteActorTemplate executes the workflow to delete an ActorTemplate. The
 // golden actor and tag go first and the row last, so a failed attempt leaves
 // the row for a retry to rediscover them by.
-func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error) {
+func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition) (*ateapi.ActorTemplate, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	// Serializes against the reconciler, which creates the golden actor and
 	// tag under the same lease.
@@ -59,7 +59,7 @@ func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef res
 // ensureTemplateMarkedForDeletion sets the template's delete_time, checking
 // precondition, and returns the stored copy. Skips when a previous attempt
 // already marked the template.
-func (w *ActorWorkflow) ensureTemplateMarkedForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (_ *ateapi.ActorTemplate, err error) {
+func (w *ActorWorkflow) ensureTemplateMarkedForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition) (_ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "MarkTemplateForDeletion")
 	defer func() { err = done(err) }()
 
@@ -97,7 +97,7 @@ func (w *ActorWorkflow) ensureGoldenActorDeleted(ctx context.Context, goldenRef 
 	ctx, done := stepSpan(ctx, "DeleteGoldenActor")
 	defer func() { err = done(err) }()
 
-	if _, err := w.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
+	if _, err := w.DeleteActor(ctx, goldenRef, store.Precondition{}); err != nil {
 		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden actor already deleted")
 			return nil
@@ -113,7 +113,7 @@ func (w *ActorWorkflow) ensureGoldenTagDeleted(ctx context.Context, goldenTagRef
 	ctx, done := stepSpan(ctx, "DeleteGoldenTag")
 	defer func() { err = done(err) }()
 
-	if _, err := w.DeleteTag(ctx, goldenTagRef, store.DeletePreconditions{}); err != nil {
+	if _, err := w.DeleteTag(ctx, goldenTagRef, store.Precondition{}); err != nil {
 		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden tag already deleted")
 			return nil
@@ -130,7 +130,7 @@ func (w *ActorWorkflow) finalizeTemplateDeleted(ctx context.Context, tmpl *ateap
 	defer func() { err = done(err) }()
 
 	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
-	precondition := store.DeletePreconditions{UID: tmpl.GetMetadata().GetUid()}
+	precondition := store.Precondition{UID: tmpl.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteActorTemplate(ctx, templateRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

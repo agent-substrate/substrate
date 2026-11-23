@@ -350,7 +350,8 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1.Wo
 // applyWorkerServiceAccount creates the default ServiceAccount worker pods run
 // as. The pools in a namespace share it, so none of them owns it.
 func (r *WorkerPoolReconciler) applyWorkerServiceAccount(ctx context.Context, namespace string) error {
-	saAC := corev1ac.ServiceAccount(installdefaults.WorkerServiceAccount, namespace)
+	saAC := corev1ac.ServiceAccount(installdefaults.WorkerServiceAccount, namespace).
+		WithAutomountServiceAccountToken(false)
 	if err := r.Apply(ctx, saAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply worker ServiceAccount: %w", err)
 	}

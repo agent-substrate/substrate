@@ -37,10 +37,13 @@ const (
 
 // The unified configuration object for ate-api-server.
 type APIConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Logging       *APILogging            `protobuf:"bytes,1,opt,name=logging,proto3" json:"logging,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Logging *APILogging            `protobuf:"bytes,1,opt,name=logging,proto3" json:"logging,omitempty"`
+	// When true, ate-api-server attaches the full server-side error as a
+	// google.rpc.DebugInfo detail on gRPC error responses. Defaults to false.
+	IncludeErrorDebugInfo bool `protobuf:"varint,2,opt,name=include_error_debug_info,json=includeErrorDebugInfo,proto3" json:"include_error_debug_info,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *APIConfig) Reset() {
@@ -78,6 +81,13 @@ func (x *APIConfig) GetLogging() *APILogging {
 		return x.Logging
 	}
 	return nil
+}
+
+func (x *APIConfig) GetIncludeErrorDebugInfo() bool {
+	if x != nil {
+		return x.IncludeErrorDebugInfo
+	}
+	return false
 }
 
 type APILogging struct {
@@ -129,9 +139,10 @@ var File_pkg_proto_ateconfigpb_apiconfig_proto protoreflect.FileDescriptor
 
 const file_pkg_proto_ateconfigpb_apiconfig_proto_rawDesc = "" +
 	"\n" +
-	"%pkg/proto/ateconfigpb/apiconfig.proto\x12\vateconfigpb\">\n" +
+	"%pkg/proto/ateconfigpb/apiconfig.proto\x12\vateconfigpb\"w\n" +
 	"\tAPIConfig\x121\n" +
-	"\alogging\x18\x01 \x01(\v2\x17.ateconfigpb.APILoggingR\alogging\"\"\n" +
+	"\alogging\x18\x01 \x01(\v2\x17.ateconfigpb.APILoggingR\alogging\x127\n" +
+	"\x18include_error_debug_info\x18\x02 \x01(\bR\x15includeErrorDebugInfo\"\"\n" +
 	"\n" +
 	"APILogging\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\tR\x05levelB,Z*go.ate.dev/substrate/pkg/proto/ateconfigpbb\x06proto3"

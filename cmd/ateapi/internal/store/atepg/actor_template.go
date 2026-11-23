@@ -69,28 +69,18 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 	return out, nil
 }
 
-func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi.ActorTemplate) error {
-	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
-	if err := precondition.Validate(); err != nil {
+	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
-	return p.updateActorTemplate(ctx, templateRef, store.DeletePreconditions(precondition), mutate, false)
+	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, false)
 }
 
-func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
@@ -113,19 +103,13 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
 		return nil, err
 	}
-	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapi.ActorTemplate)
+	oldMeta := proto.CloneOf(dbTemplate.Metadata)
 	if mutate != nil {
 		if err := mutate(dbTemplate); err != nil {
 			return nil, err
 		}
 	}
-	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
-		return nil, err
-	}
-	if dbTemplate.Metadata == nil {
-		dbTemplate.Metadata = &ateapi.ResourceMetadata{}
-	}
-	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
+	dbTemplate.Metadata = setUpdateMetadata(oldMeta)
 	if markForDeletion && dbTemplate.Metadata.DeleteTime == nil {
 		dbTemplate.Metadata.DeleteTime = proto.CloneOf(dbTemplate.Metadata.UpdateTime)
 	}
@@ -221,7 +205,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	return store.ListResponse[*ateapi.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition) (*ateapi.ActorTemplate, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_templates AS t

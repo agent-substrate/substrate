@@ -96,7 +96,7 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
 	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, newNodeAteletDialer(t, &capturingTerminator{}))
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err == nil {
 		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 	}
 
@@ -123,7 +123,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, tc.start)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err != nil {
 				t.Fatalf("DeleteWorker() failed: %v", err)
 			}
 
@@ -249,7 +249,7 @@ func TestDeleteWorkerWorkflow_LeftoverAssignmentFails(t *testing.T) {
 				t.Fatalf("GetActor() failed: %v", err)
 			}
 
-			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); apierror.Code(err) != codes.Internal {
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); apierror.Code(err) != codes.Internal {
 				t.Fatalf("DeleteWorker() = %v (err %v), want Internal", apierror.Code(err), err)
 			}
 			if _, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
@@ -305,7 +305,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
 			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, newNodeAteletDialer(t, &capturingTerminator{}))
-			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{})
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 			}
@@ -320,7 +320,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			if worker.GetMetadata().GetDeleteTime() == nil {
 				t.Errorf("a failed delete left delete_time unset")
 			}
-			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err == nil {
 				t.Fatal("retried DeleteWorker() = nil error, want the release failure reported")
 			}
 			retried, err := persistence.GetWorker(ctx, apiWorkerName)
@@ -348,7 +348,7 @@ func TestDeleteWorkerWorkflow_AbsentReportsNotFoundThroughStepWrap(t *testing.T)
 	ctx := context.Background()
 	wf, _ := newWorkerDeleteWorkflow(t)
 
-	_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	_, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{})
 	if got := apierror.Code(err); got != codes.NotFound {
 		t.Fatalf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.NotFound)
 	}
@@ -387,7 +387,7 @@ func TestDeleteWorkerWorkflow_DrainedWorkerIsStillAdmitted(t *testing.T) {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
-	deleted, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	deleted, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{})
 	if err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, tt.state, seeds...)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err != nil {
 				t.Fatalf("DeleteWorker() failed: %v", err)
 			}
 
@@ -499,7 +499,7 @@ func TestDeleteWorkerWorkflow_ReleasesUnderTheActorLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireLease() failed: %v", err)
 	}
-	_, err = wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	_, err = wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{})
 	if got := atelet.requests(); len(got) != 0 {
 		t.Errorf("atelet received %d Terminate calls while the actor's lease was held, want none", len(got))
 	}
@@ -518,7 +518,7 @@ func TestDeleteWorkerWorkflow_ReleasesUnderTheActorLease(t *testing.T) {
 	}
 
 	lease.Close()
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{}); err != nil {
 		t.Fatalf("DeleteWorker() once the lease is free failed: %v", err)
 	}
 	if got := atelet.requests(); len(got) != 1 {
@@ -561,7 +561,7 @@ func TestDeleteWorkerWorkflow_BusyActorDoesNotHoldUpOthers(t *testing.T) {
 		t.Fatalf("AcquireLease() failed: %v", err)
 	}
 	defer lease.Close()
-	_, err = wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
+	_, err = wf.DeleteWorker(ctx, apiWorkerName, store.Precondition{})
 	if got := apierror.Code(err); got != codes.Aborted {
 		t.Errorf("DeleteWorker() with one actor's lease held = %v, want ABORTED", err)
 	}
@@ -630,7 +630,7 @@ func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
 			// into it, and the release after it fails.
 			rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+			if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.Precondition{}); err != nil {
 				t.Fatalf("DeleteWorker(first) failed: %v", err)
 			}
 			if got := len(atelet.requests()); got != 1 {
@@ -641,7 +641,7 @@ func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
 			// skips Terminate without waiting out another timeout.
 			seedAPIWorker(t, ctx, persistence, validWorker(apiOtherWorkerName))
 			refs = append(refs, bindRunningActor(apiOtherWorkerName, "actor-3"))
-			if _, err := wf.DeleteWorker(rpcCtx, apiOtherWorkerName, store.DeletePreconditions{}); err != nil {
+			if _, err := wf.DeleteWorker(rpcCtx, apiOtherWorkerName, store.Precondition{}); err != nil {
 				t.Fatalf("DeleteWorker(second) failed: %v", err)
 			}
 			if got := len(atelet.requests()); got != 1 {
@@ -666,7 +666,7 @@ func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
 			atelet.mu.Unlock()
 			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 			bindRunningActor(apiWorkerName, "actor-4")
-			if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+			if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.Precondition{}); err != nil {
 				t.Fatalf("DeleteWorker(after timeout) failed: %v", err)
 			}
 			if got := len(atelet.requests()); got != 2 {

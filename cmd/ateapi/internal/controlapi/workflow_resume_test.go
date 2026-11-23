@@ -165,7 +165,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1, "")
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -181,16 +181,20 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 // worker process, is stamped with that process's epoch and the IPs it
 // registered, so the reconciler keeps it and traffic reaches it.
 func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
+	const executionUID = "89a2bbd3-87a5-4f5a-a5f5-825c60ec41c9"
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2, executionUID)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
 	assignment := got.GetStatus().GetWorkerAssignment()
+	if assignment.GetActorExecutionUid() != executionUID {
+		t.Errorf("actor_execution_uid = %q, want %q", assignment.GetActorExecutionUid(), executionUID)
+	}
 	if assignment.GetWorkerEpoch() != 2 {
 		t.Errorf("worker_epoch = %d, want 2", assignment.GetWorkerEpoch())
 	}
@@ -220,13 +224,13 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 			persistence := newTestPersistence(t)
 			seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 			if tc.deleteWorker {
-				if _, err := persistence.DeleteWorker(ctx, testWorkerUID("pod-1"), store.DeletePreconditions{}); err != nil {
+				if _, err := persistence.DeleteWorker(ctx, testWorkerUID("pod-1"), store.Precondition{}); err != nil {
 					t.Fatalf("DeleteWorker: %v", err)
 				}
 			}
 			w := &ActorWorkflow{store: persistence}
 
-			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported)
+			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported, "")
 			if got := apierror.Code(err); got != tc.want {
 				t.Fatalf("finalizeRunning() = %v (err %v), want %v", got, err, tc.want)
 			}
@@ -258,7 +262,7 @@ func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
 	})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, ref, 1)
+	got, err := w.finalizeRunning(ctx, ref, 1, "")
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -1926,7 +1930,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
 			var tele restoreTelemetry
 			if err == nil {
-				tele, _, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
+				tele, _, _, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
@@ -2538,6 +2542,65 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 	want := ateattr.SchedulerOutcomeError + "/" + codes.DeadlineExceeded.String()
 	if outcomes[0] != want {
 		t.Errorf("recorded outcome %q, want %q", outcomes[0], want)
+	}
+}
+
+// TestEnsureWorkerAssigned_CapacityOutcome checks the record of an attempt
+// that finds no room. An actor larger than every worker records error. A pinned
+// actor records nothing, because detachFromFullNode records it.
+func TestEnsureWorkerAssigned_CapacityOutcome(t *testing.T) {
+	tests := []struct {
+		name         string
+		assignedNode string
+		schedErr     error
+		wantCode     codes.Code
+		wantOutcomes []string
+	}{
+		{
+			name:         "full workers",
+			schedErr:     scheduling.ErrNoCapacity,
+			wantCode:     codes.ResourceExhausted,
+			wantOutcomes: []string{ateattr.SchedulerOutcomeNoCapacity},
+		},
+		{
+			name:         "larger than every worker",
+			schedErr:     scheduling.ErrDoesNotFit,
+			wantCode:     codes.FailedPrecondition,
+			wantOutcomes: []string{ateattr.SchedulerOutcomeError + "/" + codes.FailedPrecondition.String()},
+		},
+		{
+			name:         "pinned, full workers on the node",
+			assignedNode: "node-1",
+			schedErr:     scheduling.ErrNoCapacity,
+			wantCode:     codes.ResourceExhausted,
+			// No outcomes for pinned actors
+		},
+		{
+			name:         "pinned, larger than every worker on the node",
+			assignedNode: "node-1",
+			schedErr:     scheduling.ErrDoesNotFit,
+			wantCode:     codes.ResourceExhausted,
+			// No outcomes for pinned actors
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sched := &filledUpScheduler{
+				workers: []*ateapi.Worker{contendedWorker("free-pod")},
+				err:     tt.schedErr,
+			}
+			w, actor, reader := newContendedWorkflow(t, sched)
+			actor.Status.AssignedNode = tt.assignedNode
+
+			_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("ensureWorkerAssigned() = %v, want code %v", err, tt.wantCode)
+			}
+			_, outcomes := assignmentObservations(t, reader)
+			if diff := cmp.Diff(tt.wantOutcomes, outcomes); diff != "" {
+				t.Errorf("recorded outcomes (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

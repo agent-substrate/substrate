@@ -19,6 +19,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
-func toDeletePreconditions(opts *ateapi.DeleteOptions) store.DeletePreconditions {
-	return store.DeletePreconditions{UID: opts.GetUid(), Version: opts.GetVersion()}
+func toDeletePreconditions(opts *ateapi.DeleteOptions) store.Precondition {
+	return store.Precondition{UID: opts.GetUid(), Version: opts.GetVersion()}
 }

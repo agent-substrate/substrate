@@ -293,10 +293,19 @@ func stat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// writefile writes a file at path inside the actor. The body is the content
+// query parameter when the request carries one, so a test can give each actor
+// content of its own and tell whose file a later read returned; without it the
+// body is the fixed string "written by probe".
 func writefile(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
+	query := r.URL.Query()
+	path := query.Get("path")
+	content := "written by probe"
+	if query.Has("content") {
+		content = query.Get("content")
+	}
 	resp := map[string]string{"path": path}
-	if err := os.WriteFile(path, []byte("written by probe"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		resp["error"] = err.Error()
 	} else {
 		resp["ok"] = "true"

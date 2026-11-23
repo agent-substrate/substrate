@@ -19,11 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -56,10 +58,20 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	constraints := schedulingConstraints(actor, actorTemplate)
 	constraints.RequiredNodes = nil
 	constraints.RequiredRuntime = hardware.Requirement{}
-	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
-		if errors.Is(err, scheduling.ErrNoCapacity) {
-			return nil, assignErr
+	start := time.Now()
+	_, err = w.scheduler.Schedule(ctx, constraints)
+	switch {
+	case errors.Is(err, scheduling.ErrDoesNotFit):
+		err = apierror.FailedPrecondition("%w", errActorDoesNotFit)
+	case errors.Is(err, scheduling.ErrNoCapacity):
+		err = assignErr
+	}
+	if err != nil {
+		outcome := ateattr.SchedulerOutcomeError
+		if errors.Is(err, errNoWorkerRoom) {
+			outcome = ateattr.SchedulerOutcomeNoCapacity
 		}
+		w.instruments.recordSchedulerAssignment(ctx, time.Since(start), outcome, "", "", snapshotSandboxClass(actor), err)
 		return nil, err
 	}
 

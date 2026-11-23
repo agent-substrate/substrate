@@ -62,7 +62,7 @@ func TestUpdateTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 	var recreated *ateapi.Tag
 	_, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapi.Tag) error {
 		mutations++
-		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.DeletePreconditions{}); err != nil {
+		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.Precondition{}); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
 		}
 		recreated = createTestTag(t, s, "team-a", "tag-a")
@@ -97,4 +97,18 @@ func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	if !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)
 	}
+}
+
+func TestUpdateTag_DiscardsMetadataEdits(t *testing.T) {
+	ref := resources.TagRef{Atespace: "team-a", Name: "tag-a"}
+	testUpdateDiscardsMetadataEdits(t,
+		func(t *testing.T, s *Persistence) *ateapi.Tag {
+			return createTestTag(t, s, ref.Atespace, ref.Name)
+		},
+		func(ctx context.Context, s *Persistence, pc store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+			return s.UpdateTag(ctx, ref, pc, mutate)
+		},
+		func(ctx context.Context, s *Persistence) (*ateapi.Tag, error) {
+			return s.GetTag(ctx, ref)
+		})
 }

@@ -492,13 +492,6 @@ func main() {
 			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
 			o.LabelSelector = workerPoolLabel
 		}))
-	// Link each local worker's default runtime under the worker's directory
-	// as the syncer plans the worker, so it stays cached while no actor runs
-	// it.
-	// Best-effort: on failure the on-demand fetch in ensureSandboxAssets
-	// still covers correctness.
-	prewarmer := newRuntimePrewarmer(runtimes, wmService)
-	go prewarmer.run(ctx)
 	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: k8sClient.EventsV1()})
 	if err := eventBroadcaster.StartRecordingToSinkWithContext(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to start the event broadcaster", err)
@@ -507,13 +500,15 @@ func main() {
 
 	// Keep a sandbox runtimes file in each local worker's directory: the
 	// runtimes of the enabled versions of its pool's SandboxConfig,
-	// rewritten when the config changes.
+	// rewritten when the config changes, with the default runtime's assets
+	// linked under the directory so they stay cached while no actor runs
+	// them.
 	_, err = startWorkerSandboxSyncer(ctx,
 		workerPodFactory.Core().V1().Pods(),
 		ateFactory.Ate().V1().WorkerPools(),
 		ateFactory.Ate().V1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir(), runtimes, prewarmer,
+		nodepath.WorkersDir(), runtimes,
 		eventBroadcaster.NewRecorder(newEventScheme(), "atelet"))
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
@@ -933,6 +928,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
 	workerResp, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
+		ExecutionUid:          req.GetExecutionUid(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1876,6 +1872,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
 	workerResp, err := client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
+		ExecutionUid:          req.GetExecutionUid(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),

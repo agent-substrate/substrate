@@ -502,7 +502,13 @@ type RunWorkloadRequest struct {
 	// +k8s:optional
 	Resources *ResourceRequirements `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:required
-	ActorDirs     *ActorDirs `protobuf:"bytes,12,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	ActorDirs *ActorDirs `protobuf:"bytes,12,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	// The API server-assigned identity of this Run call, bound to its runtime.
+	// Empty when called by an older API server.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,13,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -612,6 +618,13 @@ func (x *RunWorkloadRequest) GetActorDirs() *ActorDirs {
 		return x.ActorDirs
 	}
 	return nil
+}
+
+func (x *RunWorkloadRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
+	}
+	return ""
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1599,8 +1612,14 @@ type RestoreWorkloadRequest struct {
 	//
 	// +k8s:optional
 	PreserveRestoreDir bool `protobuf:"varint,14,opt,name=preserve_restore_dir,json=preserveRestoreDir,proto3" json:"preserve_restore_dir,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The API server-assigned identity of this Restore call, bound to its runtime.
+	// Empty when called by an older API server.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,15,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestoreWorkloadRequest) Reset() {
@@ -1722,6 +1741,13 @@ func (x *RestoreWorkloadRequest) GetPreserveRestoreDir() bool {
 		return x.PreserveRestoreDir
 	}
 	return false
+}
+
+func (x *RestoreWorkloadRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
+	}
+	return ""
 }
 
 type RestoreWorkloadResponse struct {
@@ -1847,7 +1873,8 @@ type WorkloadStatsSample struct {
 	// Measurements. All four are zero when source is STATS_SOURCE_UNSPECIFIED,
 	// which means "not measured" rather than "measured as zero".
 	//
-	// memory_current_bytes and memory_working_set_bytes are absolute.
+	// memory_current_bytes and memory_working_set_bytes are absolute. They are
+	// zero and not measured when memory_unmeasured is set.
 	MemoryCurrentBytes uint64 `protobuf:"varint,8,opt,name=memory_current_bytes,json=memoryCurrentBytes,proto3" json:"memory_current_bytes,omitempty"`
 	// High-water mark of memory_current_bytes, as the source reports it: the
 	// cgroup source restarts it on a restore, the guest-agent source brings the
@@ -1869,8 +1896,13 @@ type WorkloadStatsSample struct {
 	// The activation this sample belongs to, as the unix-nano time it began. A
 	// Run or Restore starts one.
 	EpochUnixNano int64 `protobuf:"varint,13,opt,name=epoch_unix_nano,json=epochUnixNano,proto3" json:"epoch_unix_nano,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Set when memory_current_bytes and memory_working_set_bytes were not
+	// measured although source is set: the reading is of a gVisor sandbox with no
+	// process left, as after it died. Its cgroup keeps the CPU counter and the
+	// memory peak, but the memory went with the processes.
+	MemoryUnmeasured bool `protobuf:"varint,14,opt,name=memory_unmeasured,json=memoryUnmeasured,proto3" json:"memory_unmeasured,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *WorkloadStatsSample) Reset() {
@@ -1992,6 +2024,13 @@ func (x *WorkloadStatsSample) GetEpochUnixNano() int64 {
 		return x.EpochUnixNano
 	}
 	return 0
+}
+
+func (x *WorkloadStatsSample) GetMemoryUnmeasured() bool {
+	if x != nil {
+		return x.MemoryUnmeasured
+	}
+	return false
 }
 
 type GetWorkloadStatsResponse struct {
@@ -2153,7 +2192,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x123\n" +
 	"\n" +
 	"actor_dirs\x18\b \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"\x1b\n" +
-	"\x19TerminateWorkloadResponse\"\x99\x05\n" +
+	"\x19TerminateWorkloadResponse\"\xbe\x05\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2169,7 +2208,8 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
-	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x1aD\n" +
+	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x12#\n" +
+	"\rexecution_uid\x18\r \x01(\tR\fexecutionUid\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
@@ -2231,7 +2271,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"actor_dirs\x18\t \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x8c\x06\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xb1\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2249,7 +2289,8 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\tresources\x18\v \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
 	"actor_dirs\x18\r \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x120\n" +
-	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x1aD\n" +
+	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x12#\n" +
+	"\rexecution_uid\x18\x0f \x01(\tR\fexecutionUid\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
@@ -2257,7 +2298,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x17RestoreWorkloadResponse\x12!\n" +
 	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
-	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xc2\x04\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xef\x04\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2273,7 +2314,8 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	" \x01(\x04R\x15memoryWorkingSetBytes\x12$\n" +
 	"\x0ecpu_usage_usec\x18\v \x01(\x04R\fcpuUsageUsec\x121\n" +
 	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\x12&\n" +
-	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\"R\n" +
+	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\x12+\n" +
+	"\x11memory_unmeasured\x18\x0e \x01(\bR\x10memoryUnmeasured\"R\n" +
 	"\x18GetWorkloadStatsResponse\x126\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1e.ateworker.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"Z\n" +

@@ -19,7 +19,6 @@ set -o errexit -o nounset -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE_MANIFEST="${SCRIPT_DIR}/namespace.yaml"
 SERVER_MANIFEST="${SCRIPT_DIR}/nighthawk-server.yaml"
-INVOKER_MANIFEST="${SCRIPT_DIR}/traffic-driver-invoker.yaml"
 WAIT_TIMEOUT_SECS=120
 CONTEXT="${KUBECTL_CONTEXT:-}"
 
@@ -27,8 +26,8 @@ usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy                Deploy nighthawk-server and traffic-driver-invoker in nighthawk (default)"
-  echo "  --delete                Delete nighthawk-server and traffic-driver-invoker from nighthawk"
+  echo "  --deploy                Deploy nighthawk-server in nighthawk (default)"
+  echo "  --delete                Delete nighthawk-server from nighthawk"
   echo "  --context CONTEXT       kubectl context to use (default: \$KUBECTL_CONTEXT or current context)"
   echo "  --wait-timeout SECONDS  Rollout wait timeout in seconds (default: ${WAIT_TIMEOUT_SECS})"
   echo "  -h, --help              Show this help message"
@@ -85,13 +84,9 @@ if [[ "${action}" == "deploy" ]]; then
   "${kubectl_cmd[@]}" apply -f "${NAMESPACE_MANIFEST}"
   echo "Deploying Nighthawk server from ${SERVER_MANIFEST}..."
   "${kubectl_cmd[@]}" apply -f "${SERVER_MANIFEST}"
-  echo "Deploying traffic-driver-invoker from ${INVOKER_MANIFEST}..."
-  "${kubectl_cmd[@]}" apply -f "${INVOKER_MANIFEST}"
   echo "Waiting for deployment/nighthawk-server in nighthawk to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   "${kubectl_cmd[@]}" -n nighthawk rollout status deployment/nighthawk-server --timeout="${WAIT_TIMEOUT_SECS}s"
-  echo "Waiting for deployment/traffic-driver-invoker in nighthawk to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  "${kubectl_cmd[@]}" -n nighthawk rollout status deployment/traffic-driver-invoker --timeout="${WAIT_TIMEOUT_SECS}s"
 elif [[ "${action}" == "delete" ]]; then
-  echo "Deleting Nighthawk server and traffic-driver-invoker..."
-  "${kubectl_cmd[@]}" delete --ignore-not-found -f "${INVOKER_MANIFEST}" -f "${SERVER_MANIFEST}"
+  echo "Deleting Nighthawk server..."
+  "${kubectl_cmd[@]}" delete --ignore-not-found -f "${SERVER_MANIFEST}"
 fi
