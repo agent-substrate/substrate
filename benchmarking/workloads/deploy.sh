@@ -35,6 +35,7 @@ SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # matching locust tests) are not deployed by default. The glutton-storage
 # template is added when a StorageClass is set, because it needs a CSI driver
 # that not every cluster has; ate-env is added when ATE_ENV_IMAGE is set.
+# glutton-node is deployed only when WORKLOAD_TEMPLATES names it.
 read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
 # template_manifest prints the manifest path for ActorTemplate NAME.
@@ -70,6 +71,10 @@ STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
 # The image for the ate-env benchmark ActorTemplate. Empty means the
 # template is not deployed.
 ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-}"
+# The image for the glutton-node ActorTemplate. Empty means build_glutton_node
+# builds benchmarking/workloads/glutton-node and pushes it to KO_DOCKER_REPO
+# when the template is deployed.
+GLUTTON_NODE_IMAGE="${GLUTTON_NODE_IMAGE:-}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -187,6 +192,8 @@ substitute() {
       -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
+      -e "s|\${GLUTTON_NODE_IMAGE}|${GLUTTON_NODE_IMAGE}|g" \
+      -e "s|\${ACTOR_MEMORY_MIB}|${ACTOR_MEMORY_MIB:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
       "${manifest}"
 }
@@ -274,6 +281,25 @@ tune_fake_atelet() {
   done
 }
 
+# build_glutton_node builds the glutton-node image for the cluster's node
+# architecture, pushes it to KO_DOCKER_REPO tagged by the hash of its
+# sources, and sets GLUTTON_NODE_IMAGE to the pushed digest.
+build_glutton_node() {
+  local dir="benchmarking/workloads/glutton-node"
+  if [[ -z "${KO_DOCKER_REPO:-}" ]]; then
+    echo "Error: the glutton-node template needs KO_DOCKER_REPO or GLUTTON_NODE_IMAGE" >&2
+    exit 1
+  fi
+  local arch tag image
+  arch="$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')"
+  tag="$(cat "${dir}/Dockerfile" "${dir}/server.js" | git hash-object --stdin | cut -c1-12)"
+  image="${KO_DOCKER_REPO}/glutton-node:${tag}"
+  echo "Building ${image} for linux/${arch}..."
+  docker build --platform "linux/${arch}" -t "${image}" "${dir}"
+  docker push "${image}"
+  GLUTTON_NODE_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}")"
+}
+
 deploy() {
   # Check every requested template has a manifest before anything on the
   # cluster is deleted or created.
@@ -300,6 +326,10 @@ deploy() {
   fi
   ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
   ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
+  ACTOR_MEMORY_MIB=$((ACTOR_MEMORY_BYTES >> 20))
+  if [[ -z "${GLUTTON_NODE_IMAGE}" && " ${TEMPLATES[*]} " == *" glutton-node "* ]]; then
+    build_glutton_node
+  fi
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
