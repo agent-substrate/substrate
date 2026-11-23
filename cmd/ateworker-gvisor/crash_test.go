@@ -219,6 +219,16 @@ func TestCrashMessage(t *testing.T) {
 	}
 }
 
+// A memory kill keeps its established wording without appended output:
+// clients distinguish it by those words.
+func TestCrashMessageMemoryKillKeepsWording(t *testing.T) {
+	outputs := newOutputTails()
+	outputs.record("app", []byte("cannot allocate memory\n"))
+	if got, want := crashMessageFor(true, outputs), "killed for exceeding its memory limit"; got != want {
+		t.Errorf("crashMessageFor(memoryKilled=true) = %q, want %q", got, want)
+	}
+}
+
 // The crash message carries the last line each container wrote, so a
 // container's stated reason reaches the client.
 func TestAppendLastOutput(t *testing.T) {
@@ -240,12 +250,6 @@ func TestAppendLastOutput(t *testing.T) {
 			want:    `gVisor sandbox exited: container "app" last wrote: stigmer runner: missing from PATH: git`,
 		},
 		{
-			name:    "the memory limit keeps its own wording",
-			message: "killed for exceeding its memory limit",
-			writes:  map[string]string{"app": "cannot allocate memory\n"},
-			want:    `killed for exceeding its memory limit: container "app" last wrote: cannot allocate memory`,
-		},
-		{
 			name:    "every container, in name order",
 			message: "gVisor sandbox exited",
 			writes:  map[string]string{"sidecar": "proxy stopped\n", "app": "refusing\n"},
@@ -260,5 +264,6 @@ func TestAppendLastOutput(t *testing.T) {
 			if got := appendLastOutput(tc.message, outputs); got != tc.want {
 				t.Errorf("appendLastOutput() = %q, want %q", got, tc.want)
 			}
-		})	}
+		})
+	}
 }

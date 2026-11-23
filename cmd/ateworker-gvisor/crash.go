@@ -42,11 +42,20 @@ var _ crashReporter = (*register.CrashReporter)(nil)
 // otherwise reaches only this worker's log, so the message carries the last
 // line each container wrote.
 func crashMessage(hosted *hostedActor) string {
-	message := "gVisor sandbox exited"
-	if hosted.memory.Killed() {
-		message = "killed for exceeding its memory limit"
+	return crashMessageFor(hosted.memory.Killed(), hosted.outputs)
+}
+
+// crashMessageFor builds the crash message; split out so the memory-kill
+// wording stays testable without a live guard.
+func crashMessageFor(memoryKilled bool, outputs *outputTails) string {
+	if memoryKilled {
+		// Keep this wording verbatim and without appended output: clients
+		// tell a memory kill apart by these words until
+		// CRASH_REASON_MEMORY_LIMIT (#3775) lands, and on a memory kill the
+		// container's last line is not the reason.
+		return "killed for exceeding its memory limit"
 	}
-	return appendLastOutput(message, hosted.outputs)
+	return appendLastOutput("gVisor sandbox exited", outputs)
 }
 
 // appendLastOutput appends the last line each container wrote to a crash
