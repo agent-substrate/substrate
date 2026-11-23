@@ -764,6 +764,13 @@ Activates a suspended actor by restoring it onto a physical worker.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
 *   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`, or if at least one worker is eligible and the actor is larger than each of them, even when empty. Unavailable workers count, so a short outage gives `RESOURCE_EXHAUSTED`. A new worker counts once it first registers. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
+The API server assigns a new UUID to each Run or Restore call and stores it in
+`status.worker_assignment.actor_execution_uid` when the Actor becomes RUNNING.
+Workers bind that UUID to the runtime they start. Executions started by an older
+API server can have an empty UID. Crash reports accept the execution UID field
+for protocol compatibility. Crash handling uses the Actor and Worker identities
+and will check the Actor execution UID in a future release.
+
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`

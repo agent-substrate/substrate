@@ -928,6 +928,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
 	workerResp, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
+		ExecutionUid:          req.GetExecutionUid(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1871,6 +1872,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
 	workerResp, err := client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
+		ExecutionUid:          req.GetExecutionUid(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),

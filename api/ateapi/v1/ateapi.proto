@@ -1053,6 +1053,15 @@ message WorkerAssignment {
   // +k8s:customValidation # a SPIFFE ID
   // +k8s:update=NoModify
   string worker_spiffe_id = 10;
+
+  // actor_execution_uid identifies the Actor's current execution on this Worker.
+  // Each Run or Restore call starts an execution with a new UUID. The field is
+  // empty until the Actor becomes RUNNING and for executions started by an
+  // older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string actor_execution_uid = 11;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -2989,6 +2998,14 @@ message ReportActorCrashedRequest {
   // +k8s:required
   // +k8s:maxLength=4096
   string message = 4;
+
+  // execution_uid identifies the runtime that exited.
+  // Accepted for protocol compatibility; crash handling uses the Actor and
+  // Worker identities.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 5;
 }
 
 message ReportActorCrashedResponse {
