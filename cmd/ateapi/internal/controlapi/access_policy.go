@@ -57,7 +57,7 @@ func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapi.Access
 	policy, err := s.store.GetGlobalAccessPolicy(ctx)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Global AccessPolicy not found")
+			return nil, apierror.NotFound("Global AccessPolicy not found").WithCause(err)
 		}
 		return nil, fmt.Errorf("while getting Global access policy: %w", err)
 	}
@@ -115,7 +115,7 @@ func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) 
 	policy, err := s.store.GetAtespaceAccessPolicy(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("AccessPolicy for atespace %s not found", name)
+			return nil, apierror.NotFound("AccessPolicy for atespace %s not found", name).WithCause(err)
 		}
 		return nil, fmt.Errorf("while getting Atespace access policy: %w", err)
 	}
@@ -173,17 +173,17 @@ func mapAccessPolicyWrite(policy *ateapi.AccessPolicy, err error) (*ateapi.Acces
 	case err == nil:
 		return policy, nil
 	case errors.Is(err, store.ErrNotFound):
-		return nil, apierror.NotFound("AccessPolicy not found")
+		return nil, apierror.NotFound("AccessPolicy not found").WithCause(err)
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, apierror.AlreadyExists("AccessPolicy already exists")
+		return nil, apierror.AlreadyExists("AccessPolicy already exists").WithCause(err)
 	case errors.Is(err, store.ErrVersionConflict):
-		return nil, apierror.Aborted("AccessPolicy version conflict")
+		return nil, apierror.Aborted("AccessPolicy version conflict").WithCause(err)
 	case errors.Is(err, store.ErrUIDConflict):
-		return nil, apierror.Aborted("AccessPolicy UID conflict")
+		return nil, apierror.Aborted("AccessPolicy UID conflict").WithCause(err)
 	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required")
+		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required").WithCause(err)
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, apierror.FailedPrecondition("parent Atespace does not exist")
+		return nil, apierror.FailedPrecondition("parent Atespace does not exist").WithCause(err)
 	default:
 		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
 	}

@@ -77,13 +77,13 @@ func (w *ActorWorkflow) ensureTemplateMarkedForDeletion(ctx context.Context, tem
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
+			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
+			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while marking actor template %s for deletion: %w", templateRef, err)
 	}
@@ -134,13 +134,13 @@ func (w *ActorWorkflow) finalizeTemplateDeleted(ctx context.Context, tmpl *ateap
 	deleted, err := w.store.DeleteActorTemplate(ctx, templateRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
+			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef).WithCause(err)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
+			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, fmt.Errorf("while deleting actor template from DB: %w", err)
 	}

@@ -140,7 +140,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -224,7 +224,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes)
 	if updateErr != nil {
 		if errors.Is(updateErr, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(updateErr)
 		}
 		return nil, fmt.Errorf("while updating actor after volume creation: %w", updateErr)
 	}
@@ -341,7 +341,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	workerName := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
 	worker, err := w.store.GetWorker(ctx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
+		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef).WithCause(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get already assigned worker for actor %w", err)
@@ -437,11 +437,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		// Scheduling failures for pinned actors will be retried, so we
 		// return ResourceExhausted in that case.
 		if errors.Is(err, scheduling.ErrDoesNotFit) && len(constraints.RequiredNodes) == 0 {
-			return nil, nil, apierror.FailedPrecondition("%w", errActorDoesNotFit)
+			return nil, nil, apierror.FailedPrecondition("%w", errActorDoesNotFit).WithCause(err)
 		}
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			outcome = ateattr.SchedulerOutcomeNoCapacity
-			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom).WithCause(err)
 		}
 		return nil, nil, err
 	}
@@ -501,7 +501,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		// errWorkerFilledUp leaves the cache alone: it reports no room for
 		// this actor's size, or an overhead the cache hasn't seen yet, so
@@ -879,7 +879,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	workerName := latestActor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
 	worker, err := w.store.GetWorker(ctx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
+		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef).WithCause(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting worker %s: %w", workerName, err)
@@ -909,7 +909,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, err
 	}

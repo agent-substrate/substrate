@@ -52,7 +52,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapi.CreateTagRequest
 	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)
+			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*at
 	tagRef := resources.TagRefFromObjectRef(req.GetTag())
 	tag, err := s.impl.GetTag(ctx, tagRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Tag %s not found", tagRef)
+		return nil, apierror.NotFound("Tag %s not found", tagRef).WithCause(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
@@ -151,19 +151,19 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 	})
 	if err != nil {
 		if errors.Is(err, errTagPending) {
-			return nil, apierror.FailedPrecondition("Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
+			return nil, apierror.FailedPrecondition("Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name).WithCause(err)
 		}
 		if errors.Is(err, errTagDeleting) {
-			return nil, apierror.FailedPrecondition("Tag %s/%s is being deleted", tagRef.Atespace, tagRef.Name)
+			return nil, apierror.FailedPrecondition("Tag %s/%s is being deleted", tagRef.Atespace, tagRef.Name).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid())
+			return nil, apierror.Aborted("Tag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid()).WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
+			return nil, apierror.NotFound("Tag %s/%s not found", tagRef.Atespace, tagRef.Name).WithCause(err)
 		}
 		if errors.Is(err, store.ErrPreconditionRequired) {
 			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)

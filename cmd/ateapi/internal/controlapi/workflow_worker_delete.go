@@ -115,13 +115,13 @@ func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name strin
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 		}
 		return nil, fmt.Errorf("while marking worker for deletion: %w", err)
 	}
@@ -284,7 +284,7 @@ func releaseWriteError(name string, err error) error {
 	case err == nil, errors.Is(err, store.ErrNotFound):
 		return nil
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return apierror.Aborted("concurrent update conflict, please retry")
+		return apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 	default:
 		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
 	}
@@ -374,15 +374,15 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapi.Wor
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			return nil, apierror.NotFound("Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID).WithCause(err)
 		case errors.Is(err, store.ErrVersionConflict):
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		case errors.Is(err, store.ErrFailedPrecondition):
 			// The sweep released every Actor that names this Worker, so a
 			// leftover assignment means the store is inconsistent.
-			return nil, apierror.Internal("Worker %s still holds assignments after its Actors were released", name)
+			return nil, apierror.Internal("Worker %s still holds assignments after its Actors were released", name).WithCause(err)
 		}
 		return nil, fmt.Errorf("while deleting worker from DB: %w", err)
 	}

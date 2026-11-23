@@ -39,10 +39,10 @@ func toStoreListOptions(opts *ateapi.ListOptions) store.ListOptions {
 
 func mapListError(err error) error {
 	if errors.Is(err, store.ErrInvalidPageToken) {
-		return apierror.InvalidArgument("invalid page_token")
+		return apierror.InvalidArgument("invalid page_token").WithCause(err)
 	}
 	if errors.Is(err, store.ErrInvalidPageSize) {
-		return apierror.InvalidArgument("invalid page_size")
+		return apierror.InvalidArgument("invalid page_size").WithCause(err)
 	}
 	return err
 }

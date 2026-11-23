@@ -51,7 +51,7 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("actor not found")
+		return nil, apierror.NotFound("actor not found").WithCause(err)
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}

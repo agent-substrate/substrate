@@ -167,13 +167,13 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID)
+			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Tag %s not found", tagRef)
+			return nil, apierror.NotFound("Tag %s not found", tagRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while marking tag %s for deletion: %w", tagRef, err)
 	}
@@ -219,13 +219,13 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapi.Tag)
 	tag, err = w.store.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Tag %s not found", tagRef)
+			return nil, apierror.NotFound("Tag %s not found", tagRef).WithCause(err)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID)
+			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}
@@ -358,7 +358,7 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, fmt.Errorf("while recording the upload of Actor %s's latest snapshot: %w", actorRef, err)
 	}
@@ -434,9 +434,9 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	case err == nil:
 		return stored, nil
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace)
+		return nil, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace).WithCause(err)
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef)
+		return nil, apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef).WithCause(err)
 	}
 	return nil, fmt.Errorf("while reserving tag %s: %w", tagRef, err)
 }
@@ -474,10 +474,10 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, resources.SnapshotURI{}, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, resources.SnapshotURI{}, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
-			return nil, resources.SnapshotURI{}, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
+			return nil, resources.SnapshotURI{}, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef).WithCause(err)
 		}
 		return nil, resources.SnapshotURI{}, fmt.Errorf("while recording the snapshot of tag %s: %w", tagRef, err)
 	}
@@ -532,10 +532,10 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
+			return nil, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while finalizing tag %s: %w", tagRef, err)
 	}
