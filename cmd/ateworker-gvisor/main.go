@@ -731,7 +731,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			// mounted, mirroring the post-checkpoint cleanup — otherwise they
 			// linger in this namespace until atelet wipes the bundle dirs.
 			// Run before the network cleanup.
-			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
+			if err := imagecache.UnmountBundlesUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
@@ -1207,7 +1207,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore")
 			// Same overlay detach as the Run-failure path above.
-			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
+			if err := imagecache.UnmountBundlesUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
@@ -1411,7 +1411,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	// (deleting a bundle out from under a live mount in this namespace would
 	// leave the mount orphaned until the pod restarts). Best-effort, same as
 	// the container cleanup above.
-	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
+	if err := imagecache.UnmountBundlesUnder(actorDirs.GetOciBundleDir()); err != nil {
 		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 	}
 

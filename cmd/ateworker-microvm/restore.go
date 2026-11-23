@@ -585,7 +585,7 @@ func (s *AteWorkerService) cleanupFailedRestoreRootfs(ctx context.Context, actor
 	if err := os.RemoveAll(rootfsUpperDir(actorDirs)); err != nil {
 		slog.WarnContext(ctx, "Failed to remove rootfs upper dir after Restore failure", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
-	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
+	if err := imagecache.UnmountBundlesUnder(actorDirs.GetOciBundleDir()); err != nil {
 		slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 }

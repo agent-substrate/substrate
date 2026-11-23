@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
@@ -335,144 +334,270 @@ func setOpaque(root *os.Root, rel string) error {
 	return nil
 }
 
+// maxUnmountPasses bounds how many rounds of detaches UnmountAllUnder and
+// UnmountBundlesUnder make. Each walk after the first finds mounts that an
+// earlier detach uncovered, such as a lower mount stacked under the one statx
+// reported.
+const maxUnmountPasses = 8
+
 // UnmountAllUnder lazily detaches every mount at or below dir in the calling
-// process's mount namespace. It is the teardown counterpart of
-// SetupBundleRootfs, keyed by directory rather than by container name so a
-// single call cleans up all of an actor's bundle mounts. Missing mounts are
-// not an error.
+// process's mount namespace. Missing mounts are not an error.
+//
+// dir must be an absolute path. UnmountAllUnder walks dir again after each
+// round of detaches. It returns an error if mounts remain after
+// maxUnmountPasses rounds or if any entry could not be checked, so callers
+// must not remove dir when it returns an error.
 func UnmountAllUnder(dir string) error {
-	points, err := mountPointsUnderStatx(dir)
-	if err != nil {
-		return err
+	return unmountAllUnder(dir, hostMountSys(), mountPointsUnder)
+}
+
+// UnmountBundlesUnder lazily detaches the mounts SetupBundleRootfs makes in
+// each bundle under dir, an OCI bundle dir that holds one bundle per container
+// (actorDirs.GetOciBundleDir()). It is the teardown counterpart of
+// SetupBundleRootfs, keyed by directory rather than by container name so a
+// single call cleans up all of an actor's bundle mounts. It checks only
+// <dir>/<container>/rootfs and <dir>/<container>/volumes/<name>, so use
+// UnmountAllUnder for dirs that may hold other mounts. It returns errors as
+// UnmountAllUnder does.
+func UnmountBundlesUnder(dir string) error {
+	return unmountAllUnder(dir, hostMountSys(), bundleMountPoints)
+}
+
+// mountSys holds the syscalls unmountAllUnder makes, so tests can fake them.
+type mountSys struct {
+	// statx stats path relative to dirfd, as statxAt does.
+	statx func(dirfd int, path string) (unix.Statx_t, error)
+	// unmount detaches target, as unix.Unmount does.
+	unmount func(target string, flags int) error
+}
+
+// hostMountSys returns the mountSys that makes the real syscalls.
+func hostMountSys() mountSys {
+	return mountSys{statx: statxAt, unmount: unix.Unmount}
+}
+
+// mountPoint is a path found by mountPointsUnder or bundleMountPoints.
+type mountPoint struct {
+	path string
+	// statErr is set when statx failed on path. path may be a mount whose
+	// root cannot be stat'ed, such as a FUSE mount whose server is gone.
+	statErr error
+}
+
+// unmountAllUnder detaches the mounts under dir that find lists, deepest
+// first, until find lists none.
+func unmountAllUnder(dir string, sys mountSys, find func(dir string, sys mountSys) ([]mountPoint, error)) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("refusing to unmount under %q: not an absolute path", dir)
 	}
-	// Deepest first, so nested mounts unmount before their parents.
-	sort.Slice(points, func(i, j int) bool { return len(points[i]) > len(points[j]) })
-	var errs []error
-	for _, p := range points {
-		if err := unix.Unmount(p, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("while unmounting %q: %w", p, err))
+	dir = filepath.Clean(dir)
+	for pass := 0; ; pass++ {
+		points, err := find(dir, sys)
+		if len(points) == 0 {
+			return err
+		}
+		if pass == maxUnmountPasses {
+			errs := []error{err}
+			paths := make([]string, len(points))
+			for i, p := range points {
+				paths[i] = p.path
+				if p.statErr != nil {
+					errs = append(errs, fmt.Errorf("while checking %q: %w", p.path, p.statErr))
+				}
+			}
+			errs = append(errs, fmt.Errorf("mounts remain under %q after %d passes: %q", dir, maxUnmountPasses, paths))
+			return errors.Join(errs...)
+		}
+		errs := []error{err}
+		progress := false
+		// Deepest first, so nested mounts unmount before their parents.
+		sort.Slice(points, func(i, j int) bool { return len(points[i].path) > len(points[j].path) })
+		for _, p := range points {
+			uerr := sys.unmount(p.path, unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW)
+			notMounted := errors.Is(uerr, unix.EINVAL) || errors.Is(uerr, os.ErrNotExist)
+			switch {
+			case uerr == nil:
+				progress = true
+			case p.statErr != nil && notMounted:
+				errs = append(errs, fmt.Errorf("while checking %q: %w", p.path, p.statErr))
+			case p.statErr != nil:
+				errs = append(errs, fmt.Errorf("while checking %q: %w", p.path, p.statErr),
+					fmt.Errorf("while unmounting %q: %w", p.path, uerr))
+			case notMounted:
+				// Detached by someone else since the walk, or a mount that
+				// cannot be detached. The next walk tells which.
+				progress = true
+			default:
+				errs = append(errs, fmt.Errorf("while unmounting %q: %w", p.path, uerr))
+			}
+		}
+		if !progress {
+			return errors.Join(errs...)
 		}
 	}
-	return errors.Join(errs...)
 }
 
 // statxAt queries file type and mount-root attribute metadata for path relative
-// to dirfd without following symlinks or forcing a remote filesystem sync.
+// to dirfd without following symlinks, triggering automounts or forcing a
+// remote filesystem sync.
+//
+// STATX_ATTR_MOUNT_ROOT needs Linux 5.8. mountOverlay already needs 6.7 or
+// 6.6.23.
 func statxAt(dirfd int, path string) (unix.Statx_t, error) {
 	var sx unix.Statx_t
-	err := unix.Statx(dirfd, path, unix.AT_SYMLINK_NOFOLLOW|unix.AT_STATX_DONT_SYNC, unix.STATX_TYPE, &sx)
+	err := unix.Statx(dirfd, path, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT|unix.AT_STATX_DONT_SYNC, unix.STATX_TYPE, &sx)
 	return sx, err
 }
 
-// mountPointsUnderStatx discovers mount points at or below dir via
-// STATX_ATTR_MOUNT_ROOT instead of reading and scanning multi-MB
-// /proc/self/mountinfo on dense nodes.
-//
-// It first checks whether dir itself is a mount root, and then walks
-// subdirectories when dir is a directory.
-func mountPointsUnderStatx(dir string) ([]string, error) {
-	dir = filepath.Clean(dir)
-	dirSx, err := statxAt(unix.AT_FDCWD, dir)
+// bundleMountPoints lists which of <dir>/<container>/rootfs and
+// <dir>/<container>/volumes/<name> are mount points. SetupBundleRootfs mounts
+// nothing else. It skips container and volumes dirs that are symlinks. An
+// entry that fails statx is listed with statErr set. Other errors do not stop
+// the listing: bundleMountPoints returns the points it found together with
+// the joined errors.
+func bundleMountPoints(dir string, sys mountSys) ([]mountPoint, error) {
+	containers, err := readDirNames(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	var errs []error
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
-			return nil, nil
-		}
-		return nil, err
+		errs = append(errs, err)
 	}
-
-	var points []string
-	if dirSx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
-		points = append(points, dir)
-	}
-
-	if dirSx.Mode&unix.S_IFMT == unix.S_IFDIR {
-		if err := walkMountsUnderStatx(dir, false, &points); err != nil {
-			return nil, err
-		}
-	}
-	return points, nil
-}
-
-// walkMountsUnderStatx recursively scans curDir for mount points (both mounted
-// directories and bind-mounted regular files) using dirfd-relative statx calls
-// and appends discovered paths to points.
-//
-// Inside a container bundle directory (identified by OverlaySpecFileName or
-// config.json), the walk prunes subtrees that cannot contain nested mounts:
-//   - "upper" and "work" overlay scratch directories are skipped before statx.
-//   - Unmounted "rootfs" directories and subdirectories under "volumes"
-//     (inVolumesDir) are checked for mount-root status and then pruned.
-//
-// Symlinks are never followed or recorded, and any entry that is itself a
-// mount root is recorded and not descended into. The directory file descriptor
-// is closed before recursing into child directories so file descriptor usage
-// stays bounded to one open descriptor at a time.
-func walkMountsUnderStatx(curDir string, inVolumesDir bool, points *[]string) error {
-	f, err := os.Open(curDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
-			return nil
-		}
-		return err
-	}
-	names, readErr := f.Readdirnames(-1)
-	if readErr != nil {
-		_ = f.Close()
-		if errors.Is(readErr, os.ErrNotExist) || errors.Is(readErr, unix.ENOENT) {
-			return nil
-		}
-		return readErr
-	}
-
-	isBundleDir := !inVolumesDir && (slices.Contains(names, OverlaySpecFileName) || slices.Contains(names, "config.json"))
-	dirfd := int(f.Fd())
-	type subdir struct {
-		path  string
-		inVol bool
-	}
-	var subdirs []subdir
-
-	for _, name := range names {
-		// Overlay scratch directories (upper/ and work/) inside a bundle are
-		// never mount points; skip them before statx so teardown never touches
-		// actor upper trees.
-		if isBundleDir && (name == "upper" || name == "work") {
+	var points []mountPoint
+	for _, c := range containers {
+		bundle := filepath.Join(dir, c)
+		if !isDir(sys, bundle, &errs) {
 			continue
 		}
-		sx, err := statxAt(dirfd, name)
+		points = appendIfMount(points, sys, filepath.Join(bundle, "rootfs"))
+		volumes := filepath.Join(bundle, "volumes")
+		if !isDir(sys, volumes, &errs) {
+			continue
+		}
+		names, err := readDirNames(volumes)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+		for _, name := range names {
+			points = appendIfMount(points, sys, filepath.Join(volumes, name))
+		}
+	}
+	return points, errors.Join(errs...)
+}
+
+// readDirNames returns the names in dir without following a symlink at dir.
+func readDirNames(dir string) ([]string, error) {
+	f, err := os.OpenFile(dir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return names, fmt.Errorf("while reading %q: %w", dir, err)
+	}
+	return names, nil
+}
+
+// isDir reports whether path is a dir and not a symlink. It appends any statx
+// error other than ENOENT to errs.
+func isDir(sys mountSys, path string, errs *[]error) bool {
+	sx, err := sys.statx(unix.AT_FDCWD, path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			*errs = append(*errs, fmt.Errorf("while checking %q: %w", path, err))
+		}
+		return false
+	}
+	return sx.Mode&unix.S_IFMT == unix.S_IFDIR
+}
+
+// appendIfMount appends path to points if it is a mount root, or with statErr
+// set if statx fails on it with anything but ENOENT or ENOTDIR.
+func appendIfMount(points []mountPoint, sys mountSys, path string) []mountPoint {
+	sx, err := sys.statx(unix.AT_FDCWD, path)
+	switch {
+	case errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOTDIR):
+		return points
+	case err != nil:
+		return append(points, mountPoint{path: path, statErr: err})
+	case sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0:
+		return append(points, mountPoint{path: path})
+	}
+	return points
+}
+
+// mountPointsUnder lists the mount points at or below dir using
+// STATX_ATTR_MOUNT_ROOT.
+//
+// An entry that fails statx is listed with statErr set. Errors reading a dir
+// do not stop the walk: mountPointsUnder returns the points it found together
+// with the joined errors.
+func mountPointsUnder(dir string, sys mountSys) ([]mountPoint, error) {
+	sx, err := sys.statx(unix.AT_FDCWD, dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return []mountPoint{{path: dir, statErr: err}}, nil
+	}
+	var points []mountPoint
+	if sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
+		points = append(points, mountPoint{path: dir})
+	}
+	var errs []error
+	if sx.Mode&unix.S_IFMT == unix.S_IFDIR {
+		walkMounts(dir, "", sys, &points, &errs)
+	}
+	return points, errors.Join(errs...)
+}
+
+// walkMounts appends the mount points below root/rel to points and the errors
+// for dirs it could not read to errs. It does not follow symlinks or descend
+// into mount points. It closes each dir before recursing, so it holds one open
+// file at a time.
+func walkMounts(root, rel string, sys mountSys, points *[]mountPoint, errs *[]error) {
+	curDir := filepath.Join(root, rel)
+	f, err := os.OpenFile(curDir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		*errs = append(*errs, err)
+		return
+	}
+	names, err := f.Readdirnames(-1)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		*errs = append(*errs, fmt.Errorf("while reading %q: %w", curDir, err))
+	}
+
+	dirfd := int(f.Fd())
+	var subdirs []string
+	for _, name := range names {
+		path := filepath.Join(curDir, name)
+		sx, err := sys.statx(dirfd, name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
-				continue
-			}
-			_ = f.Close()
-			return err
+			*points = append(*points, mountPoint{path: path, statErr: err})
+			continue
 		}
 		if sx.Mode&unix.S_IFMT == unix.S_IFLNK {
 			continue
 		}
 		if sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
-			*points = append(*points, filepath.Join(curDir, name))
-			// SetupBundleRootfs mounts <bundle>/rootfs and
-			// <bundle>/volumes/<name>; neither contains nested submounts,
-			// so never descend into a mounted directory.
+			*points = append(*points, mountPoint{path: path})
 			continue
 		}
-		// Never descend into an unmounted bundle rootfs or volume directory.
-		isDir := sx.Mode&unix.S_IFMT == unix.S_IFDIR
-		if !isDir || (isBundleDir && name == "rootfs") || inVolumesDir {
-			continue
+		if sx.Mode&unix.S_IFMT == unix.S_IFDIR {
+			subdirs = append(subdirs, filepath.Join(rel, name))
 		}
-		subdirs = append(subdirs, subdir{
-			path:  filepath.Join(curDir, name),
-			inVol: isBundleDir && name == "volumes",
-		})
 	}
 	_ = f.Close()
 
 	for _, sub := range subdirs {
-		if err := walkMountsUnderStatx(sub.path, sub.inVol, points); err != nil {
-			return err
-		}
+		walkMounts(root, sub, sys, points, errs)
 	}
-	return nil
 }

@@ -59,7 +59,7 @@ func failedRestoreRootfs(t *testing.T, actorUID string, overlays bool) *ateworke
 		}
 		// Detach the overlays even if the cleanup under test leaves them, so
 		// t.TempDir can remove the bundle.
-		t.Cleanup(func() { _ = imagecache.UnmountAllUnder(dirs.GetOciBundleDir()) })
+		t.Cleanup(func() { _ = imagecache.UnmountBundlesUnder(dirs.GetOciBundleDir()) })
 	}
 	if _, err := (&AteWorkerService{}).buildActorContainers(actorUID, dirs, containers); err != nil {
 		t.Fatalf("buildActorContainers: %v", err)
