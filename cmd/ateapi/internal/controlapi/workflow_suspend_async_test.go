@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -54,7 +55,7 @@ func TestSuspendActorAsync_Finalized_NodeUnknown(t *testing.T) {
 		},
 	})
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+	if _, err := w.SuspendActor(ctx, actorRef, store.Precondition{}, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
 	if checkpoints, _ := atelet.calls(); checkpoints != 1 {
@@ -113,7 +114,7 @@ func TestSuspendActorAsync_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	seedWireWorker(t, ctx, st, assignmentOf(created))
 
 	w, _ := newWireCaptureWorkflow(t, workerDeletedDuringReleaseStore{Interface: st})
-	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+	_, err := w.SuspendActor(ctx, actorRef, store.Precondition{}, suspendAsync)
 	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
@@ -163,7 +164,7 @@ func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 			})
 			seedWireWorker(t, ctx, st, assignmentOf(created))
 
-			got, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+			got, err := w.SuspendActor(ctx, actorRef, store.Precondition{}, suspendAsync)
 			if err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
@@ -255,7 +256,7 @@ func TestSuspendActorAsync_Finalized_MissingSnapshotClearsAssignment(t *testing.
 			seedWireWorker(t, ctx, st, assignmentOf(created))
 			updateDuringCheckpoint(t, atelet, st, actorRef, tt.clobber)
 
-			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+			if _, err := w.SuspendActor(ctx, actorRef, store.Precondition{}, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
 				t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 			}
 			got := mustReadActor(t, ctx, st, actorRef)
@@ -323,7 +324,7 @@ func TestSuspendActorAsync_AteletPaused_DialFailureLeavesActorRetryable(t *testi
 			storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := newMarkOnlyWorkflow(persistence)
-			_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, suspendAsync)
+			_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, store.Precondition{}, suspendAsync)
 			assertStoppedAtDial(t, err)
 
 			stored := mustReadActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
@@ -378,7 +379,7 @@ func TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity(t *testing.T) 
 				},
 			})
 
-			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); err != nil {
+			if _, err := w.SuspendActor(ctx, actorRef, store.Precondition{}, suspendAsync); err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
 			req := atelet.checkpointRequest()

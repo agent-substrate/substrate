@@ -51,7 +51,8 @@ type restoreTelemetry struct {
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent:
 // a re-entered workflow fast-forwards past the steps a previous attempt
 // completed, deriving progress from the persisted actor alone.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, resumed bool, err error) {
+// Fails with ABORTED if the actor does not match precondition.
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (_ *ateapi.Actor, resumed bool, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapi.Actor
@@ -75,10 +76,16 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	// Read before taking the distributed lease so that hot-path checks do not
 	// upsert and delete a PostgreSQL lease row. Any state that needs work is read
 	// again under the lease below.
-	actor, err = w.store.GetActor(ctx, actorRef)
+	// actor stays nil until the guards match, so a refused call does not label
+	// its metric with another actor's template and pool.
+	observed, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
 	}
+	if err = checkActorPreconditions(actorRef, precondition, observed); err != nil {
+		return nil, false, err
+	}
+	actor = observed
 	if wasRunning = actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		return actor, false, nil
 	}
@@ -89,7 +96,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	}
 	defer lease.Close()
 
-	actor, actorTemplate, err = w.loadActorForResume(leaseCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForResume(leaseCtx, actorRef, precondition)
 	if err != nil {
 		return nil, false, err
 	}
@@ -103,14 +110,14 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	actor = created
 	var worker *ateapi.Worker
 	var assigned *ateapi.Actor
-	assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
+	assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate, precondition)
 	if err != nil && shouldDetachFromNode(actor, err) {
 		var detached *ateapi.Actor
-		if detached, err = w.detachFromFullNode(leaseCtx, actorRef, actor, actorTemplate, err); err != nil {
+		if detached, err = w.detachFromFullNode(leaseCtx, actorRef, actor, actorTemplate, err, precondition); err != nil {
 			return nil, false, err
 		}
 		actor = detached
-		assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
+		assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate, precondition)
 	}
 	if err != nil {
 		return nil, false, err
@@ -132,8 +139,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// loadActorForResume fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
+// loadActorForResume fetches the current actor record, checks it against
+// precondition, and fetches its template.
+func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForResume")
 	defer func() { err = done(err) }()
 
@@ -143,6 +151,9 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, nil, fmt.Errorf("while getting actor from DB: %w", err)
+	}
+	if err := checkActorPreconditions(actorRef, precondition, actor); err != nil {
+		return nil, nil, err
 	}
 
 	// If the actor is already running, there is no pending restore to prepare
@@ -223,18 +234,16 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	}
 	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes)
 	if updateErr != nil {
-		if errors.Is(updateErr, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while updating actor after volume creation: %w", updateErr)
+		return nil, fmt.Errorf("while updating actor after volume creation: %w", actorWriteError(actorRef, updateErr))
 	}
 	return storedActor, nil
 }
 
 // ensureWorkerAssigned assigns a worker and leaves the actor RESUMING.
 // Re-entry validates the recorded assignment before reuse.
-// Version conflicts re-read the actor before retrying.
-func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (_ *ateapi.Actor, _ *ateapi.Worker, err error) {
+// Version conflicts re-read the actor before retrying, unless the caller
+// passed a version guard.
+func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, precondition store.Precondition) (_ *ateapi.Actor, _ *ateapi.Worker, err error) {
 	ctx, done := stepSpan(ctx, "AssignWorker")
 	defer func() { err = done(err) }()
 
@@ -268,7 +277,7 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 			return false, err
 		}
 		attemptStart := time.Now()
-		attemptActor, attemptWorker, attemptErr := w.assignWorkerAttempt(ctx, actorRef, actor, actorTemplate)
+		attemptActor, attemptWorker, attemptErr := w.assignWorkerAttempt(ctx, actorRef, actor, actorTemplate, precondition)
 		lastAttempt = time.Since(attemptStart)
 		attempted = true
 		if attemptErr == nil {
@@ -401,8 +410,9 @@ func schedulerRecordable(err error) bool {
 // and persisting RESUMING with the assignment. On a version conflict it
 // re-reads the actor: if the fresh copy can still be resumed the refreshed
 // actor is returned along with the conflict so the caller retries with clean
-// inputs; any other status aborts the resume.
-func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (_ *ateapi.Actor, _ *ateapi.Worker, err error) {
+// inputs; any other status aborts the resume. Under the caller's version guard
+// the conflict aborts the resume instead.
+func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, precondition store.Precondition) (_ *ateapi.Actor, _ *ateapi.Worker, err error) {
 	// Checked before a worker is claimed.
 	if err := checkSnapshotUpload(actorRef, actor); err != nil {
 		return nil, nil, err
@@ -510,11 +520,21 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if !errors.Is(err, store.ErrVersionConflict) {
 			return nil, nil, actorWriteError(actorRef, err)
 		}
+		// The caller's version guard was checked against actor, so never retry
+		// against a version written since.
+		if precondition.Version != 0 {
+			return nil, nil, apierror.Aborted("Actor %s changed during the resume", actorRef)
+		}
 		// refresh the version of actor to avoid always failure in rest retries.
 		fresh, gerr := w.store.GetActor(ctx, actorRef)
 		if gerr != nil {
 			slog.WarnContext(ctx, "Failed to refresh actor after assignment conflict", slog.Any("err", gerr))
 			return nil, nil, err
+		}
+		// The template and the caller's uid guard were checked against the
+		// actor read under the lease, so never retry against a recreated one.
+		if fresh.GetMetadata().GetUid() != actor.GetMetadata().GetUid() {
+			return nil, nil, apierror.Aborted("Actor %s changed during the resume", actorRef)
 		}
 		switch fresh.GetStatus().GetState() {
 		case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
@@ -908,10 +928,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, nil

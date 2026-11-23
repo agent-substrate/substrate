@@ -1014,45 +1014,48 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 	}
 }
 
-func TestValidateDeleteOptions(t *testing.T) {
-	valid := func(mutate ...func(*ateapi.DeleteOptions)) *ateapi.DeleteOptions {
-		tb := &ateapi.DeleteOptions{}
-		for _, m := range mutate {
-			m(tb)
-		}
-		return tb
+// TestValidateGuards covers DeleteOptions and Preconditions, which carry the
+// same optional guards.
+func TestValidateGuards(t *testing.T) {
+	validators := map[string]func(version int64, uid string) field.ErrorList{
+		"DeleteOptions": func(version int64, uid string) field.ErrorList {
+			ctx := context.Background()
+			return Validate_DeleteOptions(ctx, MakeCreateOp(ctx), nil, &ateapi.DeleteOptions{Version: version, Uid: uid}, nil)
+		},
+		"Preconditions": func(version int64, uid string) field.ErrorList {
+			ctx := context.Background()
+			return Validate_Preconditions(ctx, MakeCreateOp(ctx), nil, &ateapi.Preconditions{Version: version, Uid: uid}, nil)
+		},
 	}
-
 	tests := []struct {
-		name string
-		obj  *ateapi.DeleteOptions
-		want field.ErrorList
+		name    string
+		version int64
+		uid     string
+		want    field.ErrorList
 	}{{
-		name: "valid",
-		obj:  valid(), // all optional fields
+		name: "valid", // all optional fields
 	}, {
-		name: "valid version",
-		obj:  valid(func(do *ateapi.DeleteOptions) { do.Version = 1 }),
-		want: nil,
+		name:    "valid version",
+		version: 1,
 	}, {
-		name: "invalid version",
-		obj:  valid(func(do *ateapi.DeleteOptions) { do.Version = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("version"), nil, "").WithOrigin("minimum")},
+		name:    "invalid version",
+		version: -1,
+		want:    field.ErrorList{field.Invalid(field.NewPath("version"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "valid uid",
-		obj:  valid(func(do *ateapi.DeleteOptions) { do.Uid = "11111111-2222-3333-4444-555555555555" }),
-		want: nil,
+		uid:  "11111111-2222-3333-4444-555555555555",
 	}, {
 		name: "invalid uid",
-		obj:  valid(func(do *ateapi.DeleteOptions) { do.Uid = "not a uid" }),
+		uid:  "not a uid",
 		want: field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp(context.Background())
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, tt.want, Validate_DeleteOptions(context.Background(), op, nil, tt.obj, nil))
-		})
+	for msg, validate := range validators {
+		for _, tt := range tests {
+			t.Run(msg+"/"+tt.name, func(t *testing.T) {
+				matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+				matcher.Test(t, tt.want, validate(tt.version, tt.uid))
+			})
+		}
 	}
 }
 

@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -74,7 +73,8 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 // is returned as it is, whatever the mode. Idempotent: a re-entered workflow
 // fast-forwards past the steps a previous attempt completed, deriving
 // progress from the persisted actor alone.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapi.Actor, err error) {
+// Fails with ABORTED if the actor does not match precondition.
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mode suspendMode) (_ *ateapi.Actor, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapi.Actor
@@ -101,7 +101,9 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	}
 	defer lease.Close()
 
-	actor, actorTemplate, err = w.loadActorForSuspend(leaseCtx, actorRef)
+	// The load checks precondition before the SUSPENDED shortcut, which would
+	// otherwise report success for a different actor under the same name.
+	actor, actorTemplate, err = w.loadActorForSuspend(leaseCtx, actorRef, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -137,13 +139,17 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	return actor, nil
 }
 
-// loadActorForSuspend fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
+// loadActorForSuspend fetches the current actor record, checks it against
+// precondition, and fetches its template.
+func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForSuspend")
 	defer func() { err = done(err) }()
 
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkActorPreconditions(actorRef, precondition, actor); err != nil {
 		return nil, nil, err
 	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
@@ -201,10 +207,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 	return storedActor, nil

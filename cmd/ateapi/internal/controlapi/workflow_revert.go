@@ -57,7 +57,8 @@ func isRevertable(actor *ateapi.Actor) bool {
 // Idempotent: each step keys on a persisted field rather than on the state the
 // actor was reverted from, so a re-entered workflow fast-forwards to wherever
 // the previous attempt stopped.
-func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, err error) {
+// Fails with ABORTED if the actor does not match precondition.
+func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (_ *ateapi.Actor, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapi.Actor
@@ -80,7 +81,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	}
 	defer lease.Close()
 
-	actor, actorTemplate, err = w.loadActorForRevert(leaseCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForRevert(leaseCtx, actorRef, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +113,9 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	return finalized, nil
 }
 
-// loadActorForRevert fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
+// loadActorForRevert fetches the current actor record, checks it against
+// precondition, and fetches its template.
+func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForRevert")
 	defer func() { err = done(err) }()
 
@@ -123,6 +125,9 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, nil, fmt.Errorf("while fetching actor: %w", err)
+	}
+	if err := checkActorPreconditions(actorRef, precondition, actor); err != nil {
+		return nil, nil, err
 	}
 
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
@@ -160,10 +165,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while setting actor state to REVERTING: %w", err)
+		return nil, fmt.Errorf("while setting actor state to REVERTING: %w", actorWriteError(actorRef, err))
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
 	return storedActor, nil

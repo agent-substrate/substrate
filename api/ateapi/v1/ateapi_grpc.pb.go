@@ -90,7 +90,8 @@ type ControlClient interface {
 	// Update mutable fields on an existing Actor.
 	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker. A SUSPENDED actor is returned as it is.
+	// on its worker. A SUSPENDED actor is returned as it is, unless a
+	// preconditions guard does not match.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
@@ -638,7 +639,8 @@ type ControlServer interface {
 	// Update mutable fields on an existing Actor.
 	UpdateActor(context.Context, *UpdateActorRequest) (*Actor, error)
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker. A SUSPENDED actor is returned as it is.
+	// on its worker. A SUSPENDED actor is returned as it is, unless a
+	// preconditions guard does not match.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)

@@ -761,6 +761,7 @@ Because the guards are required and only a read supplies them, an update is alwa
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
+    *   `preconditions`: (Optional) `uid` and `version` guards on the actor, with the same semantics as `DeleteActor`'s `options`. A mismatch returns `ABORTED`. A call can change `version` before it fails, so read the actor again before a retry.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
 *   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`, or if at least one worker is eligible and the actor is larger than each of them, even when empty. Unavailable workers count, so a short outage gives `RESOURCE_EXHAUSTED`. A new worker counts once it first registers. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
@@ -768,9 +769,10 @@ Activates a suspended actor by restoring it onto a physical worker.
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
+    *   `preconditions`: (Optional) `uid` and `version` guards on the actor, with the same semantics as `DeleteActor`'s `options`. A mismatch returns `ABORTED`. A call can change `version` before it fails, so read the actor again before a retry.
     *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
-*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. After an asynchronous suspend, atelet uploads the snapshot in the background, so `status.snapshots` may still show a `PENDING` `durableSnapshot`.
+*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode, unless a `preconditions` guard does not match. After an asynchronous suspend, atelet uploads the snapshot in the background, so `status.snapshots` may still show a `PENDING` `durableSnapshot`.
 *   A snapshot generation conflict returns `ABORTED` without crashing the actor. The actor can remain `ACTOR_STATE_SUSPENDING`, with its worker assignment and previous completed snapshot kept for recovery. Read the actor's latest state before retrying; repeating a stale request cannot resolve a persistent disagreement with atelet.
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` first has atelet upload the snapshot if it has not already, so the call can take as long as that upload. If the upload fails, so does `CreateTag`, and the actor is left as it was.
 
@@ -793,6 +795,7 @@ Deletion always runs before the database reference is dropped, and a failure fai
 Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.snapshots`).
 *   **Request:** `RevertActorRequest`
     *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING` and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries), and from `ACTOR_STATE_SUSPENDED` when the actor's latest snapshot is node-local. Calling `RevertActor` on an `ACTOR_STATE_SUSPENDED` actor with no node-local snapshot returns `FAILED_PRECONDITION`.
+    *   `preconditions`: (Optional) `uid` and `version` guards on the actor, with the same semantics as `DeleteActor`'s `options`. A mismatch returns `ABORTED`. A call can change `version` before it fails, so read the actor again before a retry.
 *   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
 *   Reverting terminates any bound worker sandbox, clears node-local checkpoints, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`.
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.

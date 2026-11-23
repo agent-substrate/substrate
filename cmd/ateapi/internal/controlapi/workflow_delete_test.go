@@ -222,7 +222,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 
 				wantState := ateapi.ActorState_ACTOR_STATE_REVERTING
 				if verb == "revert" {
-					_, err = w.RevertActor(ctx, actorRef)
+					_, err = w.RevertActor(ctx, actorRef, store.Precondition{})
 				} else {
 					wantState = ateapi.ActorState_ACTOR_STATE_DELETING
 					_, err = w.DeleteActor(ctx, actorRef, store.Precondition{})
@@ -605,7 +605,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				objects.PutSnapshot(t, fresh, "manifest.json")
 				return apierror.Unavailable("worker pod is gone")
 			}
-			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
+			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, store.Precondition{}, suspendSync); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
 			}
 			// SuspendActor failed mid-checkpoint and released the actor's lease,
