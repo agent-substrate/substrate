@@ -123,24 +123,16 @@ DaemonSet/ate-system/atelet:
     charts:
     - --exchange-address=api.ate-system.svc:8445
     - --exchange-server-name=api.ate-system.svc
-  spec.template.spec.initContainers[objectstore-plugin].env[AWS_ACCESS_KEY_ID].value:
-    ate-setup: rustfsadmin
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_ACCESS_KEY_ID]:
+    ate-setup:
+      name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
     charts: null
-  spec.template.spec.initContainers[objectstore-plugin].env[AWS_ACCESS_KEY_ID].valueFrom:
-    ate-setup: null
-    charts:
-      secretKeyRef:
-        key: AWS_ACCESS_KEY_ID
-        name: rustfs-credentials
-  spec.template.spec.initContainers[objectstore-plugin].env[AWS_SECRET_ACCESS_KEY].value:
-    ate-setup: rustfsadmin
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_SECRET_ACCESS_KEY]:
+    ate-setup:
+      name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
     charts: null
-  spec.template.spec.initContainers[objectstore-plugin].env[AWS_SECRET_ACCESS_KEY].valueFrom:
-    ate-setup: null
-    charts:
-      secretKeyRef:
-        key: AWS_SECRET_ACCESS_KEY
-        name: rustfs-credentials
   spec.template.spec.initContainers[objectstore-plugin].env[OTEL_LOGS_EXPORTER]:
     ate-setup: null
     charts:
@@ -156,11 +148,14 @@ DaemonSet/ate-system/atelet:
     charts:
       name: OTEL_TRACES_EXPORTER
       value: none
-  spec.template.spec.initContainers[objectstore-plugin].envFrom:
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].configMapRef:
     ate-setup:
-    - configMapRef:
-        name: ate-otel-config
+      name: ate-otel-config
     charts: null
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].secretRef:
+    ate-setup: null
+    charts:
+      name: rustfs-credentials
 Deployment/ate-system/ate-api-server:
   spec.template.spec.containers[ate-api-server].args:
     ate-setup:
@@ -241,6 +236,16 @@ Deployment/ate-system/ate-api-server:
     ate-setup: []
     charts:
     - --ateapi-server-name=api.ate-system.svc
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_ACCESS_KEY_ID]:
+    ate-setup:
+      name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_SECRET_ACCESS_KEY]:
+    ate-setup:
+      name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
+    charts: null
   spec.template.spec.initContainers[objectstore-plugin].env[OTEL_LOGS_EXPORTER]:
     ate-setup: null
     charts:
@@ -256,11 +261,14 @@ Deployment/ate-system/ate-api-server:
     charts:
       name: OTEL_TRACES_EXPORTER
       value: none
-  spec.template.spec.initContainers[objectstore-plugin].envFrom:
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].configMapRef:
     ate-setup:
-    - configMapRef:
-        name: ate-otel-config
+      name: ate-otel-config
     charts: null
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].secretRef:
+    ate-setup: null
+    charts:
+      name: rustfs-credentials
 Deployment/ate-system/ate-controller:
   spec.template.spec.containers[ate-controller].args:
     ate-setup: []

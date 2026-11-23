@@ -20,6 +20,9 @@ templates:
 release:
   name: custom
   namespace: custom-system
+# The render requires a snapshot location.
+set:
+  ateApi.snapshotLocation: gs://snapshots/
 tests:
 - it: serves discovery with the API signing pool and a service certificate
   template: ate-idp-server.yaml

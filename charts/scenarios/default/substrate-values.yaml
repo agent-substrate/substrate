@@ -13,5 +13,7 @@
 # limitations under the License.
 
 
-# The chart defaults, with the one value that has no default.
+# The chart defaults, with the values that have no default.
 atenetDataPlane: envoy
+ateApi:
+  snapshotLocation: gs://ate-snapshots/

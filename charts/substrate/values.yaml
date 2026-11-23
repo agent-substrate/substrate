@@ -58,51 +58,33 @@ sandboxConfigs:
     enabled: false
     assetBucket: ""
 
-rustfs:
-  enabled: true
-  storageSize: 1Gi
-  bucket: ate-snapshots
-  accessKey: rustfsadmin
-  secretKey: rustfsadmin
-  resources:
-    requests:
-      cpu: 50m
-      memory: 256Mi
-    limits:
-      cpu: "1"
-      memory: 1Gi
-  # The Job that creates the snapshot bucket.
-  bucketInit:
-    resources:
-      requests:
-        cpu: 10m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 256Mi
-
-# The substrate-atelet chart installs atelet. The API server's object-store
-# plugin still reads storageBackend from here.
-atelet:
-  # Snapshot backend: s3 or gcs. Set objectStore.backend in the
-  # substrate-atelet release to the same value.
-  storageBackend: s3
-
-# Object storage credentials/settings for snapshot transfers and private sandbox assets.
+# The object-store plugin, a sidecar of the API server. The chart does not
+# model the object store: configure it through the plugin's environment. Set
+# the same credentialsSecret and extraEnv in the substrate-atelet release.
 objectStorePlugin:
-  # Required for GCS: the Google service account the exchange impersonates
-  # for actor-scoped snapshot transfers. Unused by S3/RustFS.
-  transferServiceAccount: ""
+  # Secret whose keys the plugin gets as environment variables, such as
+  # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Empty adds none.
+  credentialsSecret: ""
+  # Environment of the plugin. ATE_STORAGE_BACKEND selects the store: gcs, the
+  # default, or s3. The S3 backend reads the AWS SDK settings, such as
+  # AWS_REGION, AWS_ENDPOINT_URL and AWS_S3_USE_PATH_STYLE.
   extraEnv: []
+  # Required for GCS: the Google service account the exchange impersonates
+  # for actor-scoped snapshot transfers. Unused by S3.
+  transferServiceAccount: ""
   control:
     resources: {}
 
 # Additional arguments appended to the ateapi defaults.
 ateApi:
-  # Cluster-wide snapshot URI. Empty uses gs://<rustfs.bucket>/ when RustFS is
-  # enabled (the S3 backend also uses gs:// URIs). Required for external storage
-  # unless the PerTemplateSnapshotLocation preview gate is enabled.
+  # Cluster-wide snapshot URI, as gs://<bucket>/<prefix>. The S3 backend also
+  # uses gs:// URIs. Required unless the PerTemplateSnapshotLocation preview
+  # gate is enabled.
   snapshotLocation: ""
+  # Annotations on the ate-api-server ServiceAccount, for workload identity
+  # such as EKS IAM roles for service accounts.
+  serviceAccount:
+    annotations: {}
   logLevel: info
   authorization:
     # Empty defaults to the release's shared ate-client principal. Use explicit
@@ -294,7 +276,5 @@ image:
   tag: ""
 
 images:
-  rustfs: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
-  awsCli: amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
   agentgateway: cr.agentgateway.dev/agentgateway:v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
   busybox: busybox:1.36

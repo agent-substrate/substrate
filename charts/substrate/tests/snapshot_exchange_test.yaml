@@ -21,22 +21,12 @@ templates:
 release:
   name: custom
   namespace: custom-system
+set:
+  ateApi.snapshotLocation: gs://snapshots/
 tests:
-- it: defaults snapshots to the configured bundled bucket
+- it: uses the snapshot location
   template: ate-api-server-envvars.yaml
   set:
-    rustfs.bucket: custom-snapshots
-  asserts:
-  - equal:
-      path: data.ATE_API_SNAPSHOT_LOCATION
-      value: gs://custom-snapshots/
-  - equal:
-      path: data.ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
-      value: ""
-- it: uses an explicit external snapshot location
-  template: ate-api-server-envvars.yaml
-  set:
-    rustfs.enabled: false
     ateApi.snapshotLocation: gs://external/prefix/
     objectStorePlugin.transferServiceAccount: snapshot-transfer@example.iam.gserviceaccount.com
   asserts:
@@ -46,22 +36,56 @@ tests:
   - equal:
       path: data.ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
       value: snapshot-transfer@example.iam.gserviceaccount.com
-- it: requires a snapshot location for external storage
+- it: requires a snapshot location
   template: ate-api-server.yaml
   set:
-    rustfs.enabled: false
+    ateApi.snapshotLocation: ""
   asserts:
   - failedTemplate:
-      errorMessage: ateApi.snapshotLocation is required when rustfs.enabled=false unless PerTemplateSnapshotLocation preview is enabled
+      errorMessage: ateApi.snapshotLocation is required unless the PerTemplateSnapshotLocation preview is enabled
 - it: permits template-only locations with the preview gate
   template: ate-api-server-envvars.yaml
   set:
-    rustfs.enabled: false
+    ateApi.snapshotLocation: ""
     preview: [PerTemplateSnapshotLocation]
   asserts:
   - equal:
       path: data.ATE_API_SNAPSHOT_LOCATION
       value: ""
+- it: passes the object store settings to the plugin
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    objectStorePlugin.credentialsSecret: store-credentials
+    objectStorePlugin.extraEnv:
+    - name: ATE_STORAGE_BACKEND
+      value: s3
+  asserts:
+  - contains:
+      path: spec.template.spec.initContainers[0].env
+      content:
+        name: ATE_STORAGE_BACKEND
+        value: s3
+  - equal:
+      path: spec.template.spec.initContainers[0].envFrom
+      value:
+      - secretRef:
+          name: store-credentials
+- it: adds no object store settings by default
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - notExists:
+      path: spec.template.spec.initContainers[0].envFrom
+  - notContains:
+      path: spec.template.spec.initContainers[0].env
+      any: true
+      content:
+        name: ATE_STORAGE_BACKEND
 - it: supplies the exchange identity and issuer trust
   template: ate-api-server.yaml
   documentSelector:
@@ -182,3 +206,16 @@ tests:
       content:
         name: ATE_WORKER_OTEL_LOGS_EXPORTER
         value: none
+- it: annotates the API server ServiceAccount for workload identity
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: ServiceAccount
+  set:
+    ateApi.serviceAccount.annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/substrate
+  asserts:
+  - equal:
+      path: metadata.annotations
+      value:
+        eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/substrate

@@ -9,7 +9,7 @@ Each directory here is one supported configuration of the charts. A new configur
 
 | Scenario | Configuration |
 |---|---|
-| `default` | The chart defaults, with the required `atenetDataPlane` set to `envoy` |
+| `default` | The chart defaults, with the required `atenetDataPlane` set to `envoy` and a snapshot location |
 | `kind` | A kind cluster from `hack/create-kind-cluster.sh`, with the envoy data plane and the bundled PostgreSQL and RustFS |
 | `kind-agentgateway` | The `kind` scenario with the agentgateway data plane |
 | `e2e` | The `kind` scenario with the settings that the e2e suites in `internal/e2e` need: the short atelet snapshot delays of `ate-setup --e2e-tuning`, and the router client of the suites |

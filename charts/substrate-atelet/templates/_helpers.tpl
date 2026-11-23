@@ -93,35 +93,3 @@ imagePullSecrets:
 {{- end -}}
 {{- end -}}
 
-{{/* Object storage settings for the node object-store plugin. */}}
-{{- define "substrate.storage.env" -}}
-- name: ATE_STORAGE_BACKEND
-  value: {{ .Values.objectStore.backend | quote }}
-{{- with .Values.objectStore.region }}
-- name: AWS_REGION
-  value: {{ . | quote }}
-{{- end }}
-{{- with .Values.objectStore.endpoint }}
-- name: AWS_ENDPOINT_URL
-  value: {{ . | quote }}
-{{- end }}
-{{- if .Values.objectStore.pathStyle }}
-- name: AWS_S3_USE_PATH_STYLE
-  value: "true"
-{{- end }}
-{{- with .Values.objectStore.credentialsSecret }}
-- name: AWS_ACCESS_KEY_ID
-  valueFrom:
-    secretKeyRef:
-      name: {{ . }}
-      key: AWS_ACCESS_KEY_ID
-- name: AWS_SECRET_ACCESS_KEY
-  valueFrom:
-    secretKeyRef:
-      name: {{ . }}
-      key: AWS_SECRET_ACCESS_KEY
-{{- end }}
-{{- with .Values.objectStorePlugin.extraEnv }}
-{{ toYaml . }}
-{{- end }}
-{{- end }}

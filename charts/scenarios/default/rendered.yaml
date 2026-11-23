@@ -409,8 +409,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        - name: ATE_STORAGE_BACKEND
-          value: "s3"
         - name: OTEL_TRACES_EXPORTER
           value: none
         - name: OTEL_METRICS_EXPORTER
@@ -854,35 +852,6 @@ spec:
       port: 50051
 
 ---
-# Source: substrate/templates/rustfs.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: rustfs
-  namespace: ate-system
-spec:
-  podSelector:
-    matchLabels:
-      app: rustfs
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchExpressions:
-        - key: app
-          operator: In
-          values:
-          - ate-api-server
-          - atelet
-    - podSelector:
-        matchLabels:
-          batch.kubernetes.io/job-name: rustfs-bucket-init
-    ports:
-    - protocol: TCP
-      port: api
-
----
 # Source: substrate/templates/ate-api-server.yaml
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -989,14 +958,6 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: k8s-credential-provider
-  namespace: ate-system
-
----
-# Source: substrate/templates/rustfs.yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: rustfs
   namespace: ate-system
 
 ---
@@ -2397,23 +2358,6 @@ data:
     policies: []
 
 ---
-# Source: substrate/templates/rustfs.yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: rustfs-data
-  namespace: ate-system
-  annotations:
-    # helm uninstall keeps the database that refers to these snapshots.
-    helm.sh/resource-policy: keep
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
-
----
 # Source: substrate/templates/ate-api-server.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -2802,25 +2746,6 @@ spec:
     protocol: TCP
 
 ---
-# Source: substrate/templates/rustfs.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: rustfs
-  namespace: ate-system
-spec:
-  selector:
-    app: rustfs
-  ports:
-  - name: api
-    port: 9000
-    targetPort: 9000
-  - name: console
-    port: 9001
-    targetPort: 9001
-  type: ClusterIP
-
----
 # Source: substrate/templates/ate-api-server.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -2892,18 +2817,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        - name: ATE_STORAGE_BACKEND
-          value: "s3"
-        - name: AWS_REGION
-          value: us-east-1
-        - name: AWS_ENDPOINT_URL
-          value: http://rustfs.ate-system.svc:9000
-        - name: AWS_S3_USE_PATH_STYLE
-          value: "true"
-        - name: AWS_ACCESS_KEY_ID
-          value: "rustfsadmin"
-        - name: AWS_SECRET_ACCESS_KEY
-          value: "rustfsadmin"
         - name: OTEL_TRACES_EXPORTER
           value: none
         - name: OTEL_METRICS_EXPORTER
@@ -3834,117 +3747,6 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
-
----
-# Source: substrate/templates/rustfs.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rustfs
-  namespace: ate-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: rustfs
-  template:
-    metadata:
-      labels:
-        app: rustfs
-    spec:
-      serviceAccountName: rustfs
-      securityContext:
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
-      containers:
-      - name: rustfs
-        image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
-        resources:
-          limits:
-            cpu: "1"
-            memory: 1Gi
-          requests:
-            cpu: 50m
-            memory: 256Mi
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 9000
-          name: api
-        - containerPort: 9001
-          name: console
-        env:
-        - name: RUSTFS_ADDRESS
-          value: ":9000"
-        - name: RUSTFS_CONSOLE_ADDRESS
-          value: ":9001"
-        - name: RUSTFS_CONSOLE_ENABLE
-          value: "true"
-        - name: RUSTFS_VOLUMES
-          value: "/data"
-        - name: RUSTFS_ACCESS_KEY
-          value: "rustfsadmin"
-        - name: RUSTFS_SECRET_KEY
-          value: "rustfsadmin"
-        volumeMounts:
-        - name: data
-          mountPath: /data
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: rustfs-data
-
----
-# Source: substrate/templates/rustfs.yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: rustfs-bucket-init
-  namespace: ate-system
-spec:
-  backoffLimit: 10
-  template:
-    spec:
-      restartPolicy: OnFailure
-      serviceAccountName: rustfs
-      containers:
-      - name: create-bucket
-        image: amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
-        resources:
-          limits:
-            cpu: 500m
-            memory: 256Mi
-          requests:
-            cpu: 10m
-            memory: 128Mi
-        env:
-        - name: AWS_ACCESS_KEY_ID
-          value: "rustfsadmin"
-        - name: AWS_SECRET_ACCESS_KEY
-          value: "rustfsadmin"
-        - name: AWS_REGION
-          value: us-east-1
-        - name: AWS_ENDPOINT_URL
-          value: http://rustfs.ate-system.svc:9000
-        command:
-        - /bin/sh
-        - -c
-        - |
-          set -e
-          for i in $(seq 1 60); do
-            if aws s3api head-bucket --bucket ate-snapshots 2>/dev/null; then
-              echo "bucket ate-snapshots already exists"
-              exit 0
-            fi
-            if aws s3api create-bucket --bucket ate-snapshots 2>/dev/null; then
-              echo "bucket ate-snapshots created"
-              exit 0
-            fi
-            echo "waiting for rustfs to become available... ($i/60)"
-            sleep 2
-          done
-          echo "timed out waiting for rustfs"
-          exit 1
 
 ---
 # Source: substrate/templates/role.yaml

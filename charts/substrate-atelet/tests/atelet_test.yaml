@@ -153,3 +153,37 @@ tests:
         capabilities:
           drop: [ALL]
           add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID]
+- it: passes the object store settings to the plugin
+  template: atelet.yaml
+  documentSelector:
+    path: kind
+    value: DaemonSet
+  set:
+    objectStorePlugin.credentialsSecret: store-credentials
+    objectStorePlugin.extraEnv:
+    - name: ATE_STORAGE_BACKEND
+      value: s3
+  asserts:
+  - contains:
+      path: spec.template.spec.initContainers[0].env
+      content:
+        name: ATE_STORAGE_BACKEND
+        value: s3
+  - equal:
+      path: spec.template.spec.initContainers[0].envFrom
+      value:
+      - secretRef:
+          name: store-credentials
+- it: annotates the ServiceAccount for workload identity
+  template: atelet.yaml
+  documentSelector:
+    path: kind
+    value: ServiceAccount
+  set:
+    atelet.serviceAccount.annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/atelet
+  asserts:
+  - equal:
+      path: metadata.annotations
+      value:
+        eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/atelet

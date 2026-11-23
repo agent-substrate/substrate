@@ -16,7 +16,8 @@
 # substrate values for a kind cluster that hack/create-kind-cluster.sh creates.
 # The settings match the kind overlay in manifests/ate-install/kind.
 #
-# Before the install, run hack/install-postgres.sh --kind.
+# Before the install, run hack/install-postgres.sh --kind and
+# hack/install-rustfs.sh.
 
 atenetDataPlane: agentgateway
 
@@ -24,3 +25,18 @@ atenetDataPlane: agentgateway
 postgres:
   clientCertificates:
     enabled: true
+
+# Use the bundled RustFS. The S3 backend also takes gs:// URIs.
+ateApi:
+  snapshotLocation: gs://ate-snapshots/
+objectStorePlugin:
+  credentialsSecret: rustfs-credentials
+  extraEnv:
+  - name: ATE_STORAGE_BACKEND
+    value: s3
+  - name: AWS_REGION
+    value: us-east-1
+  - name: AWS_ENDPOINT_URL
+    value: http://rustfs.ate-system.svc:9000
+  - name: AWS_S3_USE_PATH_STYLE
+    value: "true"

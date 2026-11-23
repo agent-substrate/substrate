@@ -14,8 +14,7 @@
 
 # Default values for the substrate-atelet chart.
 #
-# Most keys have the same paths and defaults as in the substrate chart. Object
-# storage is configured under objectStore instead of rustfs.
+# Most keys have the same paths and defaults as in the substrate chart.
 
 # Release name of the substrate chart this atelet serves. Install this chart in
 # that release's namespace. Object names follow the substrate release, so
@@ -24,23 +23,6 @@ substrateReleaseName: substrate
 
 # Preview gates for atelet. Match the substrate release's preview gates.
 preview: []
-
-# Object store the node object-store plugin reads and writes snapshots in. Use
-# the same store as the substrate release. For the substrate chart's bundled
-# RustFS, set endpoint to http://rustfs.<namespace>.svc:9000 (prefixed with the
-# release name unless it is "substrate"), region to us-east-1 and pathStyle to
-# true.
-objectStore:
-  # Snapshot backend: s3 or gcs.
-  backend: s3
-  # S3 endpoint URL. Empty uses the AWS endpoint for the region.
-  endpoint: ""
-  region: ""
-  # Address buckets by path rather than by virtual host.
-  pathStyle: false
-  # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys. Empty uses the
-  # SDK's default credential chain.
-  credentialsSecret: ""
 
 # atelet daemonset overrides.
 # extraArgs / extraEnv are appended verbatim for installer-specific knobs
@@ -59,6 +41,10 @@ atelet:
   # Restricts atelet to matching nodes. Every node that runs WorkerPool pods
   # needs an atelet, so cover each pool's nodeSelector here.
   nodeSelector: {}
+  # Annotations on the atelet ServiceAccount, for workload identity such as
+  # EKS IAM roles for service accounts.
+  serviceAccount:
+    annotations: {}
   extraArgs: []
   extraEnv: []
   resources:
@@ -69,8 +55,16 @@ atelet:
       cpu: "2"
       memory: 1Gi
 
-# Object storage credentials/settings for the node object-store plugin.
+# The object-store plugin, a sidecar of atelet. The chart does not model the
+# object store: configure it through the plugin's environment. Use the same
+# credentialsSecret and extraEnv as the substrate release.
 objectStorePlugin:
+  # Secret whose keys the plugin gets as environment variables, such as
+  # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Empty adds none.
+  credentialsSecret: ""
+  # Environment of the plugin. ATE_STORAGE_BACKEND selects the store: gcs, the
+  # default, or s3. The S3 backend reads the AWS SDK settings, such as
+  # AWS_REGION, AWS_ENDPOINT_URL and AWS_S3_USE_PATH_STYLE.
   extraEnv: []
   node:
     resources:

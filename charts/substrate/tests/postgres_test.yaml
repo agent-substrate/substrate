@@ -16,6 +16,9 @@ suite: PostgreSQL configuration
 templates:
 - ate-api-server-envvars.yaml
 - ate-api-server.yaml
+# The render requires a snapshot location.
+set:
+  ateApi.snapshotLocation: gs://snapshots/
 tests:
 - it: uses the managed schema by default
   template: ate-api-server-envvars.yaml

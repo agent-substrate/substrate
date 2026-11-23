@@ -23,13 +23,13 @@ templates:
 - role.yaml
 - k8s-credential-provider.yaml
 - ate-system-networkpolicies.yaml
-- rustfs.yaml
 release:
   name: custom
   namespace: custom-system
 # atenetDataPlane is required. Tests of agentgateway set it themselves.
 set:
   atenetDataPlane: envoy
+  ateApi.snapshotLocation: gs://snapshots/
 tests:
 - it: probes the API health listener and resolves component identities
   template: ate-api-server.yaml
@@ -82,18 +82,6 @@ tests:
       content:
         name: statusz
         containerPort: 4040
-- it: pins RustFS's IDs off OpenShift
-  template: rustfs.yaml
-  documentSelector:
-    path: kind
-    value: Deployment
-  asserts:
-  - equal:
-      path: spec.template.spec.securityContext
-      value:
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
 - it: runs the credential provider as its image's non-root user
   template: k8s-credential-provider.yaml
   documentSelector:
@@ -104,24 +92,6 @@ tests:
       path: spec.template.spec.securityContext
       value:
         runAsNonRoot: true
-- it: leaves pod IDs to OpenShift's SCC
-  templates:
-  - k8s-credential-provider.yaml
-  - rustfs.yaml
-  documentSelector:
-    path: kind
-    value: Deployment
-    matchMany: true
-  capabilities:
-    apiVersions:
-    - security.openshift.io/v1
-  asserts:
-  - notExists:
-      path: spec.template.spec.securityContext.runAsUser
-  - notExists:
-      path: spec.template.spec.securityContext.runAsGroup
-  - notExists:
-      path: spec.template.spec.securityContext.fsGroup
 - it: stops OTLP push without an endpoint but keeps the scraped metrics
   template: ate-controller.yaml
   documentSelector:
@@ -224,27 +194,6 @@ tests:
       content:
         protocol: TCP
         port: statusz
-- it: allows the named bucket initialization job to reach RustFS
-  template: rustfs.yaml
-  documentSelector:
-    path: kind
-    value: NetworkPolicy
-  asserts:
-  - equal:
-      path: metadata.namespace
-      value: custom-system
-  - contains:
-      path: spec.ingress[0].from
-      content:
-        podSelector:
-          matchLabels:
-            batch.kubernetes.io/job-name: custom-rustfs-bucket-init
-  - equal:
-      path: spec.ingress[0].ports
-      value:
-      - protocol: TCP
-        port: api
-
 - it: supplies the required API config and bootstraps the release client
   template: ate-api-server.yaml
   documentSelector:

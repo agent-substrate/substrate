@@ -27,12 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-      # atenetDataPlane is required in the substrate chart, and the other
-      # charts ignore it.
+      # atenetDataPlane and ateApi.snapshotLocation are required in the
+      # substrate chart, and the other charts ignore them.
       - name: Lint the charts with the envoy data plane
-        run: helm lint --set atenetDataPlane=envoy charts/substrate charts/substrate-crds charts/substrate-podcert charts/substrate-atelet
+        run: helm lint --set atenetDataPlane=envoy --set ateApi.snapshotLocation=gs://ate-snapshots/ charts/substrate charts/substrate-crds charts/substrate-podcert charts/substrate-atelet
       - name: Lint the substrate chart with the agentgateway data plane
-        run: helm lint --set atenetDataPlane=agentgateway charts/substrate
+        run: helm lint --set atenetDataPlane=agentgateway --set ateApi.snapshotLocation=gs://ate-snapshots/ charts/substrate
       - name: Install helm-unittest
         run: .github/scripts/helm-verify/install-helm-unittest.sh
       - name: Run the chart unit tests

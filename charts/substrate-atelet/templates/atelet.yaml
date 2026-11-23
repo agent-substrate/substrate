@@ -28,6 +28,10 @@ kind: ServiceAccount
 metadata:
   name: {{ include "substrate.fullname" (list "atelet" .) }}
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.atelet.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- if .Values.atelet.imageCredentialProviderConfigYAML }}
 ---
 apiVersion: v1
@@ -200,9 +204,16 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-{{- include "substrate.storage.env" . | nindent 8 }}
+{{- with .Values.objectStorePlugin.extraEnv }}
+{{- toYaml . | nindent 8 }}
+{{- end }}
 {{- with include "substrate.otel.env" . }}
 {{- . | trim | nindent 8 }}
+{{- end }}
+{{- with .Values.objectStorePlugin.credentialsSecret }}
+        envFrom:
+        - secretRef:
+            name: {{ . }}
 {{- end }}
         volumeMounts:
         - name: ate-base

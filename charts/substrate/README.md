@@ -20,17 +20,12 @@ go run ./cmd/ate-setup create podcertificate-controller-cas
 helm upgrade --install substrate-podcert ./charts/substrate-podcert \
   --namespace podcertificate-controller-system --create-namespace --wait
 
-# Install atelet as its own release, using the bundled RustFS
+# Install atelet as its own release. object-store.yaml holds the
+# objectStorePlugin values for your object store: see "Object store".
 kubectl create namespace ate-system
-kubectl create secret generic rustfs-credentials -n ate-system \
-  --from-literal=AWS_ACCESS_KEY_ID=rustfsadmin \
-  --from-literal=AWS_SECRET_ACCESS_KEY=rustfsadmin
 helm upgrade --install substrate-atelet ./charts/substrate-atelet \
   --namespace ate-system \
-  --set objectStore.endpoint=http://rustfs.ate-system.svc:9000 \
-  --set objectStore.region=us-east-1 \
-  --set objectStore.pathStyle=true \
-  --set objectStore.credentialsSecret=rustfs-credentials
+  -f object-store.yaml
 
 # Create the key pools and the API server authentication config.
 # Pass --namespace when the release namespace is not ate-system.
@@ -43,7 +38,9 @@ go run ./cmd/ate-setup create api-authentication-config
 # Install Substrate after creating the database identities and Secrets
 helm upgrade --install substrate ./charts/substrate \
   --namespace ate-system \
+  -f object-store.yaml \
   --set atenetDataPlane=envoy \
+  --set ateApi.snapshotLocation=gs://<bucket>/ \
   --set postgres.readWriteConnectionStringSecretRef.name=substrate-postgres-readwrite \
   --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner
 ```
@@ -51,7 +48,8 @@ helm upgrade --install substrate ./charts/substrate \
 On a kind cluster, pass the values files in `charts/scenarios/kind`, or in
 `charts/scenarios/kind-agentgateway` for the agentgateway data plane, to the
 matching releases: `substrate-atelet-values.yaml` and `substrate-values.yaml`.
-Run `hack/install-postgres.sh --kind` before the substrate release.
+Run `hack/install-postgres.sh --kind` and `hack/install-rustfs.sh` before the
+releases.
 
 Install substrate-atelet before substrate, and upgrade them in that order. The
 [version skew policy](../../docs/reference/version-skew-policy.md) upgrades
@@ -78,6 +76,37 @@ Some values apply to only one data plane:
   `atenetEgress.extProc` and `atenetEgress.sdsmint`, which set the resources of
   those containers.
 
+## Object store
+
+The chart does not include an object store. The object-store plugin, a sidecar
+of the API server and of atelet, connects to one. Configure the plugin through
+its environment, with the same values in the substrate and substrate-atelet
+releases:
+
+- `objectStorePlugin.extraEnv`: `ATE_STORAGE_BACKEND` selects `gcs`, the
+  default, or `s3`. The S3 backend reads the AWS SDK settings, such as
+  `AWS_REGION`, `AWS_ENDPOINT_URL` and `AWS_S3_USE_PATH_STYLE`.
+- `objectStorePlugin.credentialsSecret`: a Secret whose keys the plugin gets as
+  environment variables, such as `AWS_ACCESS_KEY_ID` and
+  `AWS_SECRET_ACCESS_KEY`.
+
+`ateApi.snapshotLocation` names the bucket, as `gs://<bucket>/<prefix>` for both
+backends.
+
+For workload identity that reads ServiceAccount annotations, such as EKS IAM
+roles for service accounts, set `ateApi.serviceAccount.annotations` here and
+`atelet.serviceAccount.annotations` in the substrate-atelet release. The pods
+get the identity when they start, so restart ate-api-server and atelet after
+you change the annotations. GKE Workload Identity Federation needs no
+annotations: grant access to the ServiceAccounts as IAM principals.
+
+For development, `hack/install-rustfs.sh` deploys RustFS in `ate-system` from
+`manifests/ate-install/kind/rustfs.yaml`, with an `ate-snapshots` bucket and the
+`rustfs-credentials` Secret. The kind scenarios in `charts/scenarios` set the
+values for it. RustFS keeps its data in the `rustfs-data` PersistentVolumeClaim,
+so applying the manifest again keeps the snapshots in an existing claim of that
+name.
+
 ## microVM sandboxes
 
 The chart installs the class-default SandboxConfigs: `gvisor-default` unless
@@ -95,7 +124,7 @@ go run ./cmd/ate-setup deploy sandboxconfig --sandbox-classes=microvm
 ```
 
 It assembles and verifies the assets, uploads them, and applies the same
-`microvm` SandboxConfig. On kind it uploads to the bundled RustFS bucket, so set
+`microvm` SandboxConfig. On kind it uploads to the RustFS bucket, so set
 `assetBucket: s3://ate-snapshots`. Elsewhere it uploads to
 `<bucket>-assets` in GCS, where `<bucket>` is its `--storage-bucket-name`, so set
 `assetBucket: gs://<bucket>-assets`.
@@ -119,17 +148,6 @@ Namespace grants default to an empty list, denying credential access.
 ```bash
 helm template substrate ./charts/substrate --set atenetDataPlane=envoy
 ```
-
-On OpenShift the chart leaves pod UIDs and fsGroups for the SCC to assign. It
-detects OpenShift from the cluster's API versions, which `helm template` cannot
-see, so add `--api-versions security.openshift.io/v1` when rendering for it.
-
-When you upgrade on OpenShift, remove an `anyuid` grant made for RustFS. `anyuid`
-takes priority over restricted-v2 and assigns no fsGroup, so RustFS cannot write
-a new volume. Kubelet moves existing RustFS data to the fsGroup restricted-v2
-assigns. Storage that skips that ownership change, as many NFS setups do, leaves
-the data writable only by UID 10001: keep the `anyuid` grant there, so RustFS
-still runs as that user.
 
 The separate `substrate-crds` chart mirrors `manifests/ate-install/generated/`.
 
@@ -155,13 +173,13 @@ See `values.yaml` for the full set; the important keys:
 | `sandboxConfigs.gvisor.enabled` | `true` | Install the class-default gVisor SandboxConfig, `gvisor-default` |
 | `sandboxConfigs.microvm.enabled` | `false` | Install the class-default microVM SandboxConfig, `microvm`. See "microVM sandboxes" |
 | `sandboxConfigs.microvm.assetBucket` | `""` | Bucket that holds the microVM assets, as `s3://<bucket>` or `gs://<bucket>`. Required with microVM |
-| `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
-| `ateApi.snapshotLocation` | `""` | Cluster-wide snapshot URI; defaults to `gs://<rustfs.bucket>/` with bundled RustFS |
-| `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true`. Set `objectStore.backend` in the substrate-atelet release to the same value |
+| `ateApi.snapshotLocation` | none, required | Cluster-wide snapshot URI, `gs://<bucket>/<prefix>` for both backends. Optional with the `PerTemplateSnapshotLocation` preview gate. See "Object store" |
 | `credentialProvider.enabled` | `true` | Deploy the Kubernetes Secret provider and route `k8s.io` credential URIs to it. With no provider, every credential injection fails closed |
 | `credentialProvider.namespacePolicies` | `[]` | Default-deny atespace-to-namespace grants; the chart includes get-only Secret RBAC for the provider |
 | `ateApi.actorJWTIssuer` | `https://<idp-service>.<namespace>.svc` | Issuer placed in actor JWTs; set a stable URL reachable by relying parties |
-| `objectStorePlugin.extraEnv` | `[]` | Object storage credentials/settings for the API server's object-store plugin. Set the same values in the substrate-atelet release |
+| `objectStorePlugin.extraEnv` | `[]` | Environment of the object-store plugin, which selects and configures the object store. Set the same values in the substrate-atelet release. See "Object store" |
+| `objectStorePlugin.credentialsSecret` | `""` | Secret whose keys the object-store plugin gets as environment variables. Set the same value in the substrate-atelet release |
+| `ateApi.serviceAccount.annotations` | `{}` | Annotations on the ate-api-server ServiceAccount, for workload identity. See "Object store" |
 | `objectStorePlugin.control.resources` | see `values.yaml` | Resources for the API server's object-store sidecar |
 | `ateApi.logLevel` | `info` | API server log level in its mounted config; one of `debug`, `info`, `warn`, or `error` |
 | `ateApi.authorization.bootstrapOwners` | `[]` | Global owners; empty defaults to the release's shared `ate-client` ServiceAccount |

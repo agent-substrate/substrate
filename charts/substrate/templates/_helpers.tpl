@@ -222,7 +222,7 @@ it contains "." or ":" (the containerd rule); otherwise the reference is
 docker.io-implied and the mirror is prefixed. The repository path is preserved
 either way, so a mirror copies images under their existing paths.
 
-Usage: {{ include "substrate.thirdPartyImage" (list .Values.images.rustfs .) }}
+Usage: {{ include "substrate.thirdPartyImage" (list .Values.images.agentgateway .) }}
 */}}
 {{- define "substrate.thirdPartyImage" -}}
 {{- $ref := index . 0 -}}
@@ -261,34 +261,6 @@ definition so the fallback cannot drift between pods.
 {{- ((.Values.global).imagePullPolicy) | default "IfNotPresent" -}}
 {{- end -}}
 
-{{/*
-Empty on OpenShift, whose restricted-v2 SCC assigns each pod's UID and fsGroup
-and refuses IDs outside the namespace's range.
-*/}}
-{{- define "substrate.pinIDs" -}}
-{{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}true{{ end -}}
-{{- end -}}
-
-{{/* Object storage settings shared by object-store plugins. */}}
-{{- define "substrate.storage.env" -}}
-- name: ATE_STORAGE_BACKEND
-  value: {{ .Values.atelet.storageBackend | quote }}
-{{- if .Values.rustfs.enabled }}
-- name: AWS_REGION
-  value: us-east-1
-- name: AWS_ENDPOINT_URL
-  value: http://{{ include "substrate.fullname" (list "rustfs" .) }}.{{ .Release.Namespace }}.svc:9000
-- name: AWS_S3_USE_PATH_STYLE
-  value: "true"
-- name: AWS_ACCESS_KEY_ID
-  value: {{ .Values.rustfs.accessKey | quote }}
-- name: AWS_SECRET_ACCESS_KEY
-  value: {{ .Values.rustfs.secretKey | quote }}
-{{- end }}
-{{- with .Values.objectStorePlugin.extraEnv }}
-{{ toYaml . }}
-{{- end }}
-{{- end }}
 
 {{/*
 The egress gateway's credential providers as a JSON list of {name, address,

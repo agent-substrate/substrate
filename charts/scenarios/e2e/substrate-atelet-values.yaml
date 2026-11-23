@@ -16,8 +16,7 @@
 # substrate-atelet values for a kind cluster that hack/create-kind-cluster.sh
 # creates. The settings match the kind overlay in manifests/ate-install/kind.
 #
-# Before the install, create the RustFS credentials Secret, as the substrate
-# chart README shows.
+# Before the install, run hack/install-rustfs.sh.
 
 # Pull worker images through the kind registry, and log at debug level for
 # development and e2e tests.
@@ -30,10 +29,15 @@ atelet:
   - --snapshot-upload-delay=2s
   - --snapshot-detach-delay=30s
 
-# Use the RustFS that the substrate chart bundles.
-objectStore:
-  backend: s3
-  endpoint: http://rustfs.ate-system.svc:9000
-  region: us-east-1
-  pathStyle: true
+# Use the bundled RustFS.
+objectStorePlugin:
   credentialsSecret: rustfs-credentials
+  extraEnv:
+  - name: ATE_STORAGE_BACKEND
+    value: s3
+  - name: AWS_REGION
+    value: us-east-1
+  - name: AWS_ENDPOINT_URL
+    value: http://rustfs.ate-system.svc:9000
+  - name: AWS_S3_USE_PATH_STYLE
+    value: "true"

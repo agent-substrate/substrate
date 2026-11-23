@@ -17,9 +17,9 @@
 # hack/create-kind-cluster.sh creates on a host with /dev/kvm. The other
 # settings match the kind scenario.
 #
-# Before the install, run hack/install-postgres.sh --kind. The microVM assets
-# must be in the RustFS bucket: see "microVM sandboxes" in the substrate chart
-# README.
+# Before the install, run hack/install-postgres.sh --kind and
+# hack/install-rustfs.sh. The microVM assets must be in the RustFS bucket: see
+# "microVM sandboxes" in the substrate chart README.
 
 atenetDataPlane: envoy
 
@@ -28,7 +28,22 @@ postgres:
   clientCertificates:
     enabled: true
 
-# atelet fetches the microVM assets from the bundled RustFS bucket.
+# Use the bundled RustFS. The S3 backend also takes gs:// URIs.
+ateApi:
+  snapshotLocation: gs://ate-snapshots/
+objectStorePlugin:
+  credentialsSecret: rustfs-credentials
+  extraEnv:
+  - name: ATE_STORAGE_BACKEND
+    value: s3
+  - name: AWS_REGION
+    value: us-east-1
+  - name: AWS_ENDPOINT_URL
+    value: http://rustfs.ate-system.svc:9000
+  - name: AWS_S3_USE_PATH_STYLE
+    value: "true"
+
+# atelet fetches the microVM assets from the RustFS bucket.
 sandboxConfigs:
   microvm:
     enabled: true
