@@ -176,10 +176,10 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 // SandboxClassMismatch. Its assets are never fetched.
 func wrongClassSandboxConfig(name string, poolClass atev1.SandboxClass) *atev1.SandboxConfig {
 	class := atev1.SandboxClassGvisor
-	assets := gvisorSecondReleaseAssets
+	dummy := atev1.AssetFile{URL: "gs://dummy/asset", SHA256: strings.Repeat("a", 64)}
+	assets := map[string]map[string]atev1.AssetFile{"amd64": {"gvisor": dummy}}
 	if poolClass == atev1.SandboxClassGvisor {
 		class = atev1.SandboxClassMicroVM
-		dummy := atev1.AssetFile{URL: "gs://dummy/asset", SHA256: strings.Repeat("a", 64)}
 		assets = map[string]map[string]atev1.AssetFile{
 			"amd64": {"cloud-hypervisor": dummy, "virtiofsd": dummy, "kata-kernel": dummy, "kata-image": dummy},
 		}

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -151,10 +152,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q and %q both report uid %q — actors are not distinct", id, other, got.UID)
 		}
 		seenUIDs[got.UID] = id
+		families, err := actornet.IPFamiliesForPodIPs(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
+		if err != nil {
+			t.Fatalf("actor %q: worker Pod IPs: %v", id, err)
+		}
 
 		// Resolved from the /etc/hosts the runtime writes, not DNS: images
 		// commonly ship an empty one.
-		for host, want := range map[string]string{"localhost": "127.0.0.1", got.Hostname: "169.254.17.2"} {
+		for host, want := range map[string]string{"localhost": "127.0.0.1", got.Hostname: families.ActorVethIP()} {
 			if addrs, err := lookup(ctx, rc, id, host); err != nil || !slices.Contains(addrs, want) {
 				t.Errorf("actor %q: lookup %q = %v, %v; want %s", id, host, addrs, err, want)
 			}
