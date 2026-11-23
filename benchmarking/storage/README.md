@@ -10,6 +10,8 @@ answers these questions:
    out first?
 3. **Build:** how long does a coding agent take to clone and build the Linux
    kernel on a volume, alone and with 10 actors at once?
+4. **Git repositories:** how long do common git commands take on a volume
+   with the full Kubernetes or Linux history, before and after a resume?
 
 The steps work with any CSI driver that Substrate supports. Only the
 StorageClass changes between backends. The example uses
@@ -20,8 +22,8 @@ StorageClass changes between backends. The example uses
 | Filestore agent volumes | [manifests/backends/filestore](manifests/backends/filestore/README.md) | [storage_class.yaml](manifests/backends/filestore/storage_class.yaml) |
 
 Scenarios 1 and 2 call the Substrate API through
-[`wakestorm`](cmd/wakestorm/README.md), which times every call. Scenario 3
-also runs commands in the actors with `wakestorm -phase script`.
+[`wakestorm`](cmd/wakestorm/README.md), which times every call. Scenarios 3
+and 4 also run commands in the actors with `wakestorm -phase script`.
 
 ## Supported runtimes
 
@@ -33,11 +35,11 @@ also runs commands in the actors with `wakestorm -phase script`.
 ## Prerequisites
 
 - Install `gcloud`, `kubectl`, `kubectl ate`, `go`, `jq` and `envsubst`.
-  Scenario 3 also needs `docker` to build its actor image.
+  Scenarios 3 and 4 also need `docker` to build their actor image.
 
 - Plan for one node pool of `c3-standard-4` nodes: two infra nodes plus one
-  node per worker (see [Size the nodes](#3-size-the-nodes)). Scenario 3 adds a
-  node pool with one `c3-standard-44`.
+  node per worker (see [Size the nodes](#3-size-the-nodes)). Scenarios 3 and 4
+  add a node pool with one `c3-standard-44`.
 
 - For Filestore, get volume pool access for your project, as the
   [Filestore setup](manifests/backends/filestore/README.md) describes.
@@ -304,8 +306,8 @@ StorageClass and read ahead as scenario 1.
 
 ## Coding scenario setup
 
-Scenario 3 runs a coding agent's commands in actors with 10 GiB volumes on a
-`c3-standard-44` node. Do these steps after the installation steps above.
+Scenarios 3 and 4 run a coding agent's commands in actors with 10 GiB volumes
+on a `c3-standard-44` node. Do these steps after the installation steps above.
 
 ### 1. Let wakestorm reach the actors
 
@@ -363,7 +365,7 @@ export CODING_IMAGE="${CODING_REPO}@$(go run github.com/google/go-containerregis
 Actors clone from a mirror in the cluster, so GitHub's speed doesn't change the
 results. It runs on an infra node from
 [step 5](#5-keep-the-control-plane-off-the-worker-nodes) and fetches the
-Linux tree once, which takes about 5 minutes:
+repositories once, which takes about 20 minutes:
 
 ```bash
 kubectl create configmap git-mirror-scripts -n benchmarking \
@@ -374,10 +376,14 @@ kubectl apply -f benchmarking/storage/manifests/git-mirror/git-mirror.yaml
 kubectl wait --for=condition=Available deployment/git-mirror -n benchmarking --timeout=60m
 ```
 
-### 6. Create the actor template
+### 6. Create the actor templates
+
+Scenario 3 uses `coding-build` and scenario 4 uses `coding-git`:
 
 ```bash
 TEMPLATE_NAME=coding-build ACTOR_CPU_MILLICORES=3000 ACTOR_MEMORY_BYTES=8589934592 \
+  envsubst < benchmarking/storage/manifests/coding-template.yaml | kubectl ate --preview create actor-template -f -
+TEMPLATE_NAME=coding-git ACTOR_CPU_MILLICORES=4000 ACTOR_MEMORY_BYTES=8589934592 \
   envsubst < benchmarking/storage/manifests/coding-template.yaml | kubectl ate --preview create actor-template -f -
 ```
 
@@ -435,6 +441,58 @@ Environment: Substrate at `94e0a26a` with `7be78c4c` applied, gVisor
 Filestore pool of one regional 4 TiB instance with the StorageClass options
 and read ahead from scenario 1.
 
+## Scenario 4: Git repositories
+
+One actor clones a repository with its full history, checks out an older
+release, edits and commits 10 files, and runs `git grep` twice. After clone,
+checkout, edit and commit, and the second grep, the actor suspends, stays idle
+and resumes. `git status` then runs twice, cold and warm, except before
+`git grep`, so the first grep starts cold.
+
+| Input | Value |
+|---|---|
+| Worker node | One `c3-standard-44` with one worker, from [coding setup](#coding-scenario-setup) |
+| Actors | 1 |
+| Actor resources | 4 vCPU, 8 GiB memory |
+| Volume | 10 GiB from `${CODING_STORAGE_CLASS}` |
+| Repositories | Kubernetes (older release `release-1.28`, edits `*.go` files) and Linux (`v6.6`, `*.c` files), from the git mirror over smart HTTP |
+| Steps | [gitrepos.steps](scenarios/gitrepos.steps) |
+| Git settings | `checkout.workers=20` (`CHECKOUT_WORKERS`). `CHECK_STAT=minimal` adds `core.checkStat=minimal` |
+| Suspend mode | `DURABILITY_MODE_SYNCHRONOUS` |
+| Idle between suspend and resume | 30 s (`IDLE`) |
+| Client | `wakestorm` on your machine |
+
+```bash
+benchmarking/storage/scenarios/gitrepos.sh /tmp/git-kubernetes kubernetes
+benchmarking/storage/scenarios/gitrepos.sh /tmp/git-linux linux
+CHECK_STAT=minimal benchmarking/storage/scenarios/gitrepos.sh /tmp/git-linux-checkstat linux
+```
+
+If `wakestorm` is killed before it deletes its actor, run
+`go run ./benchmarking/storage/cmd/wakestorm -phase delete -prefix git-<repo>`.
+
+### Reference results
+
+One run per column. Suspend, resume and `git status` show the P50 of the 3 or
+4 times each ran in that run. The other steps ran once.
+
+| Step | Kubernetes | Kubernetes, `checkStat=minimal` | Linux | Linux, `checkStat=minimal` |
+|---|---|---|---|---|
+| `git clone` | 202 s | 204 s | 727 s | 715 s |
+| `git checkout` of the older release | 106 s | 113 s | 320 s | 311 s |
+| Edit and commit 10 files | 4.81 s | 5.49 s | 14.0 s | 14.5 s |
+| `git grep` after resume | 20.4 s | 21.3 s | 66.4 s | 70.9 s |
+| `git grep` again | 8.34 s | 8.96 s | 26.1 s | 25.9 s |
+| SuspendActor / ResumeActor | 0.46 / 0.14 s | 0.51 / 0.14 s | 0.69 / 0.16 s | 0.71 / 0.14 s |
+| `git status` after resume | 17.6 s | 19.4 s | 47.4 s | 42.3 s |
+| `git status` again | 7.11 s | 7.82 s | 16.7 s | 16.7 s |
+
+The repositories are 1.4 GiB (Kubernetes) and 6.2 GiB (Linux) of git history.
+`core.checkStat=minimal` changes `git status` by about 10% at most, in both
+directions.
+
+Environment: the same cluster, node, worker and StorageClass as scenario 3.
+
 ## Troubleshooting
 
 ### Common failure modes
@@ -483,6 +541,7 @@ and read ahead from scenario 1.
 go run ./benchmarking/storage/cmd/wakestorm -phase delete -prefix lat
 go run ./benchmarking/storage/cmd/wakestorm -phase delete -prefix density
 kubectl ate --preview delete actor-template coding-build -a benchmark-workloads
+kubectl ate --preview delete actor-template coding-git -a benchmark-workloads
 kubectl delete -f benchmarking/storage/manifests/git-mirror/git-mirror.yaml
 kubectl delete configmap git-mirror-scripts -n benchmarking
 kubectl delete storageclass "${CODING_STORAGE_CLASS}"

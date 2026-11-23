@@ -1,0 +1,21 @@
+# Scenario 4: common git commands on a real repository. wakestorm -phase
+# script runs each line in the actor with sh -c. gitrepos.sh sets MIRROR,
+# REPO, OLD_REF and SRC_GLOB. After clone, checkout, edit-commit and the
+# second grep, the actor suspends, stays idle and resumes. git status then
+# runs twice, cold and warm, except before git grep, so grep starts on a cold
+# cache.
+run clone git clone --quiet "$MIRROR/$REPO.git" "/data/$REPO"
+cycle
+run git-status-after-resume git -C "/data/$REPO" status --porcelain > /dev/null
+run git-status-again git -C "/data/$REPO" status --porcelain > /dev/null
+run checkout git -C "/data/$REPO" checkout -q -B bench-old "$OLD_REF"
+cycle
+run git-status-after-resume git -C "/data/$REPO" status --porcelain > /dev/null
+run git-status-again git -C "/data/$REPO" status --porcelain > /dev/null
+run edit-commit cd "/data/$REPO" && git ls-files "$SRC_GLOB" | awk 'NR % 997 == 0' | head -10 | while read -r f; do echo '// bench edit' >> "$f"; done && git commit -q -am 'bench edit'
+cycle
+run git-grep-after-resume git -C "/data/$REPO" grep -I -c TODO > /dev/null
+run git-grep-again git -C "/data/$REPO" grep -I -c TODO > /dev/null
+cycle
+run git-status-after-resume git -C "/data/$REPO" status --porcelain > /dev/null
+run git-status-again git -C "/data/$REPO" status --porcelain > /dev/null

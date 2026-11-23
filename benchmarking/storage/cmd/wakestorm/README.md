@@ -72,7 +72,8 @@ which the actor image must serve on port 80. `wakestorm` reaches it through
 The step time comes from the process start and exit times in the actor, so the
 connection adds nothing to it.
 
-[build.steps](../../scenarios/build.steps) is an example.
+`build.steps` and `gitrepos.steps` in [scenarios](../../scenarios) are
+examples.
 
 ## Connecting
 

@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # Git mirror for the coding scenarios, so clones never depend on GitHub's
-# speed or rate limits. fetch.sh fetches the repository once, and serve.sh
-# serves it. Both come from the git-mirror-scripts ConfigMap.
+# speed or rate limits. fetch.sh fetches the repositories once, and serve.sh
+# serves them. Both come from the git-mirror-scripts ConfigMap.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -24,7 +24,7 @@ spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 10Gi
+      storage: 40Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -60,7 +60,7 @@ spec:
         readinessProbe:
           httpGet: {path: "/linux-head.git/info/refs?service=git-upload-pack", port: 80}
         resources:
-          requests: {cpu: 100m, memory: 256Mi}
+          requests: {cpu: "2", memory: 6Gi}
         volumeMounts:
         - {name: srv, mountPath: /srv, readOnly: true}
         - {name: scripts, mountPath: /scripts}
