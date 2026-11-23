@@ -26,6 +26,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
+
+	"go.ate.dev/substrate/internal/apierror"
 )
 
 func TestUnaryServerInterceptor(t *testing.T) {
@@ -50,7 +52,7 @@ func TestUnaryServerInterceptor(t *testing.T) {
 				ctx = metadata.NewIncomingContext(ctx, md)
 			}
 			var got bool
-			_, err := UnaryServerInterceptor(ctx, nil, &grpc.UnaryServerInfo{}, func(ctx context.Context, _ any) (any, error) {
+			_, err := UnaryServerInterceptor(nil)(ctx, nil, &grpc.UnaryServerInfo{}, func(ctx context.Context, _ any) (any, error) {
 				got = !IsOptedOut(ctx)
 				return nil, nil
 			})
@@ -59,6 +61,44 @@ func TestUnaryServerInterceptor(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("opted in (!IsOptedOut()) = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnaryServerInterceptorMethodGates(t *testing.T) {
+	InitForTestFake(t, []Gate{"A", "B"}, "A")
+	methodGates := map[string]Gate{
+		"/test.Svc/GatedByA": "A",
+		"/test.Svc/GatedByB": "B",
+	}
+	for _, tc := range []struct {
+		name     string
+		method   string
+		optIn    bool
+		wantCode codes.Code
+	}{
+		{name: "ungated method, no opt-in", method: "/test.Svc/Ungated", wantCode: codes.OK},
+		{name: "enabled gate, opted in", method: "/test.Svc/GatedByA", optIn: true, wantCode: codes.OK},
+		{name: "enabled gate, no opt-in", method: "/test.Svc/GatedByA", wantCode: codes.FailedPrecondition},
+		{name: "disabled gate, opted in", method: "/test.Svc/GatedByB", optIn: true, wantCode: codes.FailedPrecondition},
+		{name: "disabled gate, no opt-in", method: "/test.Svc/GatedByB", wantCode: codes.FailedPrecondition},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			if tc.optIn {
+				ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(Header, "true"))
+			}
+			called := false
+			_, err := UnaryServerInterceptor(methodGates)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: tc.method}, func(context.Context, any) (any, error) {
+				called = true
+				return nil, nil
+			})
+			if got := apierror.Code(err); got != tc.wantCode {
+				t.Errorf("code = %v, want %v (err: %v)", got, tc.wantCode, err)
+			}
+			if wantCalled := tc.wantCode == codes.OK; called != wantCalled {
+				t.Errorf("handler called = %v, want %v", called, wantCalled)
 			}
 		})
 	}

@@ -20,6 +20,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+
+	"go.ate.dev/substrate/internal/apierror"
 )
 
 // Header is the gRPC metadata key with which an API client says it intends
@@ -77,9 +79,18 @@ func optOutIfNotOptIn(ctx context.Context) context.Context {
 	return ContextWithOptOut(ctx)
 }
 
-// UnaryServerInterceptor restricts each request that did not send Header.
-func UnaryServerInterceptor(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	return handler(optOutIfNotOptIn(ctx), req)
+// UnaryServerInterceptor returns an interceptor that restricts each request
+// that did not send Header. It rejects a call to a method in methodGates,
+// keyed by full method name, unless that method's gate is enabled for the
+// request.
+func UnaryServerInterceptor(methodGates map[string]Gate) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		ctx = optOutIfNotOptIn(ctx)
+		if gate, ok := methodGates[info.FullMethod]; ok && !IsEnabledFor(ctx, gate) {
+			return nil, apierror.FailedPrecondition("%s requires the %s preview gate and the %s header", info.FullMethod, gate, Header)
+		}
+		return handler(ctx, req)
+	}
 }
 
 // StreamServerInterceptor restricts each stream that did not send Header.

@@ -78,6 +78,22 @@ them while doing system work, such as deleting an actor, and gating them can
 leave objects that cannot be cleaned up after a gate is turned off.  This is
 subtle and will require careful thinking when implementing a gated feature.
 
+## Gating RPC methods
+
+Name the gate in the method's annotation:
+
+```proto
+  rpc ResizeActor(ResizeActorRequest) returns (ResizeActorResponse) {
+    option (method) = {
+      resource : "Actor"
+      preview_gate : "MyFeature"
+    };
+  }
+```
+
+Calls to a gated method fail with `FAILED_PRECONDITION` when the gate is off
+for the request. Streaming methods cannot be gated.
+
 ## Gating behavior in code
 
 For a check made while handling a user request, use the context-aware form:
@@ -147,5 +163,4 @@ make the feature always on (GA) or always off (removed). Then delete the
 `preview_gate` options, `ifDisabled` tags, `IsEnabled`/`IsEnabledFor` checks,
 and `RequirePreview` calls.
 
-<!-- TODO: how do we gate a new RPC method or service? -->
 <!-- TODO: how do we gate a new feature in the CLI? -->
