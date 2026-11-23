@@ -38,6 +38,11 @@ import (
 const (
 	markerConcurrentA = dataMount + "/concurrent-marker-a"
 	markerConcurrentB = dataMount + "/concurrent-marker-b"
+
+	// concurrentPool is the WorkerPool concurrent-a-pool.yaml.tmpl deploys, and
+	// concurrentPoolReplicas its replicas. Keep both in sync with the manifest.
+	concurrentPool         = "concurrent"
+	concurrentPoolReplicas = 2
 )
 
 type fetchResponse struct {
@@ -67,6 +72,12 @@ func TestConcurrentActorIsolation(t *testing.T) {
 	// atespaces so the router must disambiguate live concurrent actors by
 	// (atespace, actor) rather than actor name alone.
 	const actorName = "actor-a"
+
+	// The fixture is ready as soon as one worker has built the golden
+	// snapshot. A worker hosts many actors, so if the second worker has not
+	// registered yet, both actors land on the first. Wait for both workers:
+	// the scheduler then places the second actor on the idle one.
+	waitForActiveWorkers(t, ctx, clients, ns.a, concurrentPool, concurrentPoolReplicas)
 
 	createAndResumeActor(t, ctx, clients, ns.a, actorName)
 	createAndResumeActor(t, ctx, clients, ns.b, actorName)
@@ -157,16 +168,31 @@ func TestConcurrentActorIsolation(t *testing.T) {
 		// reach an in-cluster HTTP server through egress, so that failure to
 		// reach worker B is attributable to the worker NetworkPolicy rather
 		// than egress being off.
+		//
+		// The control is a pod in the worker pods' own namespace, dialed by
+		// pod IP exactly as worker B is below. The worker NetworkPolicy
+		// selects pods by their ate.dev/worker-pool label, which this pod
+		// does not carry, so that policy is the one difference between the
+		// dial that must succeed and the dials that must not.
 		e2e.EnsureEgressPolicy(t, ctx, clients, &ateapi.ObjectRef{Atespace: ns.a, Name: actorName}, e2e.EgressAllowAll()...)
 
-		controlTarget := e2e.DeployServerPod(t, ctx, e2e.ServerPod{
-			Name:       "egress-control",
+		const controlName, controlPort = "egress-control", 8080
+		e2e.DeployServerPod(t, ctx, e2e.ServerPod{
+			Name:       controlName,
+			Namespace:  ns.a,
 			ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 			Args:       []string{"http"},
 			Port:       80,
-			TargetPort: 8080,
+			TargetPort: controlPort,
 		})
-		controlURL := fmt.Sprintf("http://%s/healthz", controlTarget.Address())
+		controlPod, err := clients.K8s.CoreV1().Pods(ns.a).Get(ctx, controlName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("getting control pod %s/%s: %v", ns.a, controlName, err)
+		}
+		if controlPod.Status.PodIP == "" {
+			t.Fatalf("control pod %s/%s has no PodIP", ns.a, controlName)
+		}
+		controlURL := fmt.Sprintf("http://%s:%d/healthz", controlPod.Status.PodIP, controlPort)
 		controlResp := probeFetchUntilReached(t, ctx, rc, refA, controlURL)
 		if controlResp.Error != "" || controlResp.Status != "200" {
 			t.Fatalf("control: actor %s egress fetch to %s = %+v, want status 200 and no error — actor egress is not working, so the worker-pod dial check below would be vacuous",
@@ -209,6 +235,16 @@ func TestConcurrentActorIsolation(t *testing.T) {
 	t.Run("ConcurrentDurableMountIsolation", func(t *testing.T) {
 		t.Log("Two concurrent actors must not read or write each other's durable-dir volume")
 
+		// Controls. /readfile has to report a missing file as an error, or
+		// the cross-reads below pass on anything; and each actor has to see
+		// the file it wrote itself.
+		for _, ref := range []resources.ActorRef{refA, refB} {
+			if got := readFile(t, ctx, rc, ref, neverWritten); got.Error == "" {
+				t.Fatalf("control: actor %s read %s, which nothing ever created, and reported no error (content %q) — /readfile does not report misses as errors, so the negative assertions here would pass vacuously",
+					ref, neverWritten, got.Content)
+			}
+		}
+
 		writeFile(t, ctx, rc, refA, markerConcurrentA)
 		writeFile(t, ctx, rc, refB, markerConcurrentB)
 
@@ -246,6 +282,43 @@ func deployConcurrentAtespaces(t *testing.T, ctx context.Context, clients *e2e.C
 		t.Fatalf("both fixtures rendered to atespace %q", a)
 	}
 	return atespaces{a: a, b: b}
+}
+
+// waitForActiveWorkers blocks until pool in namespace has at least want
+// workers registered and ACTIVE, the state the scheduler places actors on.
+func waitForActiveWorkers(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, pool string, want int) {
+	t.Helper()
+	const timeout = 2 * time.Minute
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		var states []string
+		active := 0
+		resp, err := clients.SubstrateAPI.ListWorkers(ctx, &ateapi.ListWorkersRequest{})
+		if err == nil {
+			for _, w := range resp.GetWorkers() {
+				if w.GetWorkerNamespace() != namespace || w.GetWorkerPool() != pool {
+					continue
+				}
+				state := w.GetStatus().GetState()
+				states = append(states, fmt.Sprintf("%s=%v", w.GetWorkerPod(), state))
+				if state == ateapi.WorkerState_WORKER_STATE_ACTIVE {
+					active++
+				}
+			}
+			if active >= want {
+				t.Logf("pool %s/%s has %d ACTIVE workers: %v", namespace, pool, active, states)
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out after %v waiting for pool %s/%s to have %d ACTIVE workers (workers %v, err %v)",
+				timeout, namespace, pool, want, states, err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 func getWorkerPodIP(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, actorName string) string {
@@ -333,13 +406,17 @@ func probeFetchUntilReached(t *testing.T, ctx context.Context, rc *e2e.RouterCli
 // the downstream HTTP connection and dials the target IP:port upstream. When
 // the worker's NetworkPolicy drops the SYN packets from atenet-egress, Envoy's
 // upstream dial times out and returns HTTP 503 ("connection timeout" /
-// "upstream connect error") or a transport error (got.Error != ""). By
-// contrast, if the packet reaches the worker pod, port 8080 (/readyz) returns
-// 200 and ports 443/8443 (atunnel TLS listeners) return 400 ("Client sent an
-// HTTP request to an HTTPS server").
+// "upstream connect error"). If the gateway takes longer than the probe's own
+// client timeout to give up, the probe reports that timeout as an error
+// instead. Any other probe error is not evidence of the block: a refused or
+// reset connection, or a failure on the way to the gateway, is an unrelated
+// fault and must not pass for the NetworkPolicy. By contrast, if the packet
+// reaches the worker pod, port 8080 (/readyz) returns 200 and ports 443/8443
+// (atunnel TLS listeners) return 400 ("Client sent an HTTP request to an
+// HTTPS server").
 func isBlockedWorkerDial(got fetchResponse) bool {
 	if got.Error != "" {
-		return true
+		return strings.Contains(got.Error, "context deadline exceeded") || strings.Contains(got.Error, "Client.Timeout")
 	}
 	if (got.Status == "502" || got.Status == "503" || got.Status == "504") &&
 		(strings.Contains(got.Body, "connection timeout") || strings.Contains(got.Body, "upstream connect error")) {
