@@ -31,7 +31,8 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource)
 	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
 
 	netC := netConn{
-		dialer: *r.dialer,
+		dialer:       *r.dialer,
+		listenPacket: r.listenPacket,
 	}
 
 	if err := netns.Do(ctx, ns, func(context.Context) error {
@@ -50,14 +51,6 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource)
 	}); err != nil {
 		return nil, err
 	}
-
-	egressUDP, err := net.ListenPacket("udp", ":0")
-	if err != nil {
-		_ = netC.udp.Close()
-		_ = netC.tcpListener.Close()
-		return nil, fmt.Errorf("while opening the worker DNS egress socket: %w", err)
-	}
-	netC.egressUDP = egressUDP
 
 	return r.serveOn(ctx, &netC, policy)
 }

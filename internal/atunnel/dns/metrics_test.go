@@ -74,7 +74,7 @@ func TestQueriesCountsPolicyDecisions(t *testing.T) {
 	}
 	lim := newLimiter()
 	allow := func(q dnsmessage.Question) bool { return q.Name.String() != "blocked.example.com." }
-	h := newDNSHandler(newPendingRequests(lim), lim, allow, m)
+	h := newDNSHandler(newPendingRequests(lim, newFakeUDPConnPool()), lim, allow, m)
 	upstreams := []string{"10.96.0.10:53"}
 
 	allowed, _ := dnsQueryForName(t, 1, "example.com.")
