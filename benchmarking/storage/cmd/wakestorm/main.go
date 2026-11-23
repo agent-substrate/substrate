@@ -22,6 +22,9 @@
 //   - lifecycle: runs -repeat cycles of create, first resume, suspend, resume
 //     and delete on -n new actors each.
 //   - delete: deletes every actor with -prefix and waits until they are gone.
+//   - script: on -n actors at once, creates each actor, resumes it, runs the
+//     -script steps in it (shell commands, and suspend and resume cycles),
+//     and deletes it. Commands run through ate-env-guest in the actor.
 //
 // Usage:
 //
@@ -45,7 +48,7 @@ import (
 )
 
 var (
-	flagPhase           = flag.String("phase", "", "create | lifecycle | delete")
+	flagPhase           = flag.String("phase", "", "create | lifecycle | delete | script")
 	flagN               = flag.Int("n", 1, "number of actors")
 	flagStart           = flag.Int("start", 0, "index of the first actor name (prefix-NNNN)")
 	flagPrefix          = flag.String("prefix", "ws", "actor name prefix")
@@ -67,13 +70,23 @@ var (
 	flagContext         = flag.String("context", "", "kubeconfig context")
 	flagEndpoint        = flag.String("endpoint", "", "ateapi endpoint; empty port-forwards")
 	flagTokenFile       = flag.String("token-file", "", "bearer token file")
+	flagScript          = flag.String("script", "", "with -phase script, the steps file")
+	flagIdle            = flag.Duration("idle", 60*time.Second, "with -phase script, how long an actor stays suspended in each cycle")
+	flagEnv             stringList
+	flagAllowHTTP       stringList
 )
+
+func init() {
+	flag.Var(&flagEnv, "env", "with -phase script, KEY=VALUE set for every command (repeatable)")
+	flag.Var(&flagAllowHTTP, "allow-http", "with -phase script, HOST:PORT the actor may reach over HTTP (repeatable)")
+}
 
 type runner struct {
 	cli     *ateclient.Client
 	retry   retryPolicy
 	outDir  string
 	started time.Time
+	poll    time.Duration // how often -phase script checks a running command
 
 	mu     sync.Mutex
 	calls  []callRecord
@@ -114,6 +127,7 @@ func main() {
 		},
 		outDir:  *flagOut,
 		started: time.Now(),
+		poll:    5 * time.Second,
 		actors:  actorNames(*flagPrefix, *flagStart, *flagN),
 	}
 	logf("out=%s phase=%s n=%d atespace=%s template=%s/%s", r.outDir, *flagPhase, *flagN, *flagAtespace, *flagTemplateSpace, *flagTemplate)
@@ -126,6 +140,21 @@ func main() {
 	case "lifecycle":
 		r.lifecycle(ctx)
 		r.printLifecycle()
+	case "script":
+		steps, err := readScript(*flagScript)
+		if err != nil {
+			fatal(err)
+		}
+		env, err := parseEnv(flagEnv)
+		if err != nil {
+			fatal(err)
+		}
+		rules, err := egressRules(flagAllowHTTP)
+		if err != nil {
+			fatal(err)
+		}
+		r.script(ctx, steps, env, rules)
+		r.printSummary()
 	case "delete":
 		r.loadExisting(ctx)
 		if len(r.actors) == 0 {
@@ -134,7 +163,7 @@ func main() {
 		r.delete(ctx)
 		r.printSummary()
 	default:
-		fatal(fmt.Errorf("-phase must be create, lifecycle or delete, got %q", *flagPhase))
+		fatal(fmt.Errorf("-phase must be create, lifecycle, delete or script, got %q", *flagPhase))
 	}
 	if err := r.save(); err != nil {
 		fatal(err)

@@ -83,15 +83,16 @@ func (r *runner) resumeCall(ctx context.Context, name string) (int, error) {
 	})
 }
 
-// suspendCall suspends asynchronously: SuspendActor returns once the snapshot
-// is captured on the node, and the upload to durable storage continues in the
-// background. This is the API default, set here so the measurement does not
+// suspendCall suspends with the given mode. The lifecycle phase uses
+// asynchronous, the API default, which returns once the snapshot is captured
+// on the node. The script phase uses synchronous, which also waits for the
+// upload to durable storage. The mode is always set, so a measurement doesn't
 // change if the default does.
-func (r *runner) suspendCall(ctx context.Context, name string) (int, error) {
+func (r *runner) suspendCall(ctx context.Context, name string, mode ateapipb.DurabilityMode) (int, error) {
 	return r.retry.do(ctx, false, func() error {
 		_, err := r.cli.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 			Actor:   r.ref(name),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Options: &ateapipb.SuspendOptions{Mode: mode},
 		})
 		return err
 	})

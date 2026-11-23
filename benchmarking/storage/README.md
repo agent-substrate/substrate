@@ -3,11 +3,13 @@
 ## Overview
 
 This guide measures actors that use external volumes on Agent Substrate. It
-answers two questions:
+answers these questions:
 
 1. **Latency:** how fast does one actor with a volume suspend and resume?
 2. **Density:** how many actors with volumes fit on one node, and what runs
    out first?
+3. **Build:** how long does a coding agent take to clone and build the Linux
+   kernel on a volume, alone and with 10 actors at once?
 
 The steps work with any CSI driver that Substrate supports. Only the
 StorageClass changes between backends. The example uses
@@ -17,8 +19,9 @@ StorageClass changes between backends. The example uses
 |---|---|---|
 | Filestore agent volumes | [manifests/backends/filestore](manifests/backends/filestore/README.md) | [storage_class.yaml](manifests/backends/filestore/storage_class.yaml) |
 
-Both scenarios call the Substrate API through
-[`wakestorm`](cmd/wakestorm/README.md), which times every call.
+Scenarios 1 and 2 call the Substrate API through
+[`wakestorm`](cmd/wakestorm/README.md), which times every call. Scenario 3
+also runs commands in the actors with `wakestorm -phase script`.
 
 ## Supported runtimes
 
@@ -30,9 +33,11 @@ Both scenarios call the Substrate API through
 ## Prerequisites
 
 - Install `gcloud`, `kubectl`, `kubectl ate`, `go`, `jq` and `envsubst`.
+  Scenario 3 also needs `docker` to build its actor image.
 
 - Plan for one node pool of `c3-standard-4` nodes: two infra nodes plus one
-  node per worker (see [Size the nodes](#3-size-the-nodes)).
+  node per worker (see [Size the nodes](#3-size-the-nodes)). Scenario 3 adds a
+  node pool with one `c3-standard-44`.
 
 - For Filestore, get volume pool access for your project, as the
   [Filestore setup](manifests/backends/filestore/README.md) describes.
@@ -99,7 +104,7 @@ Resize the node pool to `NODES` plus two infra nodes. Pin the autoscaler first
 so it does not move actors during a run:
 
 ```bash
-export NODES=1          # one worker node for both scenarios
+export NODES=1          # one worker node for scenarios 1 and 2
 export NODE_POOL=<node-pool>
 gcloud container node-pools update "${NODE_POOL}" --cluster "${CLUSTER}" --zone "${ZONE}" --project "${PROJECT_ID}" \
   --enable-autoscaling --min-nodes $((NODES + 2)) --max-nodes $((NODES + 2)) --quiet
@@ -127,7 +132,7 @@ kubectl patch workerpool benchmark-worker -n benchmark-workloads --type merge -p
   "resources":{"requests":{"cpu":"2","memory":"1Gi"},"limits":{"cpu":"128","memory":"256Gi"}}}}}'
 ```
 
-Create the `benchmark` atespace, where the verification and both scenarios put
+Create the `benchmark` atespace, where the verification and every scenario put
 their actors:
 
 ```bash
@@ -297,6 +302,139 @@ Environment: Substrate at `905e2a65`, gVisor `release-20261102.0`, one worker
 on one `c3-standard-4` in `us-west1-c` plus two infra nodes, and the same pool,
 StorageClass and read ahead as scenario 1.
 
+## Coding scenario setup
+
+Scenario 3 runs a coding agent's commands in actors with 10 GiB volumes on a
+`c3-standard-44` node. Do these steps after the installation steps above.
+
+### 1. Let wakestorm reach the actors
+
+`wakestorm -phase script` runs commands through `atenet-router`, the way
+`kubectl ate proxy actor` does. Run the install command from
+[step 1](#1-install-agent-substrate) again with this flag added:
+`--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client`.
+
+### 2. Add the node and move the worker
+
+```bash
+gcloud container node-pools create coding --cluster "${CLUSTER}" --zone "${ZONE}" --project "${PROJECT_ID}" \
+  --machine-type c3-standard-44 --num-nodes 1 --node-labels bench-role=coding --quiet
+kubectl patch workerpool benchmark-worker -n benchmark-workloads --type merge -p '{"spec":{"template":{"nodeAffinity":{
+  "requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[
+  {"matchExpressions":[{"key":"bench-role","operator":"In","values":["coding"]}]}]}}}}}'
+kubectl get pods -n benchmark-workloads -l ate.dev/worker-pool=benchmark-worker -o wide
+```
+
+The worker should run on the new node. The read ahead DaemonSet from the
+backend setup also runs there.
+
+### 3. Create a pool of 10 GiB volumes
+
+Each volume is the pool's `defaultVolumeQuotaMib`, so the coding scenarios
+need their own pool. Create it as in the
+[Filestore setup](manifests/backends/filestore/README.md#2-create-a-volume-pool)
+with `defaultVolumeQuotaMib` set to 10240, then its StorageClass:
+
+```bash
+export CODING_POOL=<coding-volume-pool-name>
+export CODING_STORAGE_CLASS=storage-bench-coding
+POOL="${CODING_POOL}" STORAGE_CLASS="${CODING_STORAGE_CLASS}" \
+  envsubst < benchmarking/storage/manifests/backends/filestore/storage_class.yaml | kubectl apply -f -
+```
+
+The reference results used one regional 4 TiB instance with up to 100
+volumes. Ask the Filestore team for that layout.
+
+### 4. Build the actor image
+
+The image has git, the kernel build tools and
+[ate-env-guest](https://github.com/agent-substrate/env), which runs the
+commands. Templates need the image pinned by digest:
+
+```bash
+export CODING_REPO=<registry>/storage-bench-coding
+docker build --platform linux/amd64 -t "${CODING_REPO}" benchmarking/storage/images/coding
+docker push "${CODING_REPO}"
+export CODING_IMAGE="${CODING_REPO}@$(go run github.com/google/go-containerregistry/cmd/crane@latest digest "${CODING_REPO}")"
+```
+
+### 5. Start the git mirror
+
+Actors clone from a mirror in the cluster, so GitHub's speed doesn't change the
+results. It runs on an infra node from
+[step 5](#5-keep-the-control-plane-off-the-worker-nodes) and fetches the
+Linux tree once, which takes about 5 minutes:
+
+```bash
+kubectl create configmap git-mirror-scripts -n benchmarking \
+  --from-file=benchmarking/storage/manifests/git-mirror/fetch.sh \
+  --from-file=benchmarking/storage/manifests/git-mirror/serve.sh \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f benchmarking/storage/manifests/git-mirror/git-mirror.yaml
+kubectl wait --for=condition=Available deployment/git-mirror -n benchmarking --timeout=60m
+```
+
+### 6. Create the actor template
+
+```bash
+TEMPLATE_NAME=coding-build ACTOR_CPU_MILLICORES=3000 ACTOR_MEMORY_BYTES=8589934592 \
+  envsubst < benchmarking/storage/manifests/coding-template.yaml | kubectl ate --preview create actor-template -f -
+```
+
+## Scenario 3: Build
+
+Each actor clones the Linux kernel, builds it, edits and commits 10 files, and
+builds again. After each step but the last build, the actor suspends, stays
+idle and resumes, and `git status` runs on the remounted volume.
+
+| Input | Value |
+|---|---|
+| Worker node | One `c3-standard-44` with one worker, from [coding setup](#coding-scenario-setup) |
+| Actors | 1, then 10 at once |
+| Actor resources | 3 vCPU, 8 GiB memory |
+| Volume | 10 GiB from `${CODING_STORAGE_CLASS}` |
+| Repository | One commit of the Linux tree from the git mirror, served over dumb HTTP |
+| Steps | [build.steps](scenarios/build.steps): `git clone`, `make defconfig` and `make -j3`, edit and commit 10 files, `make -j3` again |
+| Git setting | `checkout.workers=20` (`CHECKOUT_WORKERS`) |
+| Suspend mode | `DURABILITY_MODE_SYNCHRONOUS`, which returns once the snapshot is in durable storage |
+| Idle between suspend and resume | 60 s (`IDLE`) |
+| Client | `wakestorm` on your machine |
+
+```bash
+benchmarking/storage/scenarios/build.sh /tmp/build 1
+benchmarking/storage/scenarios/build.sh /tmp/build-10 10
+```
+
+The script prints P50, P90 and max for each step. Step times come from the
+process start and exit times in the actor. `wakestorm` deletes its actors at
+the end, also after Ctrl-C. If it is killed first, run
+`go run ./benchmarking/storage/cmd/wakestorm -phase delete -prefix build`.
+
+### Reference results
+
+P50 per step. Each column is one run. Suspend, resume and `git status` show the
+P50 over all actors of the 3 times each ran. Suspend and resume times include
+the port forward from your machine.
+
+| Step | 1 actor | 10 actors |
+|---|---|---|
+| `git clone` | 386 s | 941 s |
+| `make defconfig` and `make -j3` | 1,377 s | 2,215 s |
+| Edit and commit 10 files | 17.5 s | 91.5 s |
+| Incremental `make -j3` | 138 s | 296 s |
+| SuspendActor / ResumeActor | 0.88 / 0.14 s | 0.91 / 0.11 s |
+| `git status` after resume | 50.9 s | 183 s |
+
+With 10 actors at once, clone, edit and commit, the incremental build and
+`git status` take 2 to 5 times as long as with one actor, and the full build
+1.6 times as long. The 10 actors share one Filestore instance. Suspend and
+resume times barely change.
+
+Environment: Substrate at `94e0a26a` with `7be78c4c` applied, gVisor
+`release-20261102.0`, one `c3-standard-44` worker node in `us-west1-c`, and a
+Filestore pool of one regional 4 TiB instance with the StorageClass options
+and read ahead from scenario 1.
+
 ## Troubleshooting
 
 ### Common failure modes
@@ -331,12 +469,24 @@ StorageClass and read ahead as scenario 1.
 - **Every actor on a node crashes at once during density**: this is the limit.
   Kubelet evicted the worker for low memory, and the step before is the
   result.
+- **`wakestorm -phase script` fails with `spec.pkixPublicKey: Invalid value`**:
+  the cluster runs Kubernetes older than 1.36, which Substrate requires.
+- **Script steps fail with `guest not reachable` and `router rejected
+  CONNECT`**: the router doesn't allow `wakestorm`. Check the flag from
+  [coding setup step 1](#1-let-wakestorm-reach-the-actors).
+- **A script step fails**: the `err` column of `calls.csv` has the end of the
+  command's stderr.
 
 ## Cleanup
 
 ```bash
 go run ./benchmarking/storage/cmd/wakestorm -phase delete -prefix lat
 go run ./benchmarking/storage/cmd/wakestorm -phase delete -prefix density
+kubectl ate --preview delete actor-template coding-build -a benchmark-workloads
+kubectl delete -f benchmarking/storage/manifests/git-mirror/git-mirror.yaml
+kubectl delete configmap git-mirror-scripts -n benchmarking
+kubectl delete storageclass "${CODING_STORAGE_CLASS}"
+gcloud container node-pools delete coding --cluster "${CLUSTER}" --zone "${ZONE}" --project "${PROJECT_ID}" --quiet
 kubectl ate delete atespace benchmark
 kubectl delete pod wakestorm-runner -n benchmarking
 kubectl delete secret wakestorm-token -n benchmarking   # an ate-client token
@@ -346,5 +496,5 @@ kubectl delete clusterrolebinding,clusterrole wakestorm-trust-bundles
 benchmarking/storage/scenarios/isolate_infra.sh --undo
 ```
 
-Then delete the backend's storage as its README describes, and scale the node
-pool back down.
+Then delete the backend's storage as its README describes, including the
+coding pool, and scale the node pool back down.

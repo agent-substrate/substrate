@@ -107,16 +107,7 @@ func (r *runner) runPhase(ctx context.Context, actors []string, phase string, cy
 			defer cancel()
 			start := time.Now()
 			retries, err := fn(cctx, name)
-			end := time.Now()
-			rec := callRecord{
-				Phase: phase, Cycle: cycle, Op: op, Actor: name,
-				StartS: start.Sub(t0).Seconds(), EndS: end.Sub(t0).Seconds(),
-				Latency: end.Sub(start).Seconds(), OK: err == nil, Retries: retries,
-			}
-			if err != nil {
-				rec.Code = status.Code(err).String()
-				rec.Err = truncate(strings.ReplaceAll(err.Error(), "\n", " "), 300)
-			}
+			rec := newCallRecord(t0, start, time.Now(), phase, cycle, op, name, retries, err)
 			mu.Lock()
 			recs = append(recs, rec)
 			mu.Unlock()
@@ -197,6 +188,20 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// newCallRecord builds the record of one call that ran from start to end.
+func newCallRecord(t0, start, end time.Time, phase string, cycle int, op, actor string, retries int, err error) callRecord {
+	rec := callRecord{
+		Phase: phase, Cycle: cycle, Op: op, Actor: actor,
+		StartS: start.Sub(t0).Seconds(), EndS: end.Sub(t0).Seconds(),
+		Latency: end.Sub(start).Seconds(), OK: err == nil, Retries: retries,
+	}
+	if err != nil {
+		rec.Code = status.Code(err).String()
+		rec.Err = truncate(strings.ReplaceAll(err.Error(), "\n", " "), 300)
+	}
+	return rec
 }
 
 // save writes calls.csv and summary.json to the output directory.

@@ -107,7 +107,9 @@ func (r *runner) lifecycle(ctx context.Context) {
 		r.runPhase(ctx, names, "first-resume", rep, "ResumeActorFirstResume", *flagCreateConc, 0, r.resumeCall)
 		r.printSpread(ctx)
 		r.settle(ctx)
-		r.runPhase(ctx, names, "suspend", rep, "SuspendActor", *flagCreateConc, 0, r.suspendCall)
+		r.runPhase(ctx, names, "suspend", rep, "SuspendActor", *flagCreateConc, 0, func(cctx context.Context, name string) (int, error) {
+			return r.suspendCall(cctx, name, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS)
+		})
 		r.settle(ctx)
 		r.runPhase(ctx, names, "resume", rep, "ResumeActor", *flagCreateConc, 0, r.resumeCall)
 		r.settle(ctx)
