@@ -2150,16 +2150,16 @@ type filledUpScheduler struct {
 
 // Schedule repeats the last worker, so a test that offers no free one keeps
 // returning a full worker until the backoff ends.
-func (s *filledUpScheduler) Schedule(context.Context, scheduling.Constraints) (*ateapi.Worker, error) {
+func (s *filledUpScheduler) Schedule(_ context.Context, c scheduling.Constraints) (scheduling.Placement, error) {
 	i := min(s.calls, len(s.workers)-1)
 	s.calls++
 	if s.onSchedule != nil {
 		s.onSchedule(s.calls)
 	}
 	if s.err != nil {
-		return nil, s.err
+		return scheduling.Placement{}, s.err
 	}
-	return s.workers[i], nil
+	return placementOf(s.workers[i], c), nil
 }
 
 func (s *filledUpScheduler) Applies(*ateapi.Worker, scheduling.Constraints) bool { return true }
@@ -2168,17 +2168,26 @@ func (s *filledUpScheduler) HasRoom(worker *ateapi.Worker, _ scheduling.Constrai
 	return !s.full[worker.GetWorkerPod()]
 }
 
+// placementOf is the Placement the real Schedule returns when it picks worker
+// under c.
+func placementOf(worker *ateapi.Worker, c scheduling.Constraints) scheduling.Placement {
+	_, fidelity := c.SnapshotRuntime.BestRuntime(worker.GetStatus(), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS)
+	booking, _ := scheduling.Booking(worker, c)
+	return scheduling.Placement{Worker: worker, Fidelity: fidelity, Booking: booking}
+}
+
 // contentionStore is the smallest store that an assignment attempt needs. The
 // bug under test is in the metric path, so nothing here reaches a database.
 type contentionStore struct {
 	actorWorkflowStore
-	workers map[string]*ateapi.Worker
-	actor   *ateapi.Actor
+	workers         map[string]*ateapi.Worker
+	actor           *ateapi.Actor
+	boundAssignment *ateapi.ActorAssignment
 }
 
 // BindActorToWorker runs admit as the real store does under the Worker's row
 // lock, and returns its refusal unchanged.
-func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, _ *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	worker, ok := s.workers[workerName]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -2193,6 +2202,7 @@ func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string
 		return nil, err
 	}
 	s.actor = updated
+	s.boundAssignment = proto.CloneOf(assignment)
 	return updated, nil
 }
 
@@ -2741,11 +2751,11 @@ type relaxingTestScheduler struct {
 	relaxedWorker *ateapi.Worker
 }
 
-func (s *relaxingTestScheduler) Schedule(_ context.Context, c scheduling.Constraints) (*ateapi.Worker, error) {
+func (s *relaxingTestScheduler) Schedule(_ context.Context, c scheduling.Constraints) (scheduling.Placement, error) {
 	if c.MinFidelity != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
 		s.t.Fatalf("Schedule called with MinFidelity %v, want ROOTFS", c.MinFidelity)
 	}
-	return s.relaxedWorker, nil
+	return placementOf(s.relaxedWorker, c), nil
 }
 
 func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing.T) {
@@ -3583,5 +3593,9 @@ func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = cached
 	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl); err != nil {
 		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
+	}
+	wantBooking := &ateapi.Resources{MemoryBytes: 256<<20 + 4<<20}
+	if got := w.store.(*contentionStore).boundAssignment.GetResources(); !proto.Equal(got, wantBooking) {
+		t.Errorf("assignment.Resources = %v, want %v", got, wantBooking)
 	}
 }

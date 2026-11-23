@@ -425,7 +425,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	snapRuntime := constraints.SnapshotRuntime
 	class = constraints.SandboxClass
 
-	assignedWorker, err := w.scheduler.Schedule(ctx, constraints)
+	placement, err := w.scheduler.Schedule(ctx, constraints)
 	if err != nil {
 		// Return FailedPrecondition only when we fail to schedule an actor
 		// that could resume on any node, but doesn't fit any of them.
@@ -440,6 +440,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		}
 		return nil, nil, err
 	}
+	assignedWorker := placement.Worker
 	slog.InfoContext(ctx, "Picked worker", slog.Any("worker", assignedWorker.String()))
 
 	if assignedWorker.GetNodeName() == "" {
@@ -456,11 +457,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// Record what this claim books so release returns the same amount. It
 	// includes the overhead the cached Worker reports, which admit checks
 	// again under the row lock.
-	booking, ok := scheduling.Booking(assignedWorker, constraints)
-	if !ok {
-		return nil, nil, errWorkerFilledUp
-	}
-	assignment.Resources = booking
+	assignment.Resources = placement.Booking
 
 	// The candidate came from a watch-fed cache, so it may already be full or no
 	// longer eligible. The store re-asks under the Worker's row lock, where the
@@ -470,11 +467,8 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// admit holds the bind to the tier Schedule picked the worker at. A worker
 	// that lost the snapshot's runtime since the cache saw it fails admit, and
 	// the retry schedules again.
-	floor := constraints.EffectiveMinFidelity()
 	atPicked := constraints
-	if _, picked := snapRuntime.BestRuntime(assignedWorker.GetStatus(), floor); picked > floor {
-		atPicked.MinFidelity = picked
-	}
+	atPicked.MinFidelity = placement.Fidelity
 	// The bind evaluates the fresh row; record the assignment from the same view.
 	bound := assignedWorker
 	admit := func(fresh *ateapi.Worker) error {
@@ -483,7 +477,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		}
 		// The Worker re-registered with a different overhead since the cache
 		// saw it. Rare, and the retry reads the new one.
-		if got, _ := scheduling.Booking(fresh, constraints); !proto.Equal(got, booking) {
+		if got, _ := scheduling.Booking(fresh, constraints); !proto.Equal(got, placement.Booking) {
 			return errWorkerFilledUp
 		}
 		bound = fresh

@@ -36,6 +36,9 @@ func TestSchedule(t *testing.T) {
 		fleet       fleet
 		constraints Constraints
 		wantPod     string // "" means ErrNoCapacity expected
+		// wantFidelity is the fidelity Schedule picks wantPod at. Defaults to
+		// SNAPSHOT_FIDELITY_MEMORY when unset.
+		wantFidelity ateapi.SnapshotFidelity
 		// wantDoesNotFit, with no wantPod, expects ErrDoesNotFit.
 		wantDoesNotFit bool
 	}{
@@ -398,6 +401,19 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-upgraded",
 		},
 		{
+			name: "a restore books the overhead of the runtime it restores under",
+			fleet: fleet{
+				worker("w-upgraded", "gvisor", "node-a", tierTwo, withCapacity(4000, 4<<30),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old")),
+					withOverhead(&ateapi.RuntimeOverhead{MemoryBytes: 4 << 20}, &ateapi.RuntimeOverhead{MemoryBytes: 16 << 20})),
+			},
+			constraints: Constraints{
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				Limits:          resources.CPUMemory(500, 1<<30),
+			},
+			wantPod: "w-upgraded",
+		},
+		{
 			name: "snapshot runtime with no matching worker yields ErrNoCapacity when MinFidelity is MEMORY",
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
@@ -429,7 +445,8 @@ func TestSchedule(t *testing.T) {
 				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
 				MinFidelity:     ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 			},
-			wantPod: "w-rootfs-free",
+			wantPod:      "w-rootfs-free",
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 		{
 			name: "later ROOTFS worker does not displace earlier MEMORY candidate",
@@ -498,8 +515,20 @@ func TestSchedule(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Schedule() error = %v, want worker %q", err, tc.wantPod)
 				}
-				if got.GetWorkerPod() != tc.wantPod {
-					t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), tc.wantPod)
+				if got.Worker.GetWorkerPod() != tc.wantPod {
+					t.Fatalf("Schedule() = %q, want %q", got.Worker.GetWorkerPod(), tc.wantPod)
+				}
+				wantFidelity := tc.wantFidelity
+				if wantFidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+					wantFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+				}
+				if got.Fidelity != wantFidelity {
+					t.Errorf("Schedule() fidelity = %v, want %v", got.Fidelity, wantFidelity)
+				}
+				// admit compares the fresh row's Booking with this one, so they
+				// must agree on an unchanged worker.
+				if want, _ := Booking(got.Worker, tc.constraints); !proto.Equal(got.Booking, want) {
+					t.Errorf("Schedule() booking = %v, want %v", got.Booking, want)
 				}
 				return
 			}
@@ -836,8 +865,8 @@ func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Schedule() for index %d error = %v", wantIdx, err)
 		}
-		if got.GetWorkerPod() != wantPod {
-			t.Fatalf("Schedule() for index %d = %q, want %q", wantIdx, got.GetWorkerPod(), wantPod)
+		if got.Worker.GetWorkerPod() != wantPod {
+			t.Fatalf("Schedule() for index %d = %q, want %q", wantIdx, got.Worker.GetWorkerPod(), wantPod)
 		}
 	}
 }
@@ -866,8 +895,8 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}
-	if got.GetWorkerPod() != "w-2" {
-		t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), "w-2")
+	if got.Worker.GetWorkerPod() != "w-2" {
+		t.Fatalf("Schedule() = %q, want %q", got.Worker.GetWorkerPod(), "w-2")
 	}
 }
 

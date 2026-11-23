@@ -66,9 +66,9 @@ type Constraints struct {
 	Limits *ateapi.Resources
 }
 
-// EffectiveMinFidelity returns MinFidelity, or SNAPSHOT_FIDELITY_MEMORY when
+// effectiveMinFidelity returns MinFidelity, or SNAPSHOT_FIDELITY_MEMORY when
 // MinFidelity is unset.
-func (c Constraints) EffectiveMinFidelity() ateapi.SnapshotFidelity {
+func (c Constraints) effectiveMinFidelity() ateapi.SnapshotFidelity {
 	if c.MinFidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	}
@@ -85,12 +85,25 @@ var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 // constraints. See doesNotFit for which workers count.
 var ErrDoesNotFit = fmt.Errorf("%w: the actor exceeds the capacity of every such worker", ErrNoCapacity)
 
+// Placement is a worker Schedule picked, the fidelity it picked it at, and
+// what the actor books there.
+type Placement struct {
+	Worker *ateapi.Worker
+	// Fidelity is the SnapshotFidelity Worker restores SnapshotRuntime at,
+	// or SNAPSHOT_FIDELITY_MEMORY when SnapshotRuntime is the zero Requirement.
+	Fidelity ateapi.SnapshotFidelity
+	// Booking is the actor's limits plus the overhead of the runtime it runs
+	// under on Worker.
+	Booking *ateapi.Resources
+}
+
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
-	// Schedule returns a worker that meets constraints and has room.
-	// Returns ErrNoCapacity when no worker that meets constraints has room,
-	// or ErrDoesNotFit when the actor exceeds the capacity of each of them.
-	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
+	// Schedule returns a Placement on a worker that meets constraints and has
+	// room. Returns ErrNoCapacity when no worker that meets constraints has
+	// room, or ErrDoesNotFit when the actor exceeds the capacity of each of
+	// them.
+	Schedule(ctx context.Context, constraints Constraints) (Placement, error)
 
 	// Applies reports whether worker is ACTIVE and satisfies non-capacity
 	// constraints. Capacity is excluded so an existing assignment does not make
@@ -137,13 +150,13 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 // returns the less-loaded one, where load is the higher of actor-slot and
 // compute-resource utilization. Spreading across the warm pool avoids hotspots
 // until autoscaling reclaims idle workers.
-func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
+func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (Placement, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
-		return nil, fmt.Errorf("while listing workers: %w", err)
+		return Placement{}, fmt.Errorf("while listing workers: %w", err)
 	}
 
-	floor := constraints.EffectiveMinFidelity()
+	floor := constraints.effectiveMinFidelity()
 	var (
 		bestFidelity ateapi.SnapshotFidelity
 		candidates   []candidate
@@ -174,12 +187,12 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 	if len(candidates) == 0 {
 		if doesNotFit(workers, constraints) {
-			return nil, ErrDoesNotFit
+			return Placement{}, ErrDoesNotFit
 		}
-		return nil, ErrNoCapacity
+		return Placement{}, ErrNoCapacity
 	}
 	if len(candidates) == 1 {
-		return candidates[0].worker, nil
+		return candidates[0].placement(bestFidelity), nil
 	}
 
 	i := s.intn(len(candidates))
@@ -188,9 +201,9 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		j++
 	}
 	if lessLoaded(&candidates[j], &candidates[i]) {
-		return candidates[j].worker, nil
+		return candidates[j].placement(bestFidelity), nil
 	}
-	return candidates[i].worker, nil
+	return candidates[i].placement(bestFidelity), nil
 }
 
 // doesNotFit reports whether at least one registered worker meets constraints,
@@ -199,7 +212,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 //
 // TODO(#198): check WorkerPool sizes too.
 func doesNotFit(workers []*ateapi.Worker, constraints Constraints) bool {
-	floor := constraints.EffectiveMinFidelity()
+	floor := constraints.effectiveMinFidelity()
 	eligible := false
 	for _, worker := range workers {
 		// A DRAINING worker never takes actors again, so its size is
@@ -226,12 +239,18 @@ func doesNotFit(workers []*ateapi.Worker, constraints Constraints) bool {
 	return eligible
 }
 
-// candidate pairs an eligible worker with its cached compute utilization.
+// candidate pairs an eligible worker with what the actor books there and the
+// worker's cached compute utilization.
 type candidate struct {
-	worker *ateapi.Worker
+	worker  *ateapi.Worker
+	booking *ateapi.Resources
 	// resUtil is the worker's dominant compute-resource utilization in [0,1],
 	// or -1 if not yet computed.
 	resUtil float64
+}
+
+func (c *candidate) placement(fidelity ateapi.SnapshotFidelity) Placement {
+	return Placement{Worker: c.worker, Fidelity: fidelity, Booking: c.booking}
 }
 
 func (c *candidate) resourceUtilization() float64 {
@@ -329,7 +348,7 @@ func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool
 	if !matchesStatic(worker, constraints) {
 		return false
 	}
-	floor := constraints.EffectiveMinFidelity()
+	floor := constraints.effectiveMinFidelity()
 	_, fidelity := constraints.SnapshotRuntime.BestRuntime(worker.GetStatus(), floor)
 	return fidelity >= floor
 }
@@ -413,11 +432,11 @@ func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) 
 	}
 
 	if want.GetCpuMillicores() == 0 && want.GetMemoryBytes() == 0 {
-		return candidate{worker: worker, resUtil: -1}, true
+		return candidate{worker: worker, booking: want, resUtil: -1}, true
 	}
 	if !resources.Covers(resources.Free(capacity, used), want) {
 		return candidate{}, false
 	}
 	resUtil := utilization(capacity, used)
-	return candidate{worker: worker, resUtil: resUtil}, true
+	return candidate{worker: worker, booking: want, resUtil: resUtil}, true
 }
