@@ -123,6 +123,12 @@ type microVMPrepared struct {
 	digests map[string]map[string]string
 }
 
+type rustfsAsset struct {
+	path  string
+	key   string
+	label string
+}
+
 // microVMArches returns the architectures to assemble and stage: only the host
 // architecture on Kind (where nodes always match runtime.GOARCH), and both
 // amd64 and arm64 on non-Kind clusters.
@@ -597,6 +603,22 @@ func downloadToFile(ctx context.Context, url, dstPath string, mode fs.FileMode) 
 }
 
 func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string, digests map[string]map[string]string) error {
+	var assets []rustfsAsset
+	for _, arch := range e.microVMArches() {
+		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, arch)
+		for _, f := range microvmAssets {
+			sha := digests[arch][f]
+			assets = append(assets, rustfsAsset{
+				path:  filepath.Join(outDir, f),
+				key:   fmt.Sprintf("%s/%s/%s", microvmAssetsPrefix, arch, sha),
+				label: arch + "/" + f,
+			})
+		}
+	}
+	return e.stageAssetsToRustfs(ctx, bucket, microvmAssetsPrefix, assets)
+}
+
+func (e *Env) stageAssetsToRustfs(ctx context.Context, bucket, prefix string, assets []rustfsAsset) error {
 	ns := e.Namespace()
 	timeout := e.Cfg.WaitTimeout(MicroVMStageTimeout)
 	log.Infof(">> Waiting for rustfs in namespace %s...", ns)
@@ -646,32 +668,27 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string, dig
 		}
 	}
 
-	prefixURL := fmt.Sprintf("s3://%s/%s/", bucket, microvmAssetsPrefix)
+	prefixURL := fmt.Sprintf("s3://%s/%s/", bucket, prefix)
 	// s3 ls exits non-zero when the prefix has no objects yet; cp surfaces real errors.
 	lsOut, _ := e.runCmdOutput(ctx, "docker", awsCLIArgs("s3", "ls", "--recursive", prefixURL)...)
 	existing := fieldsSet(lsOut)
 
 	log.Infof(">> Uploading assets to %s via %s (netns of %s)...", prefixURL, endpoint, node)
-	for _, arch := range e.microVMArches() {
-		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, arch)
-		for _, f := range microvmAssets {
-			sha := digests[arch][f]
-			key := fmt.Sprintf("%s/%s/%s", microvmAssetsPrefix, arch, sha)
-			if existing[key] {
-				log.Infof("   %s/%s (%s) already in s3://%s; skipping.", arch, f, sha, bucket)
-				continue
-			}
-			log.Infof("   %s/%s -> %s", arch, f, key)
-			file, err := os.Open(filepath.Join(outDir, f))
-			if err != nil {
-				return err
-			}
-			dst := fmt.Sprintf("s3://%s/%s", bucket, key)
-			err = awsCLI(file, "s3", "cp", "-", dst)
-			_ = file.Close()
-			if err != nil {
-				return fmt.Errorf("while uploading %s/%s to rustfs: %w", arch, f, err)
-			}
+	for _, asset := range assets {
+		if existing[asset.key] {
+			log.Infof("   %s already in s3://%s; skipping.", asset.label, bucket)
+			continue
+		}
+		log.Infof("   %s -> %s", asset.label, asset.key)
+		file, err := os.Open(asset.path)
+		if err != nil {
+			return err
+		}
+		dst := fmt.Sprintf("s3://%s/%s", bucket, asset.key)
+		err = awsCLI(file, "s3", "cp", "-", dst)
+		_ = file.Close()
+		if err != nil {
+			return fmt.Errorf("while uploading %s to rustfs: %w", asset.label, err)
 		}
 	}
 

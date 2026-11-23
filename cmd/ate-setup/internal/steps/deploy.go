@@ -98,6 +98,13 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 	var microvmPrep *microVMPrepared
+	var gvisorPrep *gVisorPrepared
+	if gvisor && e.Cfg.Kind {
+		gvisorPrep, err = e.prepareKindGVisorDeps(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	if microvm {
 		microvmPrep, err = e.prepareMicroVMDeps(ctx)
 		if err != nil {
@@ -186,6 +193,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 	if err := e.applyAtenetEgress(ctx, providers); err != nil {
 		return err
+	}
+	if gvisorPrep != nil {
+		if err := e.applyKindGVisorSandboxConfig(ctx, gvisorPrep); err != nil {
+			return err
+		}
 	}
 	if microvmPrep != nil {
 		if err := e.applyMicroVMSandboxConfig(ctx, microvmPrep); err != nil {
@@ -613,6 +625,13 @@ func (e *Env) DeploySandboxConfig(ctx context.Context, sandboxClasses string) er
 		return err
 	}
 	var microvmPrep *microVMPrepared
+	var gvisorPrep *gVisorPrepared
+	if gvisor && e.Cfg.Kind {
+		gvisorPrep, err = e.prepareKindGVisorDeps(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	if microvm {
 		microvmPrep, err = e.prepareMicroVMDeps(ctx)
 		if err != nil {
@@ -626,21 +645,26 @@ func (e *Env) DeploySandboxConfig(ctx context.Context, sandboxClasses string) er
 	if err := e.applyInitialSandboxConfigs(ctx, gvisor); err != nil {
 		return err
 	}
+	if gvisorPrep != nil {
+		if err := e.applyKindGVisorSandboxConfig(ctx, gvisorPrep); err != nil {
+			return err
+		}
+	}
 	if microvmPrep != nil {
 		return e.applyMicroVMSandboxConfig(ctx, microvmPrep)
 	}
 	return nil
 }
 
-// applyInitialSandboxConfigs applies the SandboxConfig ValidatingAdmissionPolicy
-// and, when gvisor is enabled, the cluster-wide default gVisor SandboxConfig.
+// applyInitialSandboxConfigs applies the SandboxConfig admission policy and the
+// default gVisor config when it does not require Kind asset staging.
 func (e *Env) applyInitialSandboxConfigs(ctx context.Context, gvisor bool) error {
 	// Enforce per-class SandboxConfig asset requirements. This is applied
 	// before any SandboxConfig so the configs below are validated too.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
 		return err
 	}
-	if !gvisor {
+	if !gvisor || e.Cfg.Kind {
 		return nil
 	}
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
