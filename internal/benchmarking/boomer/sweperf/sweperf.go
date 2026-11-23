@@ -76,7 +76,9 @@ const (
 	cycleCELMetric          = "CycleCEL"
 	taskCELMetric           = "TaskCEL"
 	taskWallClockMetric     = "TaskWallClock"
-	derivedMetricMethod     = "actor"
+	// coldStartMetric spans CreateActor until the sandbox answers /status.
+	coldStartMetric     = "ColdStart"
+	derivedMetricMethod = "actor"
 )
 
 // init registers the sweperf user class so the boomer worker can select it by
@@ -421,6 +423,7 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 		return nil, fmt.Errorf("pollLiveness: %w", err)
 	}
 	u.startupDur = time.Since(startupStart)
+	bmetrics.RecordSuccess(derivedMetricMethod, coldStartMetric, u.userClass, u.startupDur, 0)
 
 	// pollLiveness left the actor running, so cycle 1's resume is a no-op.
 	u.awake = true
@@ -602,14 +605,20 @@ func (u *sweperfUser) create(ctx context.Context) error {
 // on its ResumeActor row and whether it worked. A failure is the caller's cue
 // to abandon the cycle rather than talk to a sandbox that is not running.
 func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
-	latency, err := u.tracedCallRecord(ctx, "ResumeActor", !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
+	// Cycle 1 resumes the actor CreateActor started, so cycle 2's resume is
+	// the first from the actor's own snapshot.
+	name := "ResumeActor"
+	if u.cycleIndex == 1 {
+		name = "ResumeActorAfterFirstSuspend"
+	}
+	latency, err := u.tracedCallRecord(ctx, name, !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	if err != nil {
-		slog.Error("ResumeActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		slog.Error(name+" failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 		return latency, false
 	}
 	return latency, true
@@ -623,6 +632,9 @@ func (u *sweperfUser) suspend(ctx context.Context) bool {
 	name, mode := "SuspendActorAsync", ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
 	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
 		name, mode = "SuspendActor", ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+	}
+	if u.cycleIndex == 0 {
+		name += "FirstSuspend"
 	}
 	err := u.tracedCall(ctx, name, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{

@@ -421,21 +421,25 @@ func TestSweperfUserCycleSequence(t *testing.T) {
 }
 
 // TestSuspendLifecycleMode checks that lifecycle_mode picks the durability
-// mode of the SuspendActor that ends each cycle.
+// mode of the SuspendActor that ends each cycle, and that the first cycle's
+// suspend has a row of its own.
 func TestSuspendLifecycleMode(t *testing.T) {
 	for _, tt := range []struct {
 		mode       string
+		cycleIndex int
 		want       ateapi.DurabilityMode
 		wantMetric string
 	}{
-		{"", ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
-		{dynconfig.LifecycleModeSync, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
-		{dynconfig.LifecycleModeAsync, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{"", 1, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{dynconfig.LifecycleModeSync, 1, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActor"},
+		{dynconfig.LifecycleModeAsync, 1, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsync"},
+		{dynconfig.LifecycleModeSync, 0, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, "SuspendActorFirstSuspend"},
+		{dynconfig.LifecycleModeAsync, 0, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, "SuspendActorAsyncFirstSuspend"},
 	} {
-		t.Run("mode="+tt.mode, func(t *testing.T) {
+		t.Run(fmt.Sprintf("mode=%s/cycle=%d", tt.mode, tt.cycleIndex), func(t *testing.T) {
 			cfg, _, fakeCtrl := newTestConfig(t, http.NotFoundHandler())
 			cfg.Dyn = dynconfig.Static(knobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: tt.mode}})
-			u := &sweperfUser{cfg: cfg, actorName: "test-actor", userClass: sweperfUserClass}
+			u := &sweperfUser{cfg: cfg, actorName: "test-actor", userClass: sweperfUserClass, cycleIndex: tt.cycleIndex}
 			before := readStats(t)
 			if !u.suspend(context.Background()) {
 				t.Fatal("suspend() = false, want true")
@@ -792,16 +796,21 @@ func TestNoopFirstResumeNotRecorded(t *testing.T) {
 	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
 	fakeCtrl.resumeElapsedUs = "5000"
 	rt := newSweperfRuntime(cfg)
+	beforeStart := readStats(t)
 	u, err := rt.startUser(context.Background())
 	if err != nil {
 		t.Fatalf("startUser: %v", err)
+	}
+	if got := recordedSince(t, beforeStart, "ColdStart", "success"); got.count != 1 {
+		t.Errorf("ColdStart recorded %d samples, want 1", got.count)
 	}
 	// No extra lifecycle ops at setup: the benchmark flow must match the CUJ.
 	if got, want := fakeCtrl.recordedCalls(), []string{"CreateAtespace", "CreateActor"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("recordedCalls after startUser = %v, want %v", got, want)
 	}
 	u.chunks = []chunk{{0, 5}, {5, 10}}
-	resumeRows := []string{"ResumeActor", "ResumeActor_rtt", "ResumeToFirstExec"}
+	// Cycle 2's resume is the first after a suspend, so it has its own rows.
+	resumeRows := []string{"ResumeActorAfterFirstSuspend", "ResumeActorAfterFirstSuspend_rtt", "ResumeToFirstExec"}
 
 	before := readStats(t)
 	u.step(context.Background())
