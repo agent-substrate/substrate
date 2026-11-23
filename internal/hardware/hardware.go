@@ -139,37 +139,44 @@ func (r Requirement) matchesCompat(worker *ateapi.VersionedSandboxCompat) bool {
 		return false
 	}
 	wAttrs := worker.GetAttributes()
-	// API validation bounds attributes to at most 32 entries with unique keys,
-	// so the nested scan is small and avoids map allocation on the hot path.
+	// Compare the exact-match attributes first, so a worker with another
+	// architecture or bundle fails before its AttrCPUFeatures is parsed.
+	snapCPU, hasCPU := "", false
 	for _, sa := range r.compat.GetAttributes() {
-		found := false
-		for _, wa := range wAttrs {
-			if wa.GetKey() != sa.GetKey() {
-				continue
-			}
-			if !r.attributeSatisfied(sa.GetKey(), wa.GetValue(), sa.GetValue()) {
-				return false
-			}
-			found = true
-			break
+		if sa.GetKey() == AttrCPUFeatures {
+			snapCPU, hasCPU = sa.GetValue(), true
+			continue
 		}
-		if !found {
+		if wv, ok := attrValue(wAttrs, sa.GetKey()); !ok || wv != sa.GetValue() {
 			return false
 		}
 	}
-	return true
+	if !hasCPU {
+		return true
+	}
+	wv, ok := attrValue(wAttrs, AttrCPUFeatures)
+	if !ok {
+		return false
+	}
+	// Workers on the same CPU platform and runsc build report the same
+	// string, and the snapshot's is already known to be canonical.
+	if wv == snapCPU {
+		return true
+	}
+	w, ok := parseFeatureMask(wv)
+	return ok && r.cpuFeatures.subsetOf(w)
 }
 
-// attributeSatisfied reports whether a worker's value for key satisfies the
-// snapshot's. AttrCPUFeatures is a set the worker's must include, compared
-// against the mask parsed by NewRequirement; every other attribute must be
-// equal.
-func (r Requirement) attributeSatisfied(key, workerVal, snapVal string) bool {
-	if key == AttrCPUFeatures {
-		w, ok := parseFeatureMask(workerVal)
-		return ok && r.cpuFeatures.subsetOf(w)
+// attrValue returns the value for key in attrs. API validation bounds
+// attributes to at most 32 entries with unique keys, so a linear scan is small
+// and avoids map allocation on the hot path.
+func attrValue(attrs []*ateapi.AttributeEntry, key string) (string, bool) {
+	for _, a := range attrs {
+		if a.GetKey() == key {
+			return a.GetValue(), true
+		}
 	}
-	return workerVal == snapVal
+	return "", false
 }
 
 // classOf returns the entry of status for class, or nil when the worker does
