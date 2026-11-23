@@ -977,6 +977,54 @@ class RunMetadataTest(unittest.TestCase):
              self.assertRaisesRegex(ValueError, "test 'n': 'evaluations' is supported only for type locust"):
             orchestrator.validate_and_normalize_tests([test])
 
+    def test_observers_only_on_locust(self):
+        cases = [
+            {
+                "name": "n",
+                "type": "nighthawk-ingress",
+                "targetCluster": "t",
+                "duration": "1m",
+                "workerCount": 1,
+                "nighthawk-ingress": {"envoyCpu": 2},
+                "observers": [{"name": "cp", "type": "pprof"}],
+            },
+            {
+                "name": "n",
+                "type": "nighthawk-egress",
+                "targetCluster": "t",
+                "duration": "1m",
+                "nighthawk-egress": {"envoyCpu": 2, "mode": "mitm"},
+                "observers": [{"name": "cp", "type": "pprof"}],
+            },
+        ]
+        for test in cases:
+            with (
+                self.subTest(ttype=test["type"]),
+                self.assertRaisesRegex(
+                    ValueError, "test 'n': 'observers' is supported only for type locust"
+                ),
+            ):
+                orchestrator.validate_and_normalize_tests([test])
+
+    def test_locust_observers_shape_validated_via_orchestrator(self):
+        base = {
+            "name": "n",
+            "type": "locust",
+            "targetCluster": "t",
+            "file": "f",
+            "duration": "1m",
+            "users": 1,
+        }
+        orchestrator.validate_and_normalize_tests([{**base, "observers": None}])
+        orchestrator.validate_and_normalize_tests([{**base, "observers": [{"name": "cp", "type": "pprof"}]}])
+        for bad in ("pprof", {"name": "cp"}, 123):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "'observers' must be a list"):
+                orchestrator.validate_and_normalize_tests([{**base, "observers": bad}])
+        with self.assertRaisesRegex(
+            ValueError, "observers must be a list of mappings, each with name and type"
+        ):
+            orchestrator.validate_and_normalize_tests([{**base, "observers": [{"type": "pprof"}]}])
+
     def test_metadata_survives_yaml(self):
         md = json.dumps({"cluster_name": "c: d", "q": "\"'"})
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d", "RUN_TS": 1}

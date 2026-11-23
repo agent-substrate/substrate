@@ -500,6 +500,9 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         elif "evaluations" in t:
             # Only the locust runner judges evaluations (runner.py --test-entry).
             raise ValueError(f"test {name!r}: 'evaluations' is supported only for type locust")
+        elif "observers" in t:
+            # Only the locust runner starts observers (runner.py --test-entry).
+            raise ValueError(f"test {name!r}: 'observers' is supported only for type locust")
         isolate_block(t)
 
 

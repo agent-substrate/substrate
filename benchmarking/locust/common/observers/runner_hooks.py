@@ -15,6 +15,7 @@
 """Shared runner-side lifecycle, fail-open accounting, and artifact upload."""
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 from typing import Any, Callable
@@ -174,6 +175,17 @@ def finish_observers(
         )
 
     return status_map, stats_rows
+
+
+def append_observer_stats_rows(
+    jsonl_path: Path, rows: list[dict[str, Any]]
+) -> None:
+    """Append observer measurement rows to stats.jsonl when non-empty."""
+    if not rows:
+        return
+    with open(jsonl_path, "a", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
 
 
 def upload_observer_artifacts(

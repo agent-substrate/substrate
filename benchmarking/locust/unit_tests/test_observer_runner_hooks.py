@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.observers import (
     OBSERVERS,
     ObserverResult,
+    append_observer_stats_rows,
     finish_observers,
     start_observers,
     upload_observer_artifacts,
@@ -333,6 +334,26 @@ class ObserverRunnerHooksTest(unittest.TestCase):
             )
             self.assertEqual(len(upload_logs), 1)
             self.assertIn("20261105T183000.100Z.profile.pb.gz", upload_logs[0])
+
+    def test_append_observer_stats_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = Path(tmp) / "stats.jsonl"
+            append_observer_stats_rows(jsonl_path, [])
+            self.assertFalse(jsonl_path.exists())
+
+            jsonl_path.write_text('{"metric":"existing"}\n', encoding="utf-8")
+            append_observer_stats_rows(
+                jsonl_path,
+                [
+                    {"metric": "observer_pprof_cp", "measurements": {"pods_profiled": "1"}},
+                    {"metric": "observer_pprof_w", "measurements": {"pods_profiled": "2"}},
+                ],
+            )
+            lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertEqual(lines[0], '{"metric":"existing"}')
+            self.assertIn("observer_pprof_cp", lines[1])
+            self.assertIn("observer_pprof_w", lines[2])
 
 
 if __name__ == "__main__":

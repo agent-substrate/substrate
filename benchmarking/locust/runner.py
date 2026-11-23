@@ -38,6 +38,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -53,6 +54,12 @@ from cluster_facts import (
     snapshot_worker_pods,
 )
 from common.boomer_config import build_config_json
+from common.observers import (
+    append_observer_stats_rows,
+    finish_observers,
+    start_observers,
+    upload_observer_artifacts,
+)
 from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
 from ladder_steps import append_ladder_steps
@@ -220,7 +227,10 @@ def parse_args() -> argparse.Namespace:
             "reads its `evaluations` (see benchmarking/evaluate/README.md): "
             "their sources are set up before the run; after it they judge the "
             "run, and the verdicts are written to evaluation.json, plus rows "
-            "in stats.jsonl. They never change the exit code or status.json"
+            "in stats.jsonl (they never change the exit code or status.json). "
+            "It also reads `observers`: started before load and finalized after "
+            "teardown into <run>/<type>/, status.json[\"observers\"], and "
+            "stats.jsonl without failing the run"
         ),
     )
     p.add_argument(
@@ -598,12 +608,17 @@ def stats_to_jsonl(stats_csv: Path, jsonl_path: Path, timestamp: str, tag: str, 
     return rows_written
 
 
-def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
+@functools.lru_cache(maxsize=1)
+def _gcs_client() -> Any:
     # Imported here so non-GCS use doesn't require google-cloud-storage.
     from google.cloud import storage
 
+    return storage.Client()
+
+
+def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
     bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
-    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
+    _gcs_client().bucket(bucket_name).blob(blob_path).upload_from_filename(
         str(local_path)
     )
 
@@ -670,7 +685,7 @@ def main() -> None:
         f"/run_tag={args.tag}"
     )
 
-    work_dir = Path(f"/tmp/{path_ts}-locust-runner")
+    work_dir = Path(tempfile.gettempdir()) / f"{path_ts}-locust-runner"
     # Everything in artifacts/ is uploaded under prefix, by the same name.
     artifacts = work_dir / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -692,7 +707,16 @@ def main() -> None:
         judge = prepare_evaluations(args, artifacts, prefix, work_dir / "evaluate", logs)
         # Worker pods around the run, for OOMKilled restarts and evictions.
         pods_before = read_worker_pods(args, logs)
-        exit_code = run_test(args, csv_prefix, logs, traces)
+        started_observers = start_observers(
+            args.test_entry.get("observers"), work_dir, lambda m: tee(logs, m)
+        )
+        try:
+            exit_code = run_test(args, csv_prefix, logs, traces)
+        except BaseException:
+            finish_observers(
+                started_observers, data_ts, args.tag, args.name, lambda m: tee(logs, m)
+            )
+            raise
         for csv_path in work_dir.glob(f"{csv_prefix.name}_*.csv"):
             csv_path.replace(artifacts / csv_path.name.removeprefix(f"{csv_prefix.name}_"))
         run_end_ts = int(datetime.now(timezone.utc).timestamp())
@@ -828,6 +852,14 @@ def main() -> None:
         elif stats_generated:
             tee(logs, "Skipping phase breakdown (--no-phase-breakdown)")
 
+        obs_status, obs_rows = finish_observers(
+            started_observers, data_ts, args.tag, args.name, lambda m: tee(logs, m)
+        )
+        try:
+            append_observer_stats_rows(jsonl_path, obs_rows)
+        except Exception as e:
+            tee(logs, f"Warning: Failed to append observer stats rows: {e}")
+
     # Evaluations come last: their sources read the finished logs.txt and
     # stats.jsonl, so they run once logs.txt is closed, and append their own
     # lines to it. Additive like the steps above: a failure here costs no
@@ -839,16 +871,22 @@ def main() -> None:
             except Exception as e:
                 tee(logs, f"Warning: Failed to run the evaluations: {e}")
 
-    status_path.write_text(
-        json.dumps(
-            {"locust_exit_code": exit_code, "stats_generated": stats_generated}
-        )
-    )
+    status_payload: dict[str, Any] = {
+        "locust_exit_code": exit_code,
+        "stats_generated": stats_generated,
+    }
+    if obs_status:
+        status_payload["observers"] = obs_status
+    status_path.write_text(json.dumps(status_payload))
 
     for src in sorted(p for p in artifacts.rglob("*") if p.is_file()):
         dest = f"{prefix}/{src.relative_to(artifacts).as_posix()}"
         upload(src, dest)
         print(f"Uploaded {src} -> {dest}", flush=True)
+
+    upload_observer_artifacts(
+        started_observers, prefix, upload, lambda m: print(m, flush=True)
+    )
 
     if not stats_generated and not args.allow_empty_stats:
         sys.exit(1)

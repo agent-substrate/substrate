@@ -18,6 +18,7 @@ from .base import OBSERVERS, Observer, ObserverResult
 from .pprof import PprofObserver
 from .runner_hooks import (
     StartedObservers,
+    append_observer_stats_rows,
     finish_observers,
     start_observers,
     upload_observer_artifacts,
@@ -29,6 +30,7 @@ __all__ = [
     "ObserverResult",
     "PprofObserver",
     "StartedObservers",
+    "append_observer_stats_rows",
     "finish_observers",
     "start_observers",
     "upload_observer_artifacts",
