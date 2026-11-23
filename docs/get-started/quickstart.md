@@ -13,7 +13,9 @@ description: >
 Deploy the Agent Substrate control plane and the stateful **Counter** sample application on a local [kind](https://kind.sigs.k8s.io/) cluster.
 
 > [!NOTE]
-> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go). A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
+> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go).
+> The source install below requires Docker Buildx. Run `docker buildx version` to check that it is available.
+> A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
 ## 1. Clone the repository
 
