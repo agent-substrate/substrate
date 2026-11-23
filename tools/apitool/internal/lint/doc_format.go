@@ -27,7 +27,7 @@ import (
 
 var DocFormat = Rule{
 	Name:        "doc-format",
-	Description: "Every doc comment closes each \"(--\" internal note with \"--)\", ends with its +k8s: and +ate: directives, with nothing after them, and has no raw HTML.",
+	Description: "Every doc comment closes each \"(--\" internal note with \"--)\", ends with its +k8s: directives, with nothing after them, and has no raw HTML.",
 	Check: allOf(
 		forEachMessage(func(m model.Message) []Finding { return checkDocFormat(m.FullName, m.Comment) }),
 		forEachField(func(m model.Message, f model.Field) []Finding {

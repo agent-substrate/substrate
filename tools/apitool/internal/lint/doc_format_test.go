@@ -34,10 +34,6 @@ func TestDocFormat(t *testing.T) {
 			comment: "Summary.\n\nDetails.\n\n(-- Internal\nnote. --)\n\n+k8s:optional\n+k8s:maxItems=2 # a guardrail",
 		},
 		{
-			name:    "ate and k8s directives",
-			comment: "Summary.\n\n+ate:preview=ExternalVolumes\n+k8s:optional",
-		},
-		{
 			name:    "two internal notes",
 			comment: "A (-- one --) and B (-- two --).",
 		},

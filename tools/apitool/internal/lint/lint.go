@@ -58,4 +58,5 @@ var All = []Rule{
 	NoOneofs,
 	Documented,
 	DocFormat,
+	PreviewGates,
 }

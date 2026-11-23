@@ -52,16 +52,18 @@ Gate the fields a **user** sets with a declarative validation tag in the
 `.proto`, then regenerate (`hack/update/codegen.sh`):
 
 ```proto
-  // +ate:preview=MyFeature
   // +k8s:ifDisabled(MyFeature)=+k8s:forbidden
   // +k8s:optional
-  MyFeatureConfig my_feature = 7;
+  MyFeatureConfig my_feature = 7 [ (preview_gate) = "MyFeature" ];
 ```
 
-- `+ate:preview=<Gate>` marks the field as part of a preview feature, for
-  readers and docs. It does not enforce anything.
+- `(preview_gate) = "<Gate>"` marks the field as part of a preview feature,
+  for readers and tools. It does not enforce anything.
 - `+k8s:ifDisabled(<Gate>)=+k8s:forbidden` rejects the field when the gate is
   off for this request.
+
+`apitool validate` checks that a field has both or neither, with the same gate,
+and that the gate exists.
 
 The gate state reaches the validators through `apivalidation.MakeCreateOp(ctx)`
 and `apivalidation.MakeUpdateOp(ctx)`. Every `Validate*` wrapper must build its
@@ -142,8 +144,8 @@ Test gated code both with and without the gate.
 When the feature goes GA, or is removed, keep the gate name in
 `realKnownGates` for a while so existing `--preview` values still parse, but
 make the feature always on (GA) or always off (removed). Then delete the
-`ifDisabled` tags, `IsEnabled`/`IsEnabledFor` checks, and `RequirePreview`
-calls.
+`preview_gate` options, `ifDisabled` tags, `IsEnabled`/`IsEnabledFor` checks,
+and `RequirePreview` calls.
 
 <!-- TODO: how do we gate a new RPC method or service? -->
 <!-- TODO: how do we gate a new feature in the CLI? -->

@@ -104,6 +104,9 @@ type Method struct {
 	// names, or "" if the method has none. For example, "Actor" for
 	// SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
 	Resource string
+	// PreviewGate is the preview gate the method annotation names, or "" if
+	// the method needs none. For example, "ExternalVolumes".
+	PreviewGate string
 
 	// ServiceFullName is the declaring service's full name. For example,
 	// "substrate.ateapi.v1.Control".
@@ -177,10 +180,14 @@ type Field struct {
 	// Comment is the field's leading doc comment. For example, "version is
 	// increased on every mutation." for ResourceMetadata.version.
 	Comment string
-	// Tags are Comment's +k8s: and +ate: directives, parsed as validation-gen
-	// parses them. For example, Name "k8s:maxLength" and Value "1024" for
+	// Tags are Comment's +k8s: directives, parsed as validation-gen parses
+	// them. For example, Name "k8s:maxLength" and Value "1024" for
 	// "+k8s:maxLength=1024".
 	Tags []codetags.Tag
+	// PreviewGate is the field's (substrate.ateapi.v1.preview_gate) option,
+	// or "" if it has none. For example, "ExternalVolumes" for
+	// Volume.external.
+	PreviewGate string
 
 	// Repeated is true for a `repeated` field, not a map - see
 	// MapValueKind for those. For example, true for
@@ -457,7 +464,7 @@ func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescrip
 	methods := sd.Methods()
 	for i := range methods.Len() {
 		md := methods.Get(i)
-		resource, err := methodResource(md)
+		annotation, err := methodAnnotation(md)
 		if err != nil {
 			return Service{}, err
 		}
@@ -472,7 +479,8 @@ func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescrip
 			Tags:            tags,
 			InputName:       md.Input().FullName(),
 			OutputName:      md.Output().FullName(),
-			Resource:        resource,
+			Resource:        annotation.GetResource(),
+			PreviewGate:     annotation.GetPreviewGate(),
 			ServiceFullName: svc.FullName,
 			ServiceName:     svc.Name,
 		})
@@ -532,16 +540,16 @@ func sourceOptions(d protoreflect.Descriptor) (proto.Message, error) {
 	return opts, nil
 }
 
-func methodResource(md protoreflect.MethodDescriptor) (string, error) {
+func methodAnnotation(md protoreflect.MethodDescriptor) (*ateapi.MethodAnnotation, error) {
 	opts, err := sourceOptions(md)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	a := proto.GetExtension(opts, ateapi.E_Method).(*ateapi.MethodAnnotation)
 	if len(a.ProtoReflect().GetUnknown()) > 0 {
-		return "", fmt.Errorf("%s has a method annotation with fields this apitool doesn't know", md.FullName())
+		return nil, fmt.Errorf("%s has a method annotation with fields this apitool doesn't know", md.FullName())
 	}
-	return a.GetResource(), nil
+	return a, nil
 }
 
 func resourceAnnotation(md protoreflect.MessageDescriptor) (*ResourceAnnotation, error) {
@@ -570,14 +578,19 @@ func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescript
 	if err != nil {
 		return Field{}, err
 	}
+	opts, err := sourceOptions(field)
+	if err != nil {
+		return Field{}, err
+	}
 	f := Field{
-		Name:     field.Name(),
-		Number:   int32(field.Number()),
-		Comment:  c,
-		Tags:     tags,
-		Repeated: field.IsList(),
-		Kind:     field.Kind(),
-		Redacted: field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
+		Name:        field.Name(),
+		Number:      int32(field.Number()),
+		Comment:     c,
+		Tags:        tags,
+		PreviewGate: proto.GetExtension(opts, ateapi.E_PreviewGate).(string),
+		Repeated:    field.IsList(),
+		Kind:        field.Kind(),
+		Redacted:    field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
 	}
 
 	switch {
@@ -703,10 +716,13 @@ func parseTags(d protoreflect.Descriptor, comment string) ([]codetags.Tag, error
 
 // PublicDoc returns the part of a doc comment meant for readers of the API:
 // the comment without its internal notes, written between "(--" and "--)",
-// and without its lines starting with a "+k8s:" or "+ate:" directive.
+// and without its directive lines. Older releases (v1.0.x) also wrote
+// "+ate:preview=..." directives, so "+ate:" lines are stripped here too.
 func PublicDoc(comment string) string {
 	lines := strings.Split(internalNote.ReplaceAllString(comment, ""), "\n")
-	lines = slices.DeleteFunc(lines, IsDirective)
+	lines = slices.DeleteFunc(lines, func(line string) bool {
+		return IsDirective(line) || strings.HasPrefix(strings.TrimSpace(line), "+ate:")
+	})
 	lines = collapseBlankRuns(lines)
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -726,10 +742,9 @@ func Summary(comment string) string {
 }
 
 // IsDirective reports whether line is a validation-gen directive, e.g.
-// "+k8s:required", or one of our own metadata tags, e.g. "+ate:preview".
+// "+k8s:required".
 func IsDirective(line string) bool {
-	line = strings.TrimSpace(line)
-	return strings.HasPrefix(line, "+k8s:") || strings.HasPrefix(line, "+ate:")
+	return strings.HasPrefix(strings.TrimSpace(line), "+k8s:")
 }
 
 // collapseBlankRuns replaces each run of consecutive blank lines with one.
