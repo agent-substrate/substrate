@@ -61,9 +61,9 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 	sourceActor := resources.ActorRef{Atespace: ns.a, Name: source}
 
 	writeFile(t, ctx, rc, sourceActor, markerA)
-	if got := readFile(t, ctx, rc, sourceActor, markerA); got.Content != writtenByProbe {
+	if got := readFile(t, ctx, rc, sourceActor, markerA); got.Content != markerContent(sourceActor) {
 		t.Fatalf("control: actor %s reading its OWN %s = %q (error %q), want %q",
-			sourceActor, markerA, got.Content, got.Error, writtenByProbe)
+			sourceActor, markerA, got.Content, got.Error, markerContent(sourceActor))
 	}
 
 	// ST-4 [space]: an ATESPACE-scoped tag in atespace A must not seed an
@@ -152,9 +152,10 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 		t.Fatalf("control: ResumeActor %s/%s: %v", ns.a, clone, err)
 	}
 	waitForActorState(t, ctx, clients, ns.a, clone, ateapi.ActorState_ACTOR_STATE_RUNNING)
-	if got := readFile(t, ctx, rc, resources.ActorRef{Atespace: ns.a, Name: clone}, markerA); got.Content != writtenByProbe {
+	sourceContent := markerContent(resources.ActorRef{Atespace: ns.a, Name: source})
+	if got := readFile(t, ctx, rc, resources.ActorRef{Atespace: ns.a, Name: clone}, markerA); got.Content != sourceContent {
 		t.Fatalf("control: actor %s/%s restored from tag %s reads %s = %q (error %q), want %q — the tag carries no durable data, so the cross-atespace rejection above proves nothing",
-			ns.a, clone, tagRef.GetName(), markerA, got.Content, got.Error, writtenByProbe)
+			ns.a, clone, tagRef.GetName(), markerA, got.Content, got.Error, sourceContent)
 	}
 }
 
