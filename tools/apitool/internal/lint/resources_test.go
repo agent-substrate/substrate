@@ -145,3 +145,79 @@ func TestResourceStatusFieldShape(t *testing.T) {
 		})
 	}
 }
+
+func TestResourceFieldOrder(t *testing.T) {
+	meta := model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ResourceMetadata"}
+	status := model.Field{Name: "status", Number: 2, Kind: protoreflect.MessageKind, TypeFullName: "test.WidgetStatus"}
+	spec := model.Field{Name: "spec", Number: 3}
+	scope := model.Field{Name: "scope", Number: 4}
+
+	tests := []struct {
+		name    string
+		api     *model.API
+		want    []lint.Finding
+		wantErr bool
+	}{
+		{
+			name: "metadata first, status last",
+			api:  messagesAPI(resource("Widget", nil, meta, spec, status)),
+		},
+		{
+			name: "metadata only",
+			api:  messagesAPI(resource("Widget", nil, meta)),
+		},
+		{
+			name: "no status is fine",
+			api:  messagesAPI(resource("Widget", nil, meta, spec, scope)),
+		},
+		{
+			// The rule is about declaration order, not numbers: these are
+			// numbered 1 and 2 exactly as resource-metadata wants, and still
+			// read in the wrong order.
+			name: "metadata declared after another field",
+			api:  messagesAPI(resource("Widget", nil, spec, meta, status)),
+			want: []lint.Finding{
+				{Subject: "test.Widget", Message: `"metadata" is declared after "spec", want it declared first`},
+			},
+		},
+		{
+			name: "status declared before another field",
+			api:  messagesAPI(resource("Widget", nil, meta, status, scope)),
+			want: []lint.Finding{
+				{Subject: "test.Widget", Message: `"status" is declared before "scope", want it declared last`},
+			},
+		},
+		{
+			name: "both out of place are reported separately",
+			api:  messagesAPI(resource("Widget", nil, status, spec, meta)),
+			want: []lint.Finding{
+				{Subject: "test.Widget", Message: `"metadata" is declared after "status", want it declared first`},
+				{Subject: "test.Widget", Message: `"status" is declared before "metadata", want it declared last`},
+			},
+		},
+		{
+			// resource-metadata reports a missing "metadata"; this rule must not
+			// report it a second time.
+			name: "missing metadata is not this rule's finding",
+			api:  messagesAPI(resource("Widget", nil, status, spec)),
+			want: []lint.Finding{
+				{Subject: "test.Widget", Message: `"status" is declared before "spec", want it declared last`},
+			},
+		},
+		{
+			name: "no fields at all",
+			api:  messagesAPI(resource("Widget", nil)),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := lint.ResourceFieldOrder.Check(tt.api)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Check() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("Check() findings mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
