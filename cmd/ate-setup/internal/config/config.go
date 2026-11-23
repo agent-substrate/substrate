@@ -164,6 +164,12 @@ type Config struct {
 	// Images selects where container images come from. Its zero value builds
 	// them from source with ko, which is what a developer install does.
 	Images images.Source
+	// HasInstallRecord reports whether --config names an ate-setup record.
+	HasInstallRecord bool
+	// FailedInstallRecord reports whether that record came from a failed run.
+	FailedInstallRecord bool
+	// RecordedSubstrateVersion is the release stored in that record.
+	RecordedSubstrateVersion string
 
 	// Router selects the atenet router dataplane.
 	Router string

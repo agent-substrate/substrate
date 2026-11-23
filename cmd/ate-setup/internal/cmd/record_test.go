@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,9 +121,11 @@ func TestRecordRunWritesAParseableFile(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.SetResolved(r)
 
-	prevEnv, prevResolved := env, resolved
-	env, resolved = &steps.Env{Cfg: cfg}, r
-	t.Cleanup(func() { env, resolved = prevEnv, prevResolved })
+	prevEnv, prevResolved, prevInputVersion := env, resolved, inputSubstrateVersion
+	env, resolved, inputSubstrateVersion = &steps.Env{Cfg: cfg}, r, ""
+	t.Cleanup(func() {
+		env, resolved, inputSubstrateVersion = prevEnv, prevResolved, prevInputVersion
+	})
 
 	target, _, err := rootCmd.Find([]string{"deploy", "atenet"})
 	if err != nil {
@@ -179,6 +182,47 @@ func TestRecordRunWritesAFailureArtifact(t *testing.T) {
 	}
 	if installs, _ := filepath.Glob(filepath.Join(dir, "installs", "*.yaml")); len(installs) != 0 {
 		t.Errorf("a failed run wrote an install record: %v", installs)
+	}
+}
+
+func TestFailedRunKeepsRecordedSource(t *testing.T) {
+	t.Setenv("VERSION", "v1.3.0")
+	for _, hasEnv := range []bool{false, true} {
+		t.Run(fmt.Sprintf("environment=%t", hasEnv), func(t *testing.T) {
+			dir := t.TempDir()
+			r, err := config.Resolve(nil, config.ResolveOptions{Env: map[string]string{
+				"ATE_RECORD_DIR":  dir,
+				"KUBECTL_CONTEXT": "prod",
+			}})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+
+			var runEnv *steps.Env
+			if hasEnv {
+				runEnv = &steps.Env{Cfg: &config.Config{}}
+			}
+			prevEnv, prevResolved, prevInputVersion := env, resolved, inputSubstrateVersion
+			env, resolved, inputSubstrateVersion = runEnv, r, "v1.2.3"
+			t.Cleanup(func() {
+				env, resolved, inputSubstrateVersion = prevEnv, prevResolved, prevInputVersion
+			})
+
+			target, _, _ := rootCmd.Find([]string{"deploy", "atenet"})
+			recordRun(target, errors.New("the install failed"))
+
+			failed, _ := filepath.Glob(filepath.Join(dir, "failed", "prod-*.yaml"))
+			if len(failed) != 1 {
+				t.Fatalf("%d failure artifacts, want 1", len(failed))
+			}
+			f, err := config.ParseFile(failed[0])
+			if err != nil {
+				t.Fatalf("ParseFile: %v", err)
+			}
+			if got := f.SubstrateVersion; got != "v1.2.3" {
+				t.Errorf("SubstrateVersion = %q, want v1.2.3", got)
+			}
+		})
 	}
 }
 

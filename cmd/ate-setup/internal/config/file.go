@@ -43,7 +43,9 @@ type File struct {
 	// empty in a configuration that is not an install record.
 	SubstrateVersion string
 
-	values map[string]string
+	failedInstall bool
+	hasMetadata   bool
+	values        map[string]string
 }
 
 // reserved names the top-level keys that are not settings: the two header
@@ -100,8 +102,9 @@ func ParseFile(path string) (*File, error) {
 	if err := flatten("", doc, flat); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	metadataNode := mappingField(doc, documentMetadataKey)
 	metadata := make(map[string]string)
-	if err := flatten(documentMetadataKey, mappingField(doc, documentMetadataKey), metadata); err != nil {
+	if err := flatten(documentMetadataKey, metadataNode, metadata); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
@@ -120,6 +123,8 @@ func ParseFile(path string) (*File, error) {
 	return &File{
 		Path:             path,
 		SubstrateVersion: metadata[documentMetadataKey+".substrateVersion"],
+		failedInstall:    metadata[documentMetadataKey+".outcome"] == string(Failed),
+		hasMetadata:      metadataNode != nil,
 		values:           flat,
 	}, nil
 }

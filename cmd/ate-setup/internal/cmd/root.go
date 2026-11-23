@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/upgradepolicy"
 	"go.ate.dev/substrate/internal/version"
 )
 
@@ -49,6 +50,10 @@ var env *steps.Env
 // written afterwards describes what actually ran. A failed run is recorded
 // from Execute, which cobra's PersistentPostRunE does not reach.
 var resolved *config.Resolved
+
+// inputSubstrateVersion is the source release from an input record. A failure
+// before env exists retains it so the retry is checked against the same source.
+var inputSubstrateVersion string
 
 // recordAnnotation says whether a command's runs are recorded: "yes" or "no".
 // The nearest command that carries it, the command itself or an ancestor,
@@ -109,6 +114,12 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 	// the two copies sandwich anything written in between.
 	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// The command tree is reusable in tests. A failed invocation must not
+		// leave recordable state for the next one.
+		env = nil
+		resolved = nil
+		inputSubstrateVersion = ""
+
 		// Commands that touch neither config nor cluster (help, version,
 		// completion) opt out by way of not being run through this path.
 		// cmd.Flags() rather than the root's persistent set: cobra parses a
@@ -121,11 +132,22 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		if err != nil {
 			return err
 		}
-		resolved = cfg.Resolved()
+		if cfg.HasInstallRecord {
+			inputSubstrateVersion = cfg.RecordedSubstrateVersion
+		}
+		runResolved := cfg.Resolved()
 
 		// Reported before the cluster is touched, so the settings are on
 		// screen even when connecting fails.
-		resolved.Report(log.Writer(), config.ReportOptions{OmitDefaults: noReportDefaults})
+		runResolved.Report(log.Writer(), config.ReportOptions{OmitDefaults: noReportDefaults})
+		if isDeployCommand(cmd) && recordsRun(cmd) {
+			if err := checkDeployUpgrade(cfg); err != nil {
+				return err
+			}
+		}
+		// A rejected transition should not write a retry artifact that loses
+		// the source release and can bypass the same check on retry.
+		resolved = runResolved
 
 		if !needsCluster(cmd) {
 			env = steps.NewLocalEnv(cfg)
@@ -169,6 +191,22 @@ func isDeployCommand(cmd *cobra.Command) bool {
 	return false
 }
 
+func checkDeployUpgrade(cfg *config.Config) error {
+	if !cfg.HasInstallRecord || !cfg.Images.IsPrebuilt() {
+		return nil
+	}
+	// A fresh install can fail before an environment exists to identify its
+	// target release. Its failure artifact must remain usable for the retry
+	// command recordRun prints.
+	if cfg.FailedInstallRecord && cfg.RecordedSubstrateVersion == "" {
+		return nil
+	}
+	if err := upgradepolicy.CheckUpgrade(cfg.RecordedSubstrateVersion, cfg.Images.Tag); err != nil {
+		return fmt.Errorf("checking release transition: %w", err)
+	}
+	return nil
+}
+
 // recordRun writes what this run used, so the next one can reproduce it by
 // pointing --config at the file. Recording is best effort: an install that
 // worked must not be reported as failed because a directory was read-only.
@@ -185,10 +223,10 @@ func recordRun(cmd *cobra.Command, runErr error) {
 	}
 	context := resolved.ClusterKey()
 
-	// Recorded so the file says what the cluster runs. Left out when the run
-	// failed before it had an environment to ask.
-	var version string
-	if env != nil {
+	// A successful run records its target. A failed run keeps the input source:
+	// a partial deploy cannot prove that the cluster reached the target.
+	version := inputSubstrateVersion
+	if runErr == nil && env != nil {
 		version = env.SubstrateVersion()
 	}
 
