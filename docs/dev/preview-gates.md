@@ -11,7 +11,7 @@ enabled) or **GA** (always on). There is no alpha or beta.
 
 ## How a gate is enabled
 
-Two independent switches must both be on before a request can use a gated
+Two independent switches must both be on before a request can use a gated API
 feature:
 
 1. **Server side:** every substrate binary takes `--preview=<gates>`, a
@@ -27,6 +27,7 @@ feature:
 Substrate's own components (atelet, atenet, atecontroller) dial ate-api with
 `preview.DialOptionsWithOptIn()`, so they are never blocked by the header
 check. ate-setup does the same when it is run with preview gates.
+Process-level gates that do not change an API use only the server-side switch.
 
 ## Adding a gate
 
@@ -133,9 +134,9 @@ Test gated code both with and without the gate.
   hack/run-e2e-kind.sh -v -args --preview=ALL
   ```
 
-  CI runs every e2e lane with preview gates both off and on, and requires
-  `--preview` to be passed (even as empty) so a lane cannot silently skip
-  every preview test.
+  CI runs e2e lanes with preview gates off and on where the cluster supports
+  both configurations. It requires `--preview` to be passed (even as empty) so
+  a lane cannot silently skip every preview test.
 
 ## Graduating or removing a gate
 

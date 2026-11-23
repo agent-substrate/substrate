@@ -69,8 +69,8 @@ const (
 	IPv6
 )
 
-// IPFamiliesForPodIPs returns the address families Kubernetes assigned to a worker Pod.
-func IPFamiliesForPodIPs(podIPs []string) (IPFamilies, error) {
+// IPFamiliesForPodIPs returns the actor address families selected from a worker Pod's addresses.
+func IPFamiliesForPodIPs(podIPs []string, enableIPv6 bool) (IPFamilies, error) {
 	var families IPFamilies
 	for _, value := range podIPs {
 		ip, err := netip.ParseAddr(value)
@@ -86,11 +86,31 @@ func IPFamiliesForPodIPs(podIPs []string) (IPFamilies, error) {
 	if families == 0 {
 		return 0, fmt.Errorf("worker Pod has no IP addresses")
 	}
+	if !enableIPv6 {
+		if families.Has(IPv4) {
+			return IPv4, nil
+		}
+		return 0, fmt.Errorf("worker Pod has only IPv6 addresses but IPv6 actor networking is disabled")
+	}
 	return families, nil
 }
 
 // Has reports whether families contains family.
 func (f IPFamilies) Has(family IPFamilies) bool { return f&family != 0 }
+
+// String returns the canonical runtime compatibility value for families.
+func (f IPFamilies) String() string {
+	switch f {
+	case IPv4:
+		return "ipv4"
+	case IPv6:
+		return "ipv6"
+	case IPv4 | IPv6:
+		return "ipv4,ipv6"
+	default:
+		return fmt.Sprintf("invalid(%d)", f)
+	}
+}
 
 // ActorVethIP is the address used for local ingress and probes. IPv4 remains the
 // primary address on dual-stack workers.

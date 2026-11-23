@@ -34,6 +34,8 @@ hack/create-kind-cluster.sh
 
 # 2. Target the local kind cluster in every shell that runs ate-setup
 export ATE_INSTALL_KIND=true
+# Required for an IPv6-only cluster; enables IPv6 actors on a dual-stack cluster
+# export ATE_PREVIEW=ActorIpv6Networking
 
 # 3. Install Agent Substrate, PostgreSQL, and snapshot storage (rustfs)
 go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \

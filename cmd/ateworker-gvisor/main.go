@@ -51,6 +51,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/bootid"
+	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -58,6 +59,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxruntimes"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -263,7 +265,8 @@ func do(ctx context.Context) error {
 	}
 
 	workerPodIPs := register.ParsePodIPs(*podIPs)
-	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs)
+	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6Networking)
+	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs, ipv6ActorNetworking)
 	if err != nil {
 		return err
 	}
@@ -331,6 +334,7 @@ func do(ctx context.Context) error {
 		Actors:               *maxActors,
 		PodIPs:               workerPodIPs,
 		MemoryReservedBytes:  memoryReservedBytes,
+		RuntimeAttributes:    sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: families.String()},
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}

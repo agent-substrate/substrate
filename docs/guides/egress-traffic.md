@@ -14,8 +14,14 @@ description: >
 This document specifies supported egress traffic and the contract between
 Substrate and its egress policy enforcement point (PEP).
 
-Each actor gets the IPv4 and IPv6 families Kubernetes assigned to its worker
-pod. Before traffic reaches the PEP, ateworker rejects packets destined for the
+> [!NOTE]
+> Actor IPv6 networking is a preview feature. Enable it with
+> `ATE_PREVIEW=ActorIpv6Networking` when installing Substrate. Without the
+> gate, actors use IPv4 and workers on IPv6-only pods fail to start.
+
+With the preview gate enabled, each actor gets the IPv4 and IPv6 families
+Kubernetes assigned to its worker pod. Before traffic reaches the PEP,
+ateworker rejects packets destined for the
 IPv4 link-local range `169.254.0.0/16` or the IPv6 link-local range `fe80::/10`.
 The internal actor networks `169.254.17.0/30` and `fd00:169:254::/126` are exempt
 because they carry traffic for the actor gateway, DNS relay, ingress, and wakeup

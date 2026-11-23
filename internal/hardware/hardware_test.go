@@ -68,6 +68,16 @@ func TestMatches(t *testing.T) {
 		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"},
 	)
+	ipv4GVisor := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrActorIPFamilies, Value: "ipv4"},
+	)
+	ipv6GVisor := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapi.AttributeEntry{Key: AttrActorIPFamilies, Value: "ipv6"},
+	)
 
 	tests := []struct {
 		name   string
@@ -83,6 +93,7 @@ func TestMatches(t *testing.T) {
 		{"different schema version fails", amd64GVisorV2, amd64GVisor, false},
 		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
 		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
+		{"IPv4 snapshot does not restore on IPv6 worker", ipv6GVisor, ipv4GVisor, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
 		{"nil version fails", &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
 	}

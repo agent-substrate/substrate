@@ -120,10 +120,13 @@ func TestBuildCompat(t *testing.T) {
 		hardware.AttrSandboxBundleHash: "sha256:abc",
 		hardware.AttrCPUFeatures:       "3f",
 		hardware.AttrArchitecture:      runtime.GOARCH,
+	}, sandboxruntimes.Attributes{
+		hardware.AttrActorIPFamilies: "ipv4,ipv6",
 	})
 	want := &ateletpb.VersionedSandboxCompat{
 		SchemaVersion: hardware.SchemaVersionV1,
 		Attributes: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrActorIPFamilies, Value: "ipv4,ipv6"},
 			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
 			{Key: hardware.AttrCPUFeatures, Value: "3f"},
 			{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
@@ -352,8 +355,9 @@ func TestReconcilerSync(t *testing.T) {
 		hardware.AttrCPUFeatures:       "7",
 		hardware.AttrSandboxBundleHash: "sha256:v2",
 	}, v1.SandboxClasses[0].DefaultRuntime.Version)
-	reqV1 := buildRuntimesRequest(epoch, &v1.SandboxClasses[0])
-	reqV2 := buildRuntimesRequest(epoch, &v2.SandboxClasses[0])
+	workerAttrs := sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: "ipv4,ipv6"}
+	reqV1 := buildRuntimesRequest(epoch, &v1.SandboxClasses[0], workerAttrs)
+	reqV2 := buildRuntimesRequest(epoch, &v2.SandboxClasses[0], workerAttrs)
 
 	tests := []struct {
 		name           string
@@ -478,7 +482,7 @@ func TestReconcilerSync(t *testing.T) {
 
 			var calls []*ateletpb.SetWorkerSandboxRuntimesRequest
 			r := newReconciler(
-				ReportConfig{SandboxClass: "gvisor", RuntimesFile: path},
+				ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, RuntimeAttributes: workerAttrs},
 				epoch,
 				func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(path) },
 				func(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
@@ -819,7 +823,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v1.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v1.SandboxClasses[0], nil), req, protocmp.Transform()); diff != "" {
 			t.Errorf("initial registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
@@ -838,7 +842,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v2.SandboxClasses[0]), req, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntimesRequest(r.epoch, &v2.SandboxClasses[0], nil), req, protocmp.Transform()); diff != "" {
 			t.Errorf("updated registration mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
