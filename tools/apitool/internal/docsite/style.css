@@ -16,7 +16,8 @@
 
 /* The site sets the colors and fonts on .apiref: --apiref-bg,
    --apiref-bg-raised, --apiref-bg-sunken, --apiref-fg, --apiref-fg-muted,
-   --apiref-border, --apiref-accent, --apiref-mono, and the code colors
+   --apiref-border, --apiref-accent, --apiref-mono, --apiref-preview-bg,
+   --apiref-preview-fg, --apiref-preview-border, and the code colors
    --apiref-code-type, -string, -number, -keyword and -punct. */
 
 .apiref {
@@ -34,6 +35,8 @@
   position: relative;
   max-width: 36rem;
 }
+
+.apiref.hide-preview .preview-field { display: none; }
 
 .apiref #apiref-search {
   width: 100%;
@@ -416,6 +419,12 @@
   border: 1px solid var(--apiref-border);
   border-radius: 4px;
   padding: 0 0.35em;
+}
+
+.apiref .tag-preview {
+  color: var(--apiref-preview-fg, var(--apiref-accent));
+  background: var(--apiref-preview-bg, var(--apiref-bg));
+  border-color: var(--apiref-preview-border, var(--apiref-border));
 }
 
 /* The site's docs layout leaves the reference too narrow for two columns

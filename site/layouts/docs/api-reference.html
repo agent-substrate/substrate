@@ -39,19 +39,35 @@ version's resources from its nav.json.
 {{- range where site.RegularPages "Layout" "api-reference" -}}
   {{- $urls = merge $urls (dict (.Params.api_version | default "latest") .RelPermalink) -}}
 {{- end -}}
+{{- $previewGatesURL := "docs/reference/preview-gates/" | relURL -}}
+{{- with site.GetPage "/docs/reference/preview-gates" -}}
+  {{- $previewGatesURL = .RelPermalink -}}
+{{- end -}}
 <link rel="stylesheet" href="{{ $files.css.RelPermalink }}"{{ with $files.css.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}>
-{{- with resources.Get "api-reference/versions.json" }}
-{{/* Switching versions keeps the anchor, so the reader stays on the same
-     resource when the other version has it. */ -}}
-<div class="as-apiref-version">
-  <label for="as-apiref-version">Version</label>
-  <select id="as-apiref-version" onchange="window.location.href = this.value + window.location.hash">
-    {{- range transform.Unmarshal . }}
-    <option value="{{ index $urls . }}"{{ if eq . $version }} selected{{ end }}>{{ if eq . "latest" }}latest (main){{ else }}{{ . }}{{ end }}</option>
-    {{- end }}
-  </select>
+<div class="as-apiref-controls">
+  {{- with resources.Get "api-reference/versions.json" }}
+  {{/* Switching versions keeps the anchor, so the reader stays on the same
+       resource when the other version has it. */ -}}
+  <div class="as-apiref-version">
+    <label for="as-apiref-version">Version</label>
+    <select id="as-apiref-version" onchange="window.location.href = this.value + window.location.hash">
+      {{- range transform.Unmarshal . }}
+      <option value="{{ index $urls . }}"{{ if eq . $version }} selected{{ end }}>{{ if eq . "latest" }}latest (main){{ else }}{{ . }}{{ end }}</option>
+      {{- end }}
+    </select>
+  </div>
+  {{- end }}
+  <div class="as-apiref-preview-control">
+    <label class="as-apiref-toggle" for="apiref-show-preview">
+      <input id="apiref-show-preview" type="checkbox" role="switch" checked>
+      <span class="as-apiref-toggle__track" aria-hidden="true"></span>
+      <span>Show preview-gated features</span>
+    </label>
+    <a href="{{ $previewGatesURL }}" class="as-apiref-info" aria-label="See details" data-tooltip="See details">
+      <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+    </a>
+  </div>
 </div>
-{{- end }}
 {{ $files.body.Content | safeHTML }}
 <script defer src="{{ $files.js.RelPermalink }}"{{ with $files.js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
 {{ end -}}
