@@ -32,11 +32,10 @@ import (
 	"go.ate.dev/substrate/internal/credbundle"
 )
 
-// tunnelDestination is the CONNECT authority. atunnel takes this from
-// SO_ORIGINAL_DST and rejects hostnames, so it must be a literal IP -- and the
-// gateway routes every CONNECT to the MITM listener regardless of authority,
-// which is why a documentation address that resolves nowhere is enough. The
-// name being tested travels in the tunneled ClientHello, not here.
+// tunnelDestination is the CONNECT authority. The gateway routes every
+// CONNECT to the MITM listener regardless of authority, which is why a
+// documentation address that resolves nowhere is enough. The name being tested
+// travels in the tunneled ClientHello, not here.
 const tunnelDestination = "192.0.2.1:443"
 
 // Stages a handshake can fail at, reported in handshakeResult.Stage. They name

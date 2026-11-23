@@ -1,0 +1,105 @@
+---
+title: "DNS Correlation"
+linkTitle: "DNS Correlation"
+weight: 6
+status: preview
+status_note: >
+  DNS correlation is disabled by default behind the `DnsCorrelationInWorker` preview
+  gate, and its behavior may change.
+description: >
+  Tunnel an actor's connections to the egress gateway by name.
+---
+
+# DNS Correlation
+
+An actor connects to addresses, and the egress gateway decides on names. For
+HTTP and TLS the gateway reads the name from the request. For anything else,
+such as SSH or a database, the name exists only in the actor's DNS lookup.
+
+DNS correlation carries the name from the lookup to the gateway:
+
+1. The sandbox's DNS relay answers an actor's `A` query with a fake address
+   from `198.18.0.0/15`, and remembers which name got which address.
+2. The actor connects to the fake address.
+3. `atunnel` finds the name the address was given to and opens the tunnel with
+   `CONNECT name:port` instead of `CONNECT IP:port`.
+
+This is the worker's half of allowing plain TCP by hostname
+([#3873](https://github.com/agent-substrate/substrate/issues/3873)). The
+gateway does not decide on the name in the CONNECT yet, so no policy changes
+with this preview.
+
+## Enabling
+
+Two switches, both needed:
+
+1. Run Substrate with `--preview=DnsCorrelationInWorker` (ate-setup's `preview`
+   setting).
+2. Annotate each WorkerPool whose actors should use it:
+
+   ```yaml
+   metadata:
+     annotations:
+       workerpool.ate.dev/dns-correlation: "true"
+   ```
+
+   The pool's workers restart with `--dns-correlation`. Without the gate the
+   annotation is ignored.
+
+The egress gateway has to accept a name in the CONNECT, so upgrade `atenet`
+before annotating a pool. The Envoy dataplane accepts one. Do not annotate
+pools on the agentgateway dataplane: it connects plain HTTP to the address in
+the CONNECT.
+
+## What the actor sees
+
+* An allowed name that resolves gets one `A` record with its fake address and
+  a TTL of 30 seconds. A name keeps its address, see [Limits](#limits).
+* Everything else is unchanged: a name outside the policy is still `NXDOMAIN`,
+  a name that does not exist upstream still fails, and other record types
+  (`AAAA`, `SRV`, `TXT`, ...) are still forwarded.
+* A name that resolves to a loopback or link-local address keeps its real
+  answer. Connections to those addresses never leave the sandbox.
+* An `A` answer no longer holds the name's real addresses or the `CNAME`
+  records that led to them. Other answers still can: `AAAA` records, and the
+  address hints in `HTTPS` records.
+
+## Guarantees
+
+* **Per actor.** Each actor has its own table in the worker. No actor can read
+  or change another actor's addresses.
+* **An address means one name.** An address is never given to a second name,
+  so a client that keeps an address for hours, or resolves once at startup,
+  cannot end up at a different name. The exceptions are a crash and a
+  rollback, see [Limits](#limits).
+* **Suspend and resume.** The table is saved in every snapshot and loaded
+  before the actor's network serves again, on any worker. A worker without
+  DNS correlation does not use the table, but keeps it in the actor's
+  snapshots.
+* **Never worse than without it.** A connection to an address `atunnel` has no
+  name for is tunneled as that address, exactly as without DNS correlation.
+
+## Limits
+
+* `198.18.0.0/15` must not hold real destinations of the actors. A connection
+  to an address in it that a name was given is tunneled to that name.
+* A table holds the 4096 names an actor used most recently. A name pushed out
+  gets a new address on its next lookup. A client still holding the old
+  address keeps working for HTTP and TLS, which the gateway decides on the
+  request.
+* An actor can be given about 130,000 addresses in its life. After that, names
+  it has not looked up before resolve to their real addresses.
+* Clients that refuse non-public addresses, such as SSRF guards, refuse the
+  fake addresses.
+* Clients that validate DNSSEC themselves reject the replaced answers.
+* On a worker without DNS correlation, the fake addresses an actor kept are
+  tunneled as addresses. That happens when only some of the pools that serve
+  a template are annotated, and after the gate is turned off.
+* A crash loses the addresses an actor was given since its last snapshot, with
+  the rest of its state. Only an external volume can still hold one, and that
+  address can later be given to another name.
+* A worker of a release without DNS correlation does not keep the table in the
+  actor's snapshots. After a rollback to such a release and a later upgrade,
+  an address an actor kept can be given to another name.
+* The answer the relay builds carries no EDNS `OPT` record, like the
+  `NXDOMAIN` it builds for a name outside the policy.

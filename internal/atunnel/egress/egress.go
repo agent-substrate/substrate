@@ -27,6 +27,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 )
 
 // tunnelDialer opens an authenticated tunnel to an original destination.
@@ -65,6 +67,9 @@ type activation struct {
 	dialer            tunnelDialer
 	certificateSource actorCertificateSource
 	expiresAt         time.Time
+	// names holds the fake addresses the actor's DNS answered with. Nil when
+	// the actor's DNS answers with real addresses.
+	names *fakeip.Table
 
 	// ctx scopes certificate renewal and every tunnel opened by this activation. wg
 	// lets Deactivate wait until both renewal and tunnel forwarding have exited.
@@ -104,12 +109,15 @@ func New(originalDestination originalDestinationFunc, opts ...Option) (*Proxy, e
 }
 
 // Bind captures the actor's activation before its listeners start serving.
-func (e *Proxy) Bind(actorUID string) (func(context.Context, net.Listener) error, error) {
+// With names, a connection to one of its fake addresses is tunneled to the
+// name the address was given to.
+func (e *Proxy) Bind(actorUID string, names *fakeip.Table) (func(context.Context, net.Listener) error, error) {
 	if actorUID == "" {
 		return nil, fmt.Errorf("egress: actor UID is required")
 	}
 	e.mu.Lock()
 	active := e.activationLocked(actorUID)
+	active.names = names
 	e.mu.Unlock()
 	return func(ctx context.Context, listener net.Listener) error {
 		defer func() {
@@ -325,6 +333,7 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 		_ = downstream.Close()
 		return
 	}
+	names := active.names
 	active.wg.Add(1)
 	e.mu.Unlock()
 
@@ -341,9 +350,7 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 			slog.WarnContext(active.ctx, "atunnel failed to resolve original egress destination", slog.Any("err", err))
 			return
 		}
-		dialCtx, cancelDial := context.WithTimeout(active.ctx, e.tunnelOpenTimeout)
-		upstream, err := active.dialer.DialContext(dialCtx, destination)
-		cancelDial()
+		upstream, err := e.openTunnel(active, names, destination)
 		if err != nil {
 			slog.WarnContext(active.ctx, "atunnel failed to open egress tunnel", slog.String("destination", destination), slog.Any("err", err))
 			return
@@ -358,6 +365,32 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 
 		copyBothWays(downstream, upstream)
 	}()
+}
+
+// openTunnel opens the tunnel for a connection the actor made to address. With
+// names, a fake address is tunneled to the name it was given to.
+func (e *Proxy) openTunnel(active *activation, names *fakeip.Table, address string) (net.Conn, error) {
+	dial := func(destination string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(active.ctx, e.tunnelOpenTimeout)
+		defer cancel()
+		return active.dialer.DialContext(ctx, destination)
+	}
+	if names == nil {
+		return dial(address)
+	}
+	destination := namedDestination(names, address)
+	upstream, err := dial(destination)
+	if destination == address || err == nil {
+		return upstream, err
+	}
+	if refusesNames(err) {
+		upstream, err = dial(address)
+	}
+	if err != nil {
+		// The caller only knows the address, so say which name it stood for.
+		return nil, fmt.Errorf("egress: tunneling to %s: %w", destination, err)
+	}
+	return upstream, nil
 }
 
 func copyBothWays(a, b net.Conn) {

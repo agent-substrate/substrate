@@ -39,6 +39,7 @@ import (
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/linuxsys"
 	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/serverboot"
@@ -50,6 +51,7 @@ var resolvConfPath = "/etc/resolv.conf"
 // FlagSet is the registration surface that flag.FlagSet and pflag.FlagSet share.
 type FlagSet interface {
 	StringVar(p *string, name, value, usage string)
+	BoolVar(p *bool, name string, value bool, usage string)
 }
 
 // Config is the atunnel setup a worker takes from its flags.
@@ -75,6 +77,9 @@ type Config struct {
 	EgressTrustBundle string
 	// DNSEgressPolicy selects the DNS egress policy enforcement mode.
 	DNSEgressPolicy string
+	// DNSCorrelation answers actor DNS lookups with fake addresses, so that
+	// actor connections are tunneled to the egress gateway by name.
+	DNSCorrelation bool
 }
 
 // RegisterFlags registers the atunnel flags on fs and returns the Config they
@@ -92,6 +97,7 @@ func RegisterFlags(fs FlagSet) *Config {
 	fs.StringVar(&c.EgressListenAddress, "atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	fs.StringVar(&c.EgressTrustBundle, "atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+")")
+	fs.BoolVar(&c.DNSCorrelation, "dns-correlation", false, "Answer actor DNS lookups with fake addresses, so that actor connections are tunneled to the egress gateway by name. Needs the "+string(preview.GateDNSCorrelationInWorker)+" preview gate.")
 	return c
 }
 
@@ -122,6 +128,9 @@ type Tunnel struct {
 func Start(ctx context.Context, cfg Config, upstream string, meter metric.Meter) (*Tunnel, error) {
 	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
 		return nil, err
+	}
+	if cfg.DNSCorrelation && !preview.IsEnabled(preview.GateDNSCorrelationInWorker) {
+		return nil, fmt.Errorf("--dns-correlation needs the %s preview gate", preview.GateDNSCorrelationInWorker)
 	}
 	upstreamURL, err := url.Parse(upstream)
 	if err != nil {

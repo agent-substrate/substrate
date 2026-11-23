@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	"go.ate.dev/substrate/internal/atunnel/dns"
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/nodepath"
 
@@ -73,6 +74,11 @@ type SandboxNetworkConfig struct {
 	// DNSPolicy supplies the egress policy the actor's DNS queries are checked
 	// against. Nil refuses every query.
 	DNSPolicy dns.PolicySource
+
+	// FakeIPs makes the actor's DNS answer with a fake address per name, and
+	// its egress tunnel a connection to one to that name. Nil answers with
+	// real addresses.
+	FakeIPs *fakeip.Table
 }
 
 // SetupSandboxNetwork creates isolated networking with fixed sandbox addresses.
@@ -423,19 +429,19 @@ func CleanupSandboxNetwork(network *SandboxNetwork) error {
 // egressServer serves one actor's captured connections. Satisfied by
 // egress.Proxy; an interface so this package does not depend on it.
 type egressServer interface {
-	Bind(actorUID string) (func(context.Context, net.Listener) error, error)
+	Bind(actorUID string, names *fakeip.Table) (func(context.Context, net.Listener) error, error)
 }
 
 // ServeSandboxEgress serves redirected TCP in the gateway namespace.
 // Closing the returned listeners stops accepting new connections.
-func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns netns.Handle, ports []uint16) ([]io.Closer, []func(), error) {
+func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, names *fakeip.Table, ns netns.Handle, ports []uint16) ([]io.Closer, []func(), error) {
 	listeners, err := netns.Listen(ctx, ns, ports)
 	if err != nil {
 		return nil, nil, fmt.Errorf("while opening actor egress listeners: %w", err)
 	}
 	// Bound before anything is served, so a connection accepted here cannot
 	// pick up a later activation's credentials.
-	serveBound, err := e.Bind(actorUID)
+	serveBound, err := e.Bind(actorUID, names)
 	if err != nil {
 		for _, listener := range listeners {
 			_ = listener.Close()
@@ -485,7 +491,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	if resolver != nil {
-		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy)
+		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy, cfg.FakeIPs)
 		if err != nil {
 			return nil, err
 		}
@@ -494,7 +500,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	// Egress last: its binding is released by the serve goroutine, so nothing
 	// may fail between binding and starting it.
 	if egress != nil {
-		closers, serveEgress, err := serveSandboxEgress(ctx, egress, cfg.ActorUID, network.GatewayNetNS, []uint16{cfg.EgressPort})
+		closers, serveEgress, err := serveSandboxEgress(ctx, egress, cfg.ActorUID, cfg.FakeIPs, network.GatewayNetNS, []uint16{cfg.EgressPort})
 		if err != nil {
 			return nil, err
 		}

@@ -50,7 +50,7 @@ func startTestUDPHandler(t *testing.T, upstreams []string, configure func(*udpHa
 
 	lim := newLimiter()
 	pending := newPendingRequests(lim)
-	dnsH := newDNSHandler(pending, lim, nil, nil)
+	dnsH := newDNSHandler(pending, lim, nil, nil, nil)
 	h := newUDPHandler(ingress, egress, udpAddrs, dnsH, pending)
 	if configure != nil {
 		configure(h, dnsH)

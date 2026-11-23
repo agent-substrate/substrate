@@ -174,11 +174,11 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 
 	ref := resources.ActorRef{Atespace: actorRef.Atespace, Name: actorRef.Name}
 
-	// atunnel always sends the address the actor's kernel dialed, never a
-	// name. Refuse a name here, where there is still a response to do it with.
+	// The host may be an IP or a DNS name. Envoy never dials it: the legs inside
+	// the tunnel dial the SNI or the Host they decided on, on this port.
 	dest, err := egresspolicy.NormalizeAuthority(md.Host)
-	if err != nil || !dest.IP.IsValid() || dest.Port == 0 {
-		slog.WarnContext(ctx, "egress denied: CONNECT authority is not an IP:port", slog.Any("actor", ref), slog.String("leg", leg), slog.String("authority", md.Host), slog.Any("err", err))
+	if err != nil || dest.Port == 0 {
+		slog.WarnContext(ctx, "egress denied: CONNECT authority is not a host:port", slog.Any("actor", ref), slog.String("leg", leg), slog.String("authority", md.Host), slog.Any("err", err))
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
 

@@ -40,6 +40,14 @@ import (
 )
 
 func TestClientDialContext(t *testing.T) {
+	for _, destination := range []string{"192.0.2.10:443", "db.example.com:5432"} {
+		t.Run(destination, func(t *testing.T) {
+			testClientDialContext(t, destination)
+		})
+	}
+}
+
+func testClientDialContext(t *testing.T, destination string) {
 	ca := newTestCA(t)
 	request := make(chan *http.Request, 1)
 	gatewayAddress := serveTestConnectGateway(t, ca, func(conn net.Conn, req *http.Request) {
@@ -59,7 +67,7 @@ func TestClientDialContext(t *testing.T) {
 	})
 	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
-	conn, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	conn, err := client.DialContext(context.Background(), destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +77,11 @@ func TestClientDialContext(t *testing.T) {
 	if gotRequest.Method != http.MethodConnect {
 		t.Errorf("method = %q, want CONNECT", gotRequest.Method)
 	}
-	if gotRequest.Host != "192.0.2.10:443" {
-		t.Errorf("authority = %q, want 192.0.2.10:443", gotRequest.Host)
+	if gotRequest.Host != destination {
+		t.Errorf("authority = %q, want %s", gotRequest.Host, destination)
+	}
+	if gotRequest.RequestURI != destination {
+		t.Errorf("request target = %q, want %s", gotRequest.RequestURI, destination)
 	}
 	for name := range gotRequest.Header {
 		if strings.HasPrefix(strings.ToLower(name), "x-ate-") {
@@ -186,7 +197,8 @@ func TestClientDialContextHTTP2(t *testing.T) {
 
 func TestClientDialContextHTTP2MultiplexesStreams(t *testing.T) {
 	ca := newTestCA(t)
-	const streamCount = 4
+	destinations := []string{"192.0.2.10:443", "192.0.2.11:443", "api.example.com:443", "db.example.com:5432"}
+	streamCount := int32(len(destinations))
 	allOpen := make(chan struct{})
 	var opened atomic.Int32
 
@@ -220,11 +232,10 @@ func TestClientDialContextHTTP2MultiplexesStreams(t *testing.T) {
 	}))
 
 	var wg sync.WaitGroup
-	for i := range streamCount {
+	for i, dest := range destinations {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			dest := fmt.Sprintf("192.0.2.%d:443", 10+idx)
 			conn, err := client.DialContext(context.Background(), dest)
 			if err != nil {
 				t.Errorf("DialContext(%s): %v", dest, err)
@@ -667,8 +678,28 @@ func TestClientDialContextValidatesInput(t *testing.T) {
 			destination: "192.0.2.10",
 		},
 		{
-			name:        "destination is a hostname",
-			destination: "example.com:443",
+			name:        "destination has no host",
+			destination: ":443",
+		},
+		{
+			name:        "port is out of range",
+			destination: "example.com:70000",
+		},
+		{
+			name:        "hostname with a space",
+			destination: "exa mple.com:443",
+		},
+		{
+			name:        "hostname with a line break",
+			destination: "example.com\r\nHost: other.example:443",
+		},
+		{
+			name:        "hostname in upper case",
+			destination: "Example.com:443",
+		},
+		{
+			name:        "hostname with a trailing dot",
+			destination: "example.com.:443",
 		},
 	}
 	for _, tt := range tests {

@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
+
+	"go.ate.dev/substrate/internal/atunnel/fakeip"
 )
 
 const (
@@ -109,6 +111,6 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
 // and dials upstreams with netC's dialer.
-func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
-	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy, metrics: r.metrics}, netC)
+func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource, fakeIPs *fakeip.Table) (*Server, error) {
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy, metrics: r.metrics, fakeIPs: fakeIPs}, netC)
 }

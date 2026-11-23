@@ -123,6 +123,35 @@ func NXDomainPacket(hdr dnsmessage.Header, q dnsmessage.Question) []byte {
 	return out
 }
 
+// AddressPacket returns a serialized response that answers the A question q
+// with addr, to a request or an upstream response with header hdr.
+func AddressPacket(hdr dnsmessage.Header, q dnsmessage.Question, addr [4]byte, ttl uint32) []byte {
+	b := dnsmessage.NewBuilder(nil, responseHeader(hdr, dnsmessage.RCodeSuccess))
+	// The answer repeats the question's name. Compressed, the response fits
+	// the 512 bytes every resolver accepts over UDP, whatever the name.
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeServerFailure, &q)
+	}
+	if err := b.Question(q); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeServerFailure, &q)
+	}
+	if err := b.StartAnswers(); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeServerFailure, &q)
+	}
+	if err := b.AResource(
+		dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: ttl},
+		dnsmessage.AResource{A: addr},
+	); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeServerFailure, &q)
+	}
+	out, err := b.Finish()
+	if err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeServerFailure, &q)
+	}
+	return out
+}
+
 // ErrorPacket returns a serialized DNS packet signaling an error.
 func ErrorPacket(hdr dnsmessage.Header, rcode dnsmessage.RCode, q *dnsmessage.Question) []byte {
 	b := dnsmessage.NewBuilder(nil, responseHeader(hdr, rcode))
