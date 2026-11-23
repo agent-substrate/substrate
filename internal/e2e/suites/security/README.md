@@ -62,7 +62,6 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
    - `RouterDeliversOnlyToNamedActorInSpace` — **NW-6 [space]** (ingress router atespace/actor isolation with concurrent actors on distinct workers: T-14)
    - `DirectActorToActorTrafficBlocked` — **NW-2 [space]** (no direct actor-to-actor traffic across the pod network; blocked by NetworkPolicy: T-17)
    - `ConcurrentDurableMountIsolation` — **ST-1 [space]** (durable-dir volume mount isolation across concurrent actors: T-18, T-27)
-   - `ConcurrentHostStateNotReachableFromActorSandbox` — **EX-4 [space]** (live per-actor host state under shared `/var/lib/ate` not reachable across concurrent sandboxes: T-18)
 
    To run a subset of subtests:
 
@@ -92,16 +91,20 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
    ```
 
    `cleanup-e2e.sh` removes namespaces labeled `ate.dev/e2e`. Of this suite's
-   fixtures only `actor-isolation.yaml.tmpl` carries that label, so delete
-   `ate-e2e-sec-a` and `ate-e2e-sec-b` by hand if an interrupted
-   cross-atespace test left them behind.
+   fixtures `actor-isolation.yaml.tmpl`, `concurrent-a-pool.yaml.tmpl` and
+   `concurrent-b-namespace.yaml.tmpl` carry that label. The cross-atespace
+   fixtures do not, so delete `ate-e2e-sec-a` and `ate-e2e-sec-b` by hand if
+   an interrupted cross-atespace test left them behind.
 
 ## Watch a run
 
-Namespaces are `ate-e2e-sec-actor` for `TestActorIsolation` and
-`ate-e2e-sec-a` plus `ate-e2e-sec-b` for `TestCrossAtespaceIsolation`. The
-micro-VM lane inserts `-microvm` after `ate-e2e`. Worker pods are labeled
-`ate.dev/worker-pool=<pool>`; the pools are `actor` and `shared`.
+Namespaces are `ate-e2e-sec-actor` for `TestActorIsolation`,
+`ate-e2e-sec-a` plus `ate-e2e-sec-b` for `TestCrossAtespaceIsolation`, and
+`ate-e2e-sec-conc-a` plus `ate-e2e-sec-conc-b` for
+`TestConcurrentActorIsolation`. The micro-VM lane inserts `-microvm` after
+`ate-e2e`. Worker pods are labeled `ate.dev/worker-pool=<pool>`; the pools
+are `actor`, `shared` and `concurrent`. The `concurrent` pool runs both of
+its worker pods in `ate-e2e-sec-conc-a`.
 
 Start these before launching the test.
 

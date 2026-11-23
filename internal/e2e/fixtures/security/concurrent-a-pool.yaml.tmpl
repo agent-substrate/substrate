@@ -21,7 +21,7 @@
 #
 # replicas is 2 on purpose: the test runs two actors at the exact same time
 # on two distinct worker pods to verify space-invariance boundaries (NW-6,
-# NW-2, ST-1 [space], EX-4 [space]). The fixture for atespace B applies
+# NW-2, ST-1 [space]). The fixture for atespace B applies
 # concurrent-b-namespace.yaml.tmpl, a k8s Namespace with no pool, so the
 # actors of both atespaces share this 2-worker pool.
 
