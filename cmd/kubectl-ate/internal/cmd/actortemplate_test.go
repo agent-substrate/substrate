@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -62,11 +67,15 @@ volumes:
   durableDir: {}
 `
 
-func TestActorTemplateFromManifest(t *testing.T) {
-	got, err := actorTemplateFromManifest([]byte(counterTemplateManifest))
+func TestActorTemplatesFromManifest(t *testing.T) {
+	got, err := actorTemplatesFromManifest([]byte(counterTemplateManifest))
 	if err != nil {
-		t.Fatalf("actorTemplateFromManifest: %v", err)
+		t.Fatalf("actorTemplatesFromManifest: %v", err)
 	}
+	if len(got) != 1 {
+		t.Fatalf("actorTemplatesFromManifest returned %d templates, want 1", len(got))
+	}
+	template := got[0]
 
 	want := &ateapi.ActorTemplate{
 		Metadata:       &ateapi.ResourceMetadata{Atespace: "ate-demo-counter", Name: "counter"},
@@ -90,12 +99,12 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			DurableDir: &ateapi.DurableDirVolumeSource{},
 		}},
 	}
-	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, template, protocmp.Transform()); diff != "" {
 		t.Errorf("template mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
+func TestActorTemplatesFromManifest_SnakeCase(t *testing.T) {
 	// protojson accepts the proto field names as well as the json names.
 	manifest := `metadata:
   atespace: ate-demo-counter
@@ -103,21 +112,46 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
 snapshot_config:
   storage_location: gs://ate-snapshots/ate-demo-counter/
 `
-	got, err := actorTemplateFromManifest([]byte(manifest))
+	got, err := actorTemplatesFromManifest([]byte(manifest))
 	if err != nil {
-		t.Fatalf("actorTemplateFromManifest: %v", err)
+		t.Fatalf("actorTemplatesFromManifest: %v", err)
 	}
-	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
-		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
+	if len(got) != 1 {
+		t.Fatalf("actorTemplatesFromManifest returned %d templates, want 1", len(got))
+	}
+	if got[0].GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
+		t.Errorf("storage_location = %q", got[0].GetSnapshotConfig().GetStorageLocation())
 	}
 }
 
-func TestActorTemplateFromManifest_Errors(t *testing.T) {
+func TestActorTemplatesFromManifest_MultiDoc(t *testing.T) {
+	manifest := `metadata: {atespace: a, name: one}
+---
+metadata: {atespace: a, name: two}
+---
+---
+metadata: {atespace: a, name: three}
+`
+	got, err := actorTemplatesFromManifest([]byte(manifest))
+	if err != nil {
+		t.Fatalf("actorTemplatesFromManifest: %v", err)
+	}
+	var names []string
+	for _, tmpl := range got {
+		names = append(names, tmpl.GetMetadata().GetName())
+	}
+	if diff := cmp.Diff([]string{"one", "two", "three"}, names); diff != "" {
+		t.Errorf("names mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestActorTemplatesFromManifest_Errors(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest string
 	}{
 		{name: "empty", manifest: ""},
+		{name: "only a separator", manifest: "---\n"},
 		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
 		{name: "bad enum", manifest: "snapshotConfig: {preferredFidelity: memory}\n"},
 		{name: "resources limits list", manifest: "resources: {limits: [{name: cpu, quantity: \"1\"}]}\n"},
@@ -126,8 +160,8 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got, err := actorTemplateFromManifest([]byte(test.manifest)); err == nil {
-				t.Fatalf("actorTemplateFromManifest succeeded: %v", got)
+			if got, err := actorTemplatesFromManifest([]byte(test.manifest)); err == nil {
+				t.Fatalf("actorTemplatesFromManifest succeeded: %v", got)
 			}
 		})
 	}
@@ -135,7 +169,7 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 
 // The counter demo's substrate template manifests must stay parseable by
 // `create actortemplate -f`; this pins them to the parser.
-func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
+func TestActorTemplatesFromManifest_DemoManifests(t *testing.T) {
 	tests := []struct {
 		manifest string
 		atespace string
@@ -169,19 +203,23 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			}
 			rendered := strings.Join(kept, "\n")
 
-			got, err := actorTemplateFromManifest([]byte(rendered))
+			got, err := actorTemplatesFromManifest([]byte(rendered))
 			if err != nil {
-				t.Fatalf("actorTemplateFromManifest: %v", err)
+				t.Fatalf("actorTemplatesFromManifest: %v", err)
 			}
-			if got.GetMetadata().GetAtespace() != test.atespace || got.GetMetadata().GetName() != test.name {
+			if len(got) != 1 {
+				t.Fatalf("actorTemplatesFromManifest returned %d templates, want 1", len(got))
+			}
+			template := got[0]
+			if template.GetMetadata().GetAtespace() != test.atespace || template.GetMetadata().GetName() != test.name {
 				t.Errorf("metadata = %s/%s, want %s/%s",
-					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
+					template.GetMetadata().GetAtespace(), template.GetMetadata().GetName(), test.atespace, test.name)
 			}
-			if len(got.GetContainers()) == 0 {
-				t.Errorf("manifest has no containers: %v", got)
+			if len(template.GetContainers()) == 0 {
+				t.Errorf("manifest has no containers: %v", template)
 			}
 			// The API rejects storageLocation without its preview gate.
-			if location := got.GetSnapshotConfig().GetStorageLocation(); location != "" {
+			if location := template.GetSnapshotConfig().GetStorageLocation(); location != "" {
 				t.Errorf("manifest sets storageLocation %q, want none", location)
 			}
 		})
@@ -195,5 +233,57 @@ func TestReadFileOrStdin(t *testing.T) {
 	}
 	if _, err := readFileOrStdin(nil, "/does/not/exist.yaml"); err == nil {
 		t.Fatal("readFileOrStdin on a missing file succeeded")
+	}
+}
+
+// fakeActorTemplateCreator records each request and answers with an error for
+// names listed in fail.
+type fakeActorTemplateCreator struct {
+	fail map[string]error
+	got  []string
+}
+
+func (f *fakeActorTemplateCreator) CreateActorTemplate(_ context.Context, req *ateapi.CreateActorTemplateRequest, _ ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
+	tmpl := req.GetActorTemplate()
+	f.got = append(f.got, tmpl.GetMetadata().GetName())
+	if err, ok := f.fail[tmpl.GetMetadata().GetName()]; ok {
+		return nil, err
+	}
+	return tmpl, nil
+}
+
+func TestCreateActorTemplatesRunner(t *testing.T) {
+	mkTemplate := func(name string) *ateapi.ActorTemplate {
+		return &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: "a", Name: name}}
+	}
+	creator := &fakeActorTemplateCreator{
+		fail: map[string]error{"two": status.Error(codes.AlreadyExists, "already exists")},
+	}
+	var stdout bytes.Buffer
+	runner := &createActorTemplatesRunner{
+		creator:   creator,
+		templates: []*ateapi.ActorTemplate{mkTemplate("one"), mkTemplate("two"), mkTemplate("three")},
+		outputFmt: "table",
+		stdout:    &stdout,
+	}
+
+	err := runner.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run succeeded, want an aggregated error")
+	}
+	if !strings.Contains(err.Error(), "two") || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("Run error = %v, want it to mention the failed template", err)
+	}
+	if diff := cmp.Diff([]string{"one", "two", "three"}, creator.got); diff != "" {
+		t.Errorf("create calls mismatch (-want +got):\n%s", diff)
+	}
+	// The two successful templates are printed; the failed one is not.
+	for _, want := range []string{"one", "three"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
+		}
+	}
+	if strings.Contains(stdout.String(), "two") {
+		t.Errorf("stdout = %q, want no row for the failed template", stdout.String())
 	}
 }

@@ -148,8 +148,7 @@ rules:
 - http: {hostnames: ["*"]}
 ---
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "empty second document",
@@ -158,8 +157,7 @@ rules:
 ---
 # nothing here
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "empty first document",
@@ -169,8 +167,7 @@ rules:
 rules:
 - http: {hostnames: ["*"]}
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "two leading separators",
@@ -179,8 +176,7 @@ rules:
 rules:
 - http: {hostnames: ["*"]}
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "document end marker then separator",
@@ -189,8 +185,7 @@ rules:
 ...
 ---
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "two egress policies separated by ---",

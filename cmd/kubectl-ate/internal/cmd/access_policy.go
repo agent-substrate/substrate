@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
@@ -122,15 +121,14 @@ func scopeFromFlags(atespace string, global bool) (accessPolicyScope, error) {
 // document into an AccessPolicy. Parsing is strict: unknown fields are an
 // error.
 func accessPolicyFromManifest(data []byte) (*ateapi.AccessPolicy, error) {
-	jsonData, err := manifestToJSON(data)
+	msgs, err := manifestMessages(data, &ateapi.AccessPolicy{})
 	if err != nil {
 		return nil, err
 	}
-	policy := &ateapi.AccessPolicy{}
-	if err := protojson.Unmarshal(jsonData, policy); err != nil {
-		return nil, fmt.Errorf("invalid AccessPolicy: %w", err)
+	if len(msgs) > 1 {
+		return nil, errors.New("manifest holds more than one document, expected one")
 	}
-	return policy, nil
+	return msgs[0].(*ateapi.AccessPolicy), nil
 }
 
 // loadAccessPolicyManifest reads a manifest from filename, or from in when
