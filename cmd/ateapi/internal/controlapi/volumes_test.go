@@ -746,7 +746,7 @@ func TestCreateActorVolumesRestoresSourceSnapshots(t *testing.T) {
 				"substrate-actor-uid-123-vol2": "",
 			},
 			wantRes: []*ateapi.ExternalVolumeStatus{
-				{Name: "vol1", VolumeType: "mock-standard", StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1"},
+				{Name: "vol1", VolumeType: "mock-standard", StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1", SourceSnapshotId: "snap-1"},
 				{Name: "vol2", VolumeType: "mock-standard", StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol2"},
 				{Name: "vol3", VolumeType: "mock-standard", StorageVolumeId: "existing-vol3"},
 			},
@@ -762,7 +762,7 @@ func TestCreateActorVolumesRestoresSourceSnapshots(t *testing.T) {
 			wantCode:    codes.Unavailable,
 			wantSources: map[string]string{"substrate-actor-uid-123-vol1": "snap-1"},
 			wantRes: []*ateapi.ExternalVolumeStatus{
-				{Name: "vol1", VolumeType: "mock-standard", StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1"},
+				{Name: "vol1", VolumeType: "mock-standard", StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1", SourceSnapshotId: "snap-1"},
 				{Name: "vol2", VolumeType: "mock-standard", SourceSnapshotId: "snap-2"},
 				{Name: "vol3", VolumeType: "mock-standard", SourceSnapshotId: "snap-3"},
 			},
@@ -955,6 +955,30 @@ func TestSetTagVolumeSources(t *testing.T) {
 			wantReady:   map[string]bool{"data": false},
 		},
 		{
+			name:        "a lookup the driver reports unavailable keeps its code",
+			statuses:    map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": creating("snap-data")},
+			results:     map[string]lookupResult{"snap-data": {err: fmt.Errorf("CSI ListSnapshots failed: %w", status.Error(codes.Unavailable, "down"))}},
+			wantCode:    codes.Unavailable,
+			wantLookups: []string{"snap-data"},
+			wantReady:   map[string]bool{"data": false},
+		},
+		{
+			name:        "a lookup the driver timed out keeps its code",
+			statuses:    map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": creating("snap-data")},
+			results:     map[string]lookupResult{"snap-data": {err: fmt.Errorf("CSI ListSnapshots failed: %w", status.Error(codes.DeadlineExceeded, "timeout"))}},
+			wantCode:    codes.DeadlineExceeded,
+			wantLookups: []string{"snap-data"},
+			wantReady:   map[string]bool{"data": false},
+		},
+		{
+			name:        "a lookup over the driver's quota keeps its code",
+			statuses:    map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": creating("snap-data")},
+			results:     map[string]lookupResult{"snap-data": {err: fmt.Errorf("CSI ListSnapshots failed: %w", status.Error(codes.ResourceExhausted, "quota"))}},
+			wantCode:    codes.ResourceExhausted,
+			wantLookups: []string{"snap-data"},
+			wantReady:   map[string]bool{"data": false},
+		},
+		{
 			name:      "a driver without a plugin is refused",
 			statuses:  map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": creating("snap-data")},
 			noPlugin:  true,
@@ -1061,7 +1085,10 @@ func TestRecordVolumeSnapshotReady(t *testing.T) {
 		name string
 		// stale records the snapshot once before the call, so the call's
 		// copy is out of date.
-		stale           bool
+		stale bool
+		// negativeSize has the driver report a negative size, which is
+		// not recorded.
+		negativeSize    bool
 		failUpdate      bool
 		deleted         bool
 		wantReady       bool
@@ -1070,6 +1097,8 @@ func TestRecordVolumeSnapshotReady(t *testing.T) {
 		{name: "recorded", wantReady: true, wantStoredReady: true},
 		{name: "stale copy is retried", stale: true, wantReady: true, wantStoredReady: true},
 		{name: "failed write", failUpdate: true, wantReady: true},
+		{name: "negative size", negativeSize: true, wantReady: true, wantStoredReady: true},
+		{name: "negative size and failed write", negativeSize: true, failUpdate: true, wantReady: true},
 		{name: "deleted meanwhile", deleted: true},
 	}
 	for _, tt := range tests {
@@ -1094,12 +1123,16 @@ func TestRecordVolumeSnapshotReady(t *testing.T) {
 			}
 			faulty.failUpdate = tt.failUpdate
 
-			got := impl.recordVolumeSnapshotReady(ctx, snap, observed)
+			obs, wantSize := observed, observed.SizeBytes
+			if tt.negativeSize {
+				obs.SizeBytes, wantSize = -1, 0
+			}
+			got := impl.recordVolumeSnapshotReady(ctx, snap, obs)
 			if got.GetStatus().GetReadyToUse() != tt.wantReady {
 				t.Errorf("returned ready_to_use = %v, want %v", got.GetStatus().GetReadyToUse(), tt.wantReady)
 			}
-			if tt.wantReady && got.GetStatus().GetRestoreSizeBytes() != observed.SizeBytes {
-				t.Errorf("returned restore_size_bytes = %d, want %d", got.GetStatus().GetRestoreSizeBytes(), observed.SizeBytes)
+			if tt.wantReady && got.GetStatus().GetRestoreSizeBytes() != wantSize {
+				t.Errorf("returned restore_size_bytes = %d, want %d", got.GetStatus().GetRestoreSizeBytes(), wantSize)
 			}
 			stored, err := persistence.GetExternalVolumeSnapshot(ctx, ref)
 			if tt.deleted {
@@ -1113,6 +1146,9 @@ func TestRecordVolumeSnapshotReady(t *testing.T) {
 			}
 			if stored.GetStatus().GetReadyToUse() != tt.wantStoredReady {
 				t.Errorf("stored ready_to_use = %v, want %v", stored.GetStatus().GetReadyToUse(), tt.wantStoredReady)
+			}
+			if tt.wantStoredReady && stored.GetStatus().GetRestoreSizeBytes() != wantSize {
+				t.Errorf("stored restore_size_bytes = %d, want %d", stored.GetStatus().GetRestoreSizeBytes(), wantSize)
 			}
 		})
 	}
@@ -1224,9 +1260,11 @@ func TestRefreshTagVolumeSnapshots(t *testing.T) {
 func TestRefreshVolumeSnapshot(t *testing.T) {
 	ready := lookupResult{snap: volume.Snapshot{ReadyToUse: true, SizeBytes: 2048}, found: true}
 	tests := []struct {
-		name     string
-		status   *ateapi.ExternalVolumeSnapshotStatus
-		result   lookupResult
+		name   string
+		status *ateapi.ExternalVolumeSnapshotStatus
+		result lookupResult
+		// pending leaves the tag's snapshot PENDING.
+		pending  bool
 		deleting bool
 		// wantReady is the ready_to_use returned and stored.
 		wantReady   bool
@@ -1256,13 +1294,22 @@ func TestRefreshVolumeSnapshot(t *testing.T) {
 			result:   ready,
 			deleting: true,
 		},
+		{
+			name:    "a snapshot of a pending tag is not looked up",
+			status:  volumeSnapshotStatus("snap-data", false),
+			result:  ready,
+			pending: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence, cleanup := storetest.SetupTestStore(t)
 			t.Cleanup(cleanup)
-			tag := completeTag(t, ctx, persistence, seedCreatingVolumeTag(t, ctx, persistence, map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": tt.status}))
+			tag := seedCreatingVolumeTag(t, ctx, persistence, map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": tt.status})
+			if !tt.pending {
+				tag = completeTag(t, ctx, persistence, tag)
+			}
 			if tt.deleting {
 				if _, err := persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); err != nil {
 					t.Fatalf("MarkTagForDeletion: %v", err)

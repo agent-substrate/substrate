@@ -140,13 +140,12 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.Internal("volume plugin returned no ID for volume %q", specVol.GetName())
 		}
 
-		// source_snapshot_id is left out: a provisioned volume is never
-		// restored again.
 		resultVolumes = append(resultVolumes, &ateapi.ExternalVolumeStatus{
-			Name:            volName,
-			StorageVolumeId: resp.VolumeID,
-			VolumeType:      sc.Provisioner,
-			VolumeContext:   resp.VolumeContext,
+			Name:             volName,
+			StorageVolumeId:  resp.VolumeID,
+			VolumeType:       sc.Provisioner,
+			VolumeContext:    resp.VolumeContext,
+			SourceSnapshotId: vol.GetSourceSnapshotId(),
 		})
 	}
 	return resultVolumes, nil
@@ -288,11 +287,10 @@ func (s *ServiceImpl) setTagVolumeSources(ctx context.Context, tag *ateapi.Tag, 
 // ExternalVolumeSnapshots that have a handle but are not ready to use are
 // ready now, and records those that are. CreateTag does not wait for
 // snapshots, so GetTag uses this to show when a tag can seed an Actor. Only a
-// finished tag that is not being deleted is refreshed. A failed lookup or
-// write is logged and leaves the snapshot not ready.
+// tag that tagRefreshable accepts is refreshed. A failed lookup or write is
+// logged and leaves the snapshot not ready.
 func (s *ServiceImpl) refreshTagVolumeSnapshots(ctx context.Context, tag *ateapi.Tag) {
-	completed := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) != ""
-	if !completed || tag.GetMetadata().GetDeleteTime() != nil {
+	if !tagRefreshable(tag) {
 		return
 	}
 	tagRef := resources.TagRefFromTag(tag)
@@ -313,7 +311,8 @@ func (s *ServiceImpl) refreshTagVolumeSnapshots(ctx context.Context, tag *ateapi
 
 // refreshVolumeSnapshot asks the storage system whether a snapshot that has a
 // handle but is not ready to use is ready now, as refreshTagVolumeSnapshots
-// does, and returns the snapshot as recorded. A snapshot whose tag is being deleted is returned unchanged.
+// does, and returns the snapshot as recorded. A snapshot whose tag
+// tagRefreshable refuses is returned unchanged.
 func (s *ServiceImpl) refreshVolumeSnapshot(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) *ateapi.ExternalVolumeSnapshot {
 	if st := snap.GetStatus(); st.GetSnapshotId() == "" || st.GetReadyToUse() {
 		return snap
@@ -327,7 +326,7 @@ func (s *ServiceImpl) refreshVolumeSnapshot(ctx context.Context, snap *ateapi.Ex
 		}
 		return snap
 	}
-	if tag.GetMetadata().GetUid() != origin.GetTagUid() || tag.GetMetadata().GetDeleteTime() != nil {
+	if tag.GetMetadata().GetUid() != origin.GetTagUid() || !tagRefreshable(tag) {
 		return snap
 	}
 	ready := readyVolumeSnapshots(ctx, []volumeSnapshotLookup{s.lookupVolumeSnapshot(ctx, snap)})
@@ -335,6 +334,13 @@ func (s *ServiceImpl) refreshVolumeSnapshot(ctx context.Context, snap *ateapi.Ex
 		return snap
 	}
 	return s.recordVolumeSnapshotsReady(ctx, ready)[0]
+}
+
+// tagRefreshable reports whether the tag's snapshots may be refreshed: the tag
+// is finished and is not being deleted.
+func tagRefreshable(tag *ateapi.Tag) bool {
+	completed := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) != ""
+	return completed && tag.GetMetadata().GetDeleteTime() == nil
 }
 
 // readyVolumeSnapshots returns the lookups that found their snapshot ready. A
@@ -394,9 +400,24 @@ func (s *ServiceImpl) lookupVolumeSnapshot(ctx context.Context, snap *ateapi.Ext
 	case errors.Is(err, errors.ErrUnsupported):
 		l.err = err
 	case err != nil:
-		l.err = apierror.Internal("failed to read snapshot %q of volume %q: %v", snapshotID, snap.GetOrigin().GetTagCapture().GetSourceVolumeName(), err)
+		l.err = getSnapshotError(snapshotID, snap.GetOrigin().GetTagCapture().GetSourceVolumeName(), err)
 	}
 	return l
+}
+
+// getSnapshotError maps a failed snapshot lookup to an apierror. Transient and
+// quota codes pass through, as in createVolumeError, so callers can retry.
+func getSnapshotError(snapshotID, volName string, err error) error {
+	const format = "failed to read snapshot %q of volume %q: %v"
+	switch status.Code(err) {
+	case codes.Unavailable:
+		return apierror.Unavailable(format, snapshotID, volName, err)
+	case codes.DeadlineExceeded:
+		return apierror.DeadlineExceeded(format, snapshotID, volName, err)
+	case codes.ResourceExhausted:
+		return apierror.ResourceExhausted(format, snapshotID, volName, err)
+	}
+	return apierror.Internal(format, snapshotID, volName, err)
 }
 
 // recordVolumeSnapshotsReady records each looked-up snapshot as ready to use,
@@ -417,7 +438,7 @@ func (s *ServiceImpl) recordVolumeSnapshotReady(ctx context.Context, snap *ateap
 	ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(snap)
 	setReady := func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
 		toUpdate.Status.ReadyToUse = true
-		if toUpdate.GetStatus().GetRestoreSizeBytes() == 0 {
+		if toUpdate.GetStatus().GetRestoreSizeBytes() == 0 && observed.SizeBytes > 0 {
 			toUpdate.Status.RestoreSizeBytes = observed.SizeBytes
 		}
 		return nil

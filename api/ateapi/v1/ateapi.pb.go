@@ -1135,16 +1135,17 @@ type ExternalVolumeStatus struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// source_snapshot_id is the snapshot handle the volume is restored from
-	// when it is provisioned. CreateActor copies it from the
-	// ExternalVolumeSnapshot the source tag captured of this volume. Empty
-	// means the volume is provisioned empty. It is cleared once the volume is
+	// source_snapshot_id is the snapshot handle the volume is restored from.
+	// CreateActor copies it from the ExternalVolumeSnapshot the source tag
+	// captured of this volume. Empty means the volume is provisioned empty.
+	// Updates cannot change or clear it, so it stays after the volume is
 	// provisioned. Like `storage_volume_id`, it is only bounded and checked for
 	// the control characters listed there. Tab, LF and CR are allowed.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=256
 	// +k8s:update=NoModify
+	// +k8s:update=NoUnset # not immutable, for the same reason as name above
 	// +k8s:customValidation # no control characters
 	SourceSnapshotId string `protobuf:"bytes,5,opt,name=source_snapshot_id,json=sourceSnapshotId,proto3" json:"source_snapshot_id,omitempty"`
 	unknownFields    protoimpl.UnknownFields

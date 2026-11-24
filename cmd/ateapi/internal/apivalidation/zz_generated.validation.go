@@ -4585,7 +4585,7 @@ func Validate_ExternalVolumeStatus(
 				earlyReturn = true
 			}
 			if e := validate.UpdateValue(ctx, op, fldPath, obj, oldObj,
-				func(a string, b string) bool { return a == b }, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
+				func(a string, b string) bool { return a == b }, validate.NoUnset, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}

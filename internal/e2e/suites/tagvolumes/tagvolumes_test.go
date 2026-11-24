@@ -107,6 +107,7 @@ func TestTagVolumes(t *testing.T) {
 
 		s.requireFile(t, clone, dataPath+"/"+sourceFile)
 		s.requireNoFile(t, clone, cachePath+"/"+sourceFile)
+		s.write(t, clone, cachePath+"/"+cloneFile)
 	})
 
 	// A tag taken without volume_selection captures no volumes, so a clone's
@@ -118,6 +119,8 @@ func TestTagVolumes(t *testing.T) {
 
 		s.requireNoFile(t, clone, dataPath+"/"+sourceFile)
 		s.requireNoFile(t, clone, cachePath+"/"+sourceFile)
+		s.write(t, clone, dataPath+"/"+cloneFile)
+		s.write(t, clone, cachePath+"/"+cloneFile)
 	})
 
 	// Each Actor created from one tag gets its own copy of the volume.

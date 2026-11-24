@@ -233,10 +233,12 @@ func TestCreateTag_CapturesVolumes(t *testing.T) {
 	if diff := cmp.Diff(handles, plugin.restoreSources(t, clone, "data", "cache")); diff != "" {
 		t.Errorf("restore sources mismatch (-tag handles +restored from):\n%s", diff)
 	}
+	kept := map[string]string{}
 	for _, vol := range clone.GetStatus().GetExternalVolumes().GetVolumes() {
-		if vol.GetSourceSnapshotId() != "" {
-			t.Errorf("provisioned volume %q keeps source_snapshot_id %q", vol.GetName(), vol.GetSourceSnapshotId())
-		}
+		kept[vol.GetName()] = vol.GetSourceSnapshotId()
+	}
+	if diff := cmp.Diff(handles, kept); diff != "" {
+		t.Errorf("source_snapshot_id after provisioning mismatch (-tag handles +kept):\n%s", diff)
 	}
 
 	if _, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {

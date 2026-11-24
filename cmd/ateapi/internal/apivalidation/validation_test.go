@@ -1008,9 +1008,14 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "" }),
 		want:   field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "").WithOrigin("update")},
 	}, {
-		name:   "source_snapshot_id cleared once the volume is provisioned is valid",
+		name:   "source_snapshot_id kept once the volume is provisioned is valid",
 		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = ""; v.SourceSnapshotId = "snap-1" }),
-		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "vol-id-1"; v.SourceSnapshotId = "" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "vol-id-1"; v.SourceSnapshotId = "snap-1" }),
+	}, {
+		name:   "source_snapshot_id unset once set is invalid",
+		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = "snap-1" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = "" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("source_snapshot_id"), nil, "").WithOrigin("update")},
 	}, {
 		name:   "source_snapshot_id changed is invalid",
 		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = "snap-1" }),
