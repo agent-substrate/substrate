@@ -29,6 +29,18 @@ within about 5 seconds.
 > the actor's egress policy has a rule for it with
 > `kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml`.
 
+The egress gateway caches each actor's policy for `--egress-policy-cache-ttl`
+(10s by default). A policy change applies to new requests and connections at
+the gateway within that time.
+
+> [!WARNING]
+> Best practice is to name each actor with a UUID and never reuse an actor's
+> name after it is deleted. Policies are cached temporarily and reuse of a name
+> can result in application of the policy of a deleted actor with the same name
+> ([#3267](https://github.com/agent-substrate/substrate/issues/3267)). Nothing
+> in Substrate enforces name uniqueness across time: after actor `atespace1/foo`
+> is deleted, a new actor can be created as `atespace1/foo`.
+
 Other UDP and other traffic is rejected by nftables and never reaches the egress
 gateway.
 
