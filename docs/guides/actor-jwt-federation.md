@@ -67,6 +67,6 @@ If the relying party doesn't accept ES256,
 
 To check the setup, have an egress policy inject a token for the relying
 party's audience into a request to a server you control, and present that
-token to the relying party. Substrate can't yet present an actor JWT to a
-cloud token exchange endpoint itself; see
+token to the relying party. The gateway can't present an actor JWT to a cloud
+token exchange endpoint itself, but a custom credential provider can; see
 [Known limitations](actor-jwts.md#known-limitations).

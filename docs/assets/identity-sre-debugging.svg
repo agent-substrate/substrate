@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="38 375 994 434" width="994" height="434" role="img" aria-labelledby="title" font-family="Ubuntu, Geist, system-ui, -apple-system, 'Segoe UI', sans-serif">
+<title id="title">SRE debugging: an engineer gets a short-lived SSO token and uses it against the Substrate API to manage Actor B</title>
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#64d86b"/></marker></defs>
+<rect x="38" y="375" width="994" height="434" rx="12" fill="#0a0e0b"/>
+<!-- Edit coordinates directly. Arrows point from the caller to the callee. -->
+<rect x="552" y="403" width="452" height="378" fill="none" stroke="#64d86b" stroke-width="2.5" stroke-dasharray="9 7"/>
+<text x="990" y="767" font-size="22" font-weight="700" fill="#64d86b" text-anchor="end">Substrate</text>
+<rect x="66" y="443" width="179" height="90" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="155.5" y="470" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">SSO / IdP</text>
+<text x="155.5" y="496" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">your identity</text>
+<text x="155.5" y="517" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">provider</text>
+<rect x="66" y="611" width="179" height="89" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="155.5" y="647.5" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">SRE / dev</text>
+<text x="155.5" y="673.5" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">debugging</text>
+<rect x="582" y="622" width="392" height="89" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="778" y="658.5" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">Substrate API</text>
+<text x="778" y="684.5" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">control plane</text>
+<rect x="782" y="433" width="192" height="112" rx="4" fill="#111612" stroke="#64d86b" stroke-width="2.5"/>
+<text x="878" y="481" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">Actor B</text>
+<text x="878" y="507" font-size="17" font-weight="400" fill="#64d86b" text-anchor="middle">sandbox • no creds</text>
+<path d="M155 611 L155 537" fill="none" stroke="#64d86b" stroke-width="3.5" stroke-dasharray="3 7" marker-end="url(#head)" stroke-linejoin="round"/>
+<circle cx="183" cy="573" r="16" fill="#0a0e0b" stroke="#64d86b" stroke-width="2.5"/>
+<text x="183" y="579.5" font-size="18" font-weight="700" fill="#64d86b" text-anchor="middle">1</text>
+<path d="M245 665 L578 665" fill="none" stroke="#64d86b" stroke-width="3.5" marker-end="url(#head)" stroke-linejoin="round"/>
+<circle cx="413" cy="640" r="16" fill="#0a0e0b" stroke="#64d86b" stroke-width="2.5"/>
+<text x="413" y="646.5" font-size="18" font-weight="700" fill="#64d86b" text-anchor="middle">2</text>
+<path d="M877 622 L877 549" fill="none" stroke="#64d86b" stroke-width="3.5" marker-end="url(#head)" stroke-linejoin="round"/>
+<circle cx="908" cy="582" r="16" fill="#0a0e0b" stroke="#64d86b" stroke-width="2.5"/>
+<text x="908" y="588.5" font-size="18" font-weight="700" fill="#64d86b" text-anchor="middle">3</text>
+</svg>
