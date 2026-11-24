@@ -186,14 +186,7 @@ func setIngressTLS(server *XdsServer) {
 }
 
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
-	server := NewXdsServer(18000)
-	server.SetConfig(50052, "10.0.0.1")
-	setIngressTLS(server)
-
-	err := server.UpdateSnapshot()
-	if err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
+	server := newEnvoyXdsTestServer(t, 18000, 50052, "10.0.0.1", withIngressTLS())
 
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
@@ -298,15 +291,7 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
 
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	server.SetTlsConfig(8443, certPath)
-	server.SetDownstreamClientAuth("/run/podidentity.podcert.ate.dev/trust-bundle.pem", []string{"spiffe://cluster.local/ns/demo/sa/client"})
-
-	err := server.UpdateSnapshot()
-	if err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1", withIngressTLS())
 
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
@@ -386,13 +371,8 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 // CONNECT support didn't exist, matching the HTTPS listener's existing
 // httpsPort>0 gating convention.
 func TestXdsServer_UpdateSnapshot_ConnectDisabledByDefault(t *testing.T) {
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	setIngressTLS(server)
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1", withIngressTLS())
 
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
@@ -425,16 +405,13 @@ func TestXdsServer_UpdateSnapshot_ConnectDisabledByDefault(t *testing.T) {
 func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
 
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	server.SetConnectTLSPort(8444)
-	// httpsPort left at 0: only the CONNECT-TLS listener wants the cert here.
-	server.SetTlsConfig(0, certPath)
-	server.SetDownstreamClientAuth("/run/podidentity.podcert.ate.dev/trust-bundle.pem", []string{"spiffe://cluster.local/ns/demo/sa/client"})
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1",
+		withConnectTLS(8444),
+		// httpsPort left at 0: only the CONNECT-TLS listener wants the cert here.
+		withTls(0, certPath),
+		withDownstreamClientAuth("/run/podidentity.podcert.ate.dev/trust-bundle.pem", []string{"spiffe://cluster.local/ns/demo/sa/client"}),
+	)
 
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
@@ -478,14 +455,8 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 // Actor traffic can carry credentials in the query string, so no HCM may log
 // the request path with its query.
 func TestXdsServer_AccessLogsOmitQueryString(t *testing.T) {
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	server.SetConnectTLSPort(8444)
-	setIngressTLS(server)
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1", withConnectTLS(8444), withIngressTLS())
 
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
@@ -526,9 +497,51 @@ func TestXdsServer_AccessLogsOmitQueryString(t *testing.T) {
 	}
 }
 
+// xdsTestServerOption applies one of XdsServer's Set* calls, mirroring a
+// config field newEnvoyXdsServer applies in production.
+type xdsTestServerOption func(*XdsServer)
+
+func withTls(httpsPort int, certPath string) xdsTestServerOption {
+	return func(x *XdsServer) { x.SetTlsConfig(httpsPort, certPath) }
+}
+
+func withDownstreamClientAuth(caPath string, allowedSPIFFEIDs []string) xdsTestServerOption {
+	return func(x *XdsServer) { x.SetDownstreamClientAuth(caPath, allowedSPIFFEIDs) }
+}
+
+func withUpstreamTls(credentialBundlePath, trustBundlePath string) xdsTestServerOption {
+	return func(x *XdsServer) { x.SetUpstreamTls(credentialBundlePath, trustBundlePath) }
+}
+
+func withUpstreamConnect() xdsTestServerOption {
+	return func(x *XdsServer) { x.SetUpstreamConnect(true) }
+}
+
+func withIngressTLS() xdsTestServerOption {
+	return func(x *XdsServer) { setIngressTLS(x) }
+}
+
+func withConnectTLS(connectTLSPort int) xdsTestServerOption {
+	return func(x *XdsServer) { x.SetConnectTLSPort(connectTLSPort) }
+}
+
+// newEnvoyXdsTestServer builds a configured XdsServer and its snapshot, as
+// newEnvoyXdsServer does in production.
+func newEnvoyXdsTestServer(t *testing.T, xdsPort, extprocPort int, extprocAddr string, opts ...xdsTestServerOption) *XdsServer {
+	t.Helper()
+	server := NewXdsServer(xdsPort)
+	server.SetConfig(extprocPort, extprocAddr)
+	for _, opt := range opts {
+		opt(server)
+	}
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	return server
+}
+
 func TestXdsServer_Serve_Shutdown(t *testing.T) {
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1")
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -561,10 +574,7 @@ func TestXdsServer_Serve_Shutdown(t *testing.T) {
 func TestXdsServer_ServesSecretOverSds(t *testing.T) {
 	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
 
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	server.SetTlsConfig(8443, certPath)
-	server.SetDownstreamClientAuth("/run/podidentity.podcert.ate.dev/trust-bundle.pem", []string{"spiffe://cluster.local/ns/demo/sa/client"})
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1", withIngressTLS())
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -645,12 +655,11 @@ func TestXdsServer_AnswersClusterSecretsBeforeListeners(t *testing.T) {
 		t.Fatalf("Router Envoy ads_config.api_type is %q; it must be DELTA_GRPC, since the state-of-the-world ADS cache ignores a partial secret request", got)
 	}
 
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	server.SetTlsConfig(8443, "/run/servicedns.podcert.ate.dev/credential-bundle.pem")
-	server.SetDownstreamClientAuth("/run/podidentity.podcert.ate.dev/trust-bundle.pem", []string{"spiffe://cluster.local/ns/demo/sa/client"})
-	server.SetUpstreamTls("/run/podidentity.podcert.ate.dev/credential-bundle.pem", "/run/podidentity.podcert.ate.dev/trust-bundle.pem")
-	server.SetUpstreamConnect(true)
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1",
+		withIngressTLS(),
+		withUpstreamTls("/run/podidentity.podcert.ate.dev/credential-bundle.pem", "/run/podidentity.podcert.ate.dev/trust-bundle.pem"),
+		withUpstreamConnect(),
+	)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1790,13 +1799,8 @@ func downstreamTLS(t *testing.T, raw any) *tlsv3.DownstreamTlsContext {
 // and an h2 offer there would move them onto extended CONNECT the tunnel path
 // does not serve.
 func TestXdsServer_ALPN(t *testing.T) {
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	setIngressTLS(server)
-	server.SetConnectTLSPort(8444)
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1", withIngressTLS(), withConnectTLS(8444))
+
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
