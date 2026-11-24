@@ -296,7 +296,10 @@ func main() {
 	}
 	var imageProvider providerclient.Client
 	if *imageProviderSocket != "" {
-		c, err := providerclient.NewGRPCClient(*imageProviderSocket)
+		if err := os.MkdirAll(ateletpath.ImageProviderMountRoot, 0o755); err != nil {
+			serverboot.Fatal(ctx, "Failed to create the image provider mount root", err)
+		}
+		c, err := providerclient.NewGRPCClient(*imageProviderSocket, ateletpath.ImageProviderMountRoot)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to create the image provider client", err)
 		}

@@ -42,7 +42,7 @@ func TestOverlaySpecRoundTrip(t *testing.T) {
 		"provider image, version 2": {
 			ImageRef:  "registry.example/app:1",
 			LeaseID:   "actor-1/app",
-			LowerDirs: []string{"/plugin/0", "/plugin/1"},
+			LowerDirs: []string{"/var/lib/ate/image-provider/nydus/app"},
 			ExtraDirs: []string{"/run/ate"},
 			ImageVolumes: []ImageVolumeOverlay{{
 				Name:        "models",
@@ -259,5 +259,39 @@ func TestWriteSpecLeavesNoTempFiles(t *testing.T) {
 		if e.Name() != OverlaySpecFileName {
 			t.Errorf("unexpected file left in bundle: %q", e.Name())
 		}
+	}
+}
+
+// WriteSpec stores a Store image's lowerdirs as its layers, so lowerdirs that
+// are not those of the layers fail instead of being dropped.
+func TestWriteSpecLowerDirsOfStoreLayers(t *testing.T) {
+	layers := []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"}
+	for _, tc := range []struct {
+		name    string
+		spec    *OverlaySpec
+		wantErr bool
+	}{{
+		name: "layers only",
+		spec: &OverlaySpec{StoreLayers: layers},
+	}, {
+		name: "lowerdirs of the layers",
+		spec: &OverlaySpec{StoreLayers: layers, LowerDirs: storeLowerDirs(layers)},
+	}, {
+		name:    "other lowerdirs",
+		spec:    &OverlaySpec{StoreLayers: layers, LowerDirs: []string{"/var/lib/ate/image-provider/nydus/app"}},
+		wantErr: true,
+	}, {
+		name: "volume with other lowerdirs",
+		spec: &OverlaySpec{StoreLayers: layers, ImageVolumes: []ImageVolumeOverlay{{
+			Name: "models", StoreLayers: layers, LowerDirs: layers,
+		}}},
+		wantErr: true,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := WriteSpec(t.TempDir(), tc.spec)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Errorf("WriteSpec error = %v, want error %v", err, tc.wantErr)
+			}
+		})
 	}
 }
