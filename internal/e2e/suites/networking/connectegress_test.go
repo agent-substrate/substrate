@@ -29,9 +29,9 @@ import (
 // to the IP:port the actor dialed. A CONNECT the actor sends itself -- what a
 // client configured with a forward proxy sends first, in the clear or inside
 // TLS -- arrives as a request inside that tunnel, and the gateway refuses it
-// with a 403 (docs/egress-traffic.md): the request would otherwise be policed
-// as its authority's host on the port the actor dialed, while the tunnel went
-// to the port the authority names.
+// with a 403 (docs/guides/egress-traffic.md): the request would otherwise be
+// policed as its authority's host on the port the actor dialed, while the
+// tunnel went to the port the authority names.
 //
 // Each test sends the CONNECT to two proxies. One is an origin the test
 // deploys, which answers any CONNECT 200: the 403 the actor sees cannot be

@@ -184,7 +184,7 @@ restriction, but it does need the `nfsd` kernel module loaded on the nodes.
 
 `--benchmark-actor-memory` is a global flag (`BENCHMARK_ACTOR_MEMORY` when it
 is absent); the other two are flags of the benchmark commands. See
-[`benchmarking/README.md`](../../benchmarking/README.md).
+[`docs/guides/benchmarking.md`](../../docs/guides/benchmarking.md).
 
 ## Demos
 
