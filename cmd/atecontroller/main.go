@@ -159,7 +159,8 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
-	if err := preview.Init(*previewFlags...); err != nil {
+	previewGates, err := preview.New(*previewFlags...)
+	if err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
@@ -266,6 +267,7 @@ func main() {
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,
 		DNSEgressPolicy:          *dnsEgressPolicy,
+		PreviewGates:             previewGates.Enabled(),
 		Recorder:                 mgr.GetEventRecorder("workerpool-controller"),
 		APIReader:                mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {

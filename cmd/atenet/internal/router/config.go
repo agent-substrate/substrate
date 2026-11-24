@@ -22,6 +22,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 type atenetRouter string
@@ -178,6 +179,9 @@ type routerConfig struct {
 	// EgressPolicy, and so how long a policy change takes to bite. 0 disables
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
+
+	// Gates are the router's preview gates.
+	Gates *preview.Gates
 
 	// IngressCache configures the ingress-cache filter. It only applies with
 	// the IngressCache preview gate.

@@ -343,7 +343,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 		ActorUid:              actor.GetMetadata().GetUid(),
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
-		Spec:                  fallbackWorkloadSpec(actor),
+		Spec:                  fallbackWorkloadSpec(w.gates, actor),
 	})
 	switch status.Code(err) {
 	case codes.OK:

@@ -115,7 +115,7 @@ func do(ctx context.Context) error {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
 	}
-	if err := preview.Init(*previewFlags...); err != nil {
+	if _, err := preview.New(*previewFlags...); err != nil {
 		return fmt.Errorf("invalid --preview: %w", err)
 	}
 	slog.InfoContext(ctx, "ateworker-microvm booting", slog.String("version", version.Version))

@@ -33,7 +33,7 @@ var rootCmd = &cobra.Command{
 	Long:    `atenet is a combined daemon for all networking functionality.`,
 	Version: version.String(),
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if err := preview.Init(previewFlags...); err != nil {
+		if _, err := preview.New(previewFlags...); err != nil {
 			return fmt.Errorf("invalid --preview: %w", err)
 		}
 		return nil
@@ -49,6 +49,6 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringSliceVar(&previewFlags, "preview", nil, "Preview gates to enable.")
-	rootCmd.AddCommand(router.NewRouterCmd())
+	rootCmd.AddCommand(router.NewRouterCmd(&previewFlags))
 	rootCmd.AddCommand(sdsmint.NewSdsmintCmd())
 }

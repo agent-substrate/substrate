@@ -25,15 +25,23 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
 )
 
-func NewRouterCmd() *cobra.Command {
+// NewRouterCmd returns the router command. previewFlags holds the root
+// command's --preview values.
+func NewRouterCmd(previewFlags *[]string) *cobra.Command {
 	var cfg routerConfig
 
 	cmd := &cobra.Command{
 		Use:   "router",
 		Short: "Router components including the Envoy xDS server and the ext_proc gateway processing server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			gates, err := preview.New(*previewFlags...)
+			if err != nil {
+				return fmt.Errorf("invalid --preview: %w", err)
+			}
+			cfg.Gates = gates
 			srv, err := NewRouterServer(cfg)
 			if err != nil {
 				return fmt.Errorf("failed to create router server: %w", err)

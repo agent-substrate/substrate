@@ -145,7 +145,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("actor", actorRef.Name),
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
-		workloadSpec = fallbackWorkloadSpec(actor)
+		workloadSpec = fallbackWorkloadSpec(w.gates, actor)
 	}
 
 	req := &ateletpb.TerminateRequest{
@@ -175,14 +175,14 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 // unmounts them from the node. A volume with no StorageVolumeId was never
 // provisioned (e.g. the actor failed while PENDING), so there is nothing
 // mounted to name.
-func fallbackWorkloadSpec(actor *ateapi.Actor) *ateletpb.WorkloadSpec {
+func fallbackWorkloadSpec(gates *preview.Gates, actor *ateapi.Actor) *ateletpb.WorkloadSpec {
 	// Given that external volumes has been in the codebase for a while and
 	// its preview-ness is solely around the API, and that the impact of
 	// disabling the gate while in use would be an orphaned volume
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
 	spec := &ateletpb.WorkloadSpec{}
-	if preview.IsEnabled(preview.GateExternalVolumes) {
+	if gates.IsEnabled(preview.GateExternalVolumes) {
 		for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
 			if vol.GetStorageVolumeId() == "" {
 				continue

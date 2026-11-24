@@ -38,6 +38,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 func TestStatuszEndpoint(t *testing.T) {
@@ -60,11 +61,12 @@ func TestStatuszEndpoint(t *testing.T) {
 	// Run() dials ateapi in mtls mode, which requires real TLS material; generate it.
 	caPath, clientCertPath := writeTestTLSMaterial(t)
 
-	statusAddr, err := NewRouterCmd().Flags().GetString("status-address")
+	statusAddr, err := NewRouterCmd(new([]string)).Flags().GetString("status-address")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := routerConfig{
+		Gates:         preview.NewForTest(t),
 		Mode:          ModeIngress,
 		Namespace:     "default",
 		StatusPort:    httpPort,

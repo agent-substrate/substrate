@@ -637,7 +637,7 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
@@ -678,7 +678,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 func TestRevertActor_LostLeaseKeepsNewAssignment(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 
 	stale := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

@@ -28,27 +28,27 @@ import (
 )
 
 func ValidateCreateActorEgressPolicyRequest(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_CreateActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_GetActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateUpdateActorEgressPolicyRequest(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_UpdateActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorEgressPolicyRequest(ctx context.Context, req *ateapi.DeleteActorEgressPolicyRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_DeleteActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldVal *ateapi.EgressPolicy) field.ErrorList {
-	op := MakeUpdateOp(ctx)
+	op := MakeUpdateOp()
 	return Validate_EgressPolicy(ctx, op, p, newVal, oldVal)
 }
 

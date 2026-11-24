@@ -55,7 +55,7 @@ func TestObjectStorePluginErrorCodeToClient(t *testing.T) {
 		{codes.FailedPrecondition, codes.Internal},
 	} {
 		t.Run(tc.pluginCode.String(), func(t *testing.T) {
-			w := &ActorWorkflow{objectStorePlugin: failingControlPlugin{err: status.Error(tc.pluginCode, "plugin failed")}}
+			w := &ActorWorkflow{gates: testGates, objectStorePlugin: failingControlPlugin{err: status.Error(tc.pluginCode, "plugin failed")}}
 			for name, call := range map[string]func(context.Context) error{
 				"cleanup": func(ctx context.Context) error { return w.cleanupSnapshot(ctx, prefix) },
 				"copy":    func(ctx context.Context) error { return w.copySnapshot(ctx, prefix, prefix) },

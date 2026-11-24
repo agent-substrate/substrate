@@ -72,8 +72,8 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	impl := newServiceImpl(persistence, nil)
-	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{}))}, persistence
+	impl := newServiceImpl(persistence, nil, testGates)
+	return &RPCService{gates: testGates, impl: impl, workerWorkflow: NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{}), testGates)}, persistence
 }
 
 // seedAPIWorker registers a worker directly through the store and returns it as
@@ -783,7 +783,7 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence, nil, testGates)
 
 	// Every case below is rejected, so nothing writes and this stays the
 	// current incarnation for all of them.
@@ -864,7 +864,7 @@ func TestServiceImplAssignmentWrites_ValidateActor(t *testing.T) {
 			ctx := context.Background()
 			persistence, cleanup := storetest.SetupTestStore(t)
 			defer cleanup()
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence, nil, testGates)
 			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

@@ -123,7 +123,7 @@ func ReleasingWorkflows() []ReleasingWorkflow {
 			Name:  "resume onto an ineligible worker",
 			State: ateapi.ActorState_ACTOR_STATE_RESUMING,
 			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapi.Actor) error {
-				_, err := (&ActorWorkflow{store: st, scheduler: scheduling.New(nil)}).validateAssignedWorker(ctx, actorRef, actor, ineligibleTemplate)
+				_, err := (&ActorWorkflow{gates: testGates, store: st, scheduler: scheduling.New(nil)}).validateAssignedWorker(ctx, actorRef, actor, ineligibleTemplate)
 				return err
 			},
 			WantRetry:      codes.Aborted,
