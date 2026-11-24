@@ -15,9 +15,9 @@
 """Harvests server-side Prometheus ground-truth timeseries during benchmark trials.
 
 Queries Prometheus over [T_start, T_end] and the steady-state window inside it
-to capture cluster packing, node and pod PSI stalls, node disk throughput,
-snapshot sizes, latencies and throughput, running actors, memory working set
-and OOM kills.
+to capture cluster packing, node and pod PSI stalls, node CPU, network and disk
+throughput, snapshot sizes, latencies and throughput, running actors, memory
+working set and OOM kills.
 """
 
 import csv
@@ -466,6 +466,23 @@ def _harvest_node_disk(
     return out
 
 
+def _harvest_node_system(
+    prom_url: str, start_ts: int, end_ts: int, steady_start_ts: int,
+    steady_end_ts: int,
+) -> dict[str, Any]:
+    """Worker node CPU and network use, every node's steady samples pooled.
+    A resource cAdvisor does not report is null, not 0."""
+    out: dict[str, Any] = {}
+    for key, query in NODE_SYSTEM_QUERIES.items():
+        res = query_prometheus_range(
+            prom_url, f"({query}) {_WORKER_NODES}", start_ts, end_ts, step="10s"
+        )
+        out[key] = compute_percentiles(
+            _steady_values(res, steady_start_ts, steady_end_ts)
+        )
+    return out
+
+
 def _ratio(
     num: float | None, den: float | None, scale: float = 1.0
 ) -> float | None:
@@ -659,6 +676,23 @@ WORKING_SET_KEYS = (*WORKING_SET_QUERIES, "actor", "per_actor")
 
 BYTES_PER_GIB = 2**30
 
+# Worker node CPU in cores, and network throughput in MiB/s, from
+# cAdvisor's root cgroup (container="node"). Only nodes with a live worker.
+_WORKER_NODES = f"and on (instance) count by (instance) ({WORKER_PODS})"
+NODE_SYSTEM_QUERIES = {
+    "cpu_cores": (
+        'sum by (instance) (rate(container_cpu_usage_seconds_total{container="node"}[1m]))'
+    ),
+    "net_rx_mb_s": (
+        'sum by (instance) (rate(container_network_receive_bytes_total{container="node"}[1m]))'
+        " / 2^20"
+    ),
+    "net_tx_mb_s": (
+        'sum by (instance) (rate(container_network_transmit_bytes_total{container="node"}[1m]))'
+        " / 2^20"
+    ),
+}
+
 
 def _label_key(metric: dict[str, str]) -> tuple:
     """Every label, so each series keeps its own key."""
@@ -841,6 +875,9 @@ def harvest_server_telemetry(
         "node_disk": _harvest_node_disk(
             prom_url, start_ts, end_ts, steady_start_ts, steady_end
         ),
+        "node_system": _harvest_node_system(
+            prom_url, start_ts, end_ts, steady_start_ts, steady_end
+        ),
         "snapshots": _harvest_snapshots(
             prom_url, steady_start_ts, steady_end, lag_s
         ),
@@ -953,6 +990,10 @@ def extract_and_record_server_telemetry(
             ).strip("_")
             for p in ps:
                 measurements[f"node_disk_{name}_{key}_{p}_mb_s"] = mb_s.get(p)
+    node_system = telemetry.get("node_system", {})
+    for key in NODE_SYSTEM_QUERIES:
+        for p in (*ps, "max"):
+            measurements[f"node_{key}_{p}"] = node_system.get(key, {}).get(p)
     for p in ps:
         measurements[f"snapshot_size_{p}_mb"] = snaps.get(f"size_{p}_mb")
     measurements["snapshot_size_avg_mb"] = snaps.get("size_avg_mb")

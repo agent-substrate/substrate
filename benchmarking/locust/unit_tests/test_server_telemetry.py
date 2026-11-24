@@ -40,8 +40,10 @@ WINDOW = {"prom_url": "http://localhost:9090", "start_ts": 100,
           "end_ts": 105, "steady_start_ts": 100}
 
 
-def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ())):
-    """A query_prometheus_range fake: packing, PSI, active actors, working set, disk.
+def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ()),
+           system=()):
+    """A query_prometheus_range fake: packing, PSI, active actors, working set,
+    disk, node CPU and network.
 
     Pod PSI only answers the pod-slice selector, so a query that loses the id
     regex (and would also sum the pause container) gets nothing back. Node PSI
@@ -66,6 +68,9 @@ def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ()
         if "container_fs_" in query:
             series = disk[0] if "container_fs_reads_" in query else disk[1]
             return list(series) if live_workers in query else []
+        # Node CPU and network, kept to nodes hosting a worker pod.
+        if "container_pressure" not in query and 'container="node"' in query:
+            return list(system) if "and on (instance) count by (instance)" in query else []
         if 'container="node"' in query:
             return list(node) if worker_nodes in query and pod_slice in query else []
         return list(pod) if pod_slice in query else []
@@ -265,7 +270,9 @@ class ServerTelemetryTest(unittest.TestCase):
                  "values": [[100, str(2**30)], [105, str(2**30)]]}],
             actor_ws=[{"metric": {"instance": "atelet-a"},
                        "values": [[135, str(6 * 2**30)]]}],
-            disk=(boot, boot))
+            disk=(boot, boot),
+            system=[{"metric": {"instance": "node-a"},
+                     "values": [[100, "1.5"], [105, "2.5"]]}])
         # The default 70s lag reads the snapshot window at 135 and 140.
         mock_instant.side_effect = snapshot_prom(
             "11.5",
@@ -308,6 +315,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(
             set(summary),
             {"metadata", "cluster_packing", "node_psi", "pod_psi", "node_disk",
+             "node_system",
              "snapshots", "active_actors", "working_set", "oom_events"},
         )
         packing = summary["cluster_packing"]
@@ -329,7 +337,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(row["metric"], "server_summary")
         m = row["measurements"]
         # Every source answered, so a key wired to a wrong name would read None.
-        self.assertEqual(len(m), 88)
+        self.assertEqual(len(m), 103)
         self.assertEqual([k for k, v in m.items() if v is None], [])
         # Every value a string, so one row's types match every other row's.
         self.assertTrue(all(isinstance(v, str) for v in m.values()))
@@ -342,6 +350,8 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(m["restore_mean_s"], "0.5")
         self.assertEqual(m["checkpoint_mean_s"], "2.0")
         self.assertEqual(m["active_actors_p99"], "3.0")
+        self.assertEqual(m["node_cpu_cores_p50"], "2.5")
+        self.assertEqual(m["node_net_tx_mb_s_max"], "2.5")
         # Read at 135, moved back to 100; 6 GiB over the 3 actors on atelet-a.
         actor = summary["working_set"]["actor"]
         self.assertEqual(actor["timeseries"][0]["timestamp"], 100)
