@@ -270,8 +270,8 @@ spec:
         - --drain-timeout=5m
         - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
-        # live in the worker pod) — it only reads/writes the
-        # /var/lib/ate hostPath as root. These capabilities exist because
+        # live in the worker pod) — it only reads/writes the /var/lib/ate and
+        # /var/lib/atelet hostPaths as root. These capabilities exist because
         # atelet handles files that belong to other uids:
         # - CHOWN: unpacking image layers into the image cache gives each entry
         #   the owner its layer tar records, so image content owned by a
@@ -363,6 +363,8 @@ spec:
         - name: ate-base
           mountPath: /var/lib/ate
           mountPropagation: HostToContainer
+        - name: atelet-base
+          mountPath: /var/lib/atelet
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
         - name: podidentity
@@ -393,6 +395,11 @@ spec:
       - name: ate-base
         hostPath:
           path: /var/lib/ate
+          type: DirectoryOrCreate
+      # atelet-only state on the node; worker pods do not mount it.
+      - name: atelet-base
+        hostPath:
+          path: /var/lib/atelet
           type: DirectoryOrCreate
       # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
       - name: kubelet-plugins

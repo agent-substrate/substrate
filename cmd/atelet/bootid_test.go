@@ -19,7 +19,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 )
@@ -66,19 +69,53 @@ func TestLocalSnapshotBootCheck(t *testing.T) {
 // workers' default-runtime dirs only once the node has rebooted since the
 // recorded boot, and leaves everything else in place.
 func TestClearCachesAfterReboot(t *testing.T) {
+	writeLegacy := func(content string) func(t *testing.T, path string) {
+		return func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for _, tc := range []struct {
 		name string
 		// marker is the recorded boot ID, or empty for no marker file.
-		marker      string
+		marker string
+		// legacy makes what is at the legacy marker path, if anything.
+		legacy      func(t *testing.T, path string)
 		wantCleared bool
 	}{
 		{name: "rebooted since the recorded boot", marker: "boot-1\n", wantCleared: true},
 		{name: "same boot", marker: "boot-2\n"},
 		{name: "no recorded boot", marker: ""},
+		{name: "upgrade on the same boot", legacy: writeLegacy("boot-2\n")},
+		{name: "upgrade across a reboot", legacy: writeLegacy("boot-1\n"), wantCleared: true},
+		{name: "upgrade again after a rollback and a reboot", marker: "boot-1\n", legacy: writeLegacy("boot-2\n")},
+		{name: "legacy marker forged since this release started", marker: "boot-2\n", legacy: writeLegacy("forged\n")},
+		{name: "oversized legacy marker", legacy: writeLegacy(strings.Repeat("x", maxCacheBootIDBytes+1))},
+		{name: "legacy marker is a symlink", legacy: func(t *testing.T, path string) {
+			target := filepath.Join(t.TempDir(), "target")
+			if err := os.WriteFile(target, []byte("boot-1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "legacy marker is a FIFO", legacy: func(t *testing.T, path string) {
+			if err := unix.Mkfifo(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "legacy marker is a directory", legacy: func(t *testing.T, path string) {
+			if err := os.MkdirAll(filepath.Join(path, "sub"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			marker := filepath.Join(root, "cache-boot-id")
+			marker := filepath.Join(root, "atelet", "cache-boot-id")
+			legacyMarker := filepath.Join(root, "cache-boot-id")
 			imageCache := filepath.Join(root, "image-cache")
 			assetCache := filepath.Join(root, "sandbox-asset-cache")
 			actors := filepath.Join(root, "actors")
@@ -115,13 +152,19 @@ func TestClearCachesAfterReboot(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+			if err := os.Mkdir(filepath.Dir(marker), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			if tc.marker != "" {
 				if err := os.WriteFile(marker, []byte(tc.marker), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
+			if tc.legacy != nil {
+				tc.legacy(t, legacyMarker)
+			}
 
-			got, err := clearCachesAfterReboot("boot-2", marker, actors, workers, imageCache, assetCache, "")
+			got, err := clearCachesAfterReboot("boot-2", marker, legacyMarker, actors, workers, imageCache, assetCache, "")
 			if err != nil {
 				t.Fatalf("clearCachesAfterReboot: %v", err)
 			}
@@ -139,8 +182,14 @@ func TestClearCachesAfterReboot(t *testing.T) {
 					t.Errorf("%s should stay: %v", p, err)
 				}
 			}
-			if b, err := os.ReadFile(marker); err != nil || string(b) != "boot-2\n" {
-				t.Errorf("marker = (%q, %v), want (%q, nil)", b, err, "boot-2\n")
+			for _, p := range []string{marker, legacyMarker} {
+				if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+					t.Errorf("%s: Lstat = (%v, %v), want a regular file", p, fi, err)
+					continue
+				}
+				if b, err := os.ReadFile(p); err != nil || string(b) != "boot-2\n" {
+					t.Errorf("%s = (%q, %v), want (%q, nil)", p, b, err, "boot-2\n")
+				}
 			}
 		})
 	}

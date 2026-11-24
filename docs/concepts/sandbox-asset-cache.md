@@ -26,8 +26,8 @@ issue #690.
 
 ## What is on disk
 
-Everything lives under `/var/lib/ate`, on one filesystem, because hard links
-cannot cross mounts.
+Everything but `cache-boot-id` lives under `/var/lib/ate`, on one filesystem,
+because hard links cannot cross mounts.
 
 | Path | What it holds |
 |---|---|
@@ -37,7 +37,7 @@ cannot cross mounts.
 | `workers/<pod uid>/default-runtime/<hash>/` | The worker's default runtimes, one directory per default its file advertises, by bundle hash, one per sandbox class, linked in from the cache by the worker sandbox syncer as it builds the file. These links are what keeps a default runtime cached while no actor runs it; the syncer removes a directory when the file stops naming its runtime, and they all go with the worker's directory when the pod does. |
 | `sandbox-asset-scratch/` | Short-lived destinations for fetches that have no actor and no worker directory to link into: the assets the worker sandbox syncer stages to verify a restorable version, and the `runsc` it probes for CPU features. Wiped at startup. |
 | `sandbox-runtime-index.json` | The runtime index serialized: every runtime a worker on this node has advertised, by hash, with the asset record the hash was computed from. |
-| `cache-boot-id` | The node's boot ID when `atelet` last started. A different ID at startup means the node rebooted, so `atelet` empties the cache first. |
+| `/var/lib/atelet/cache-boot-id` | The node's boot ID when `atelet` last started; a different ID empties the cache. Kept outside `/var/lib/ate` so workers cannot modify it, with `/var/lib/ate/cache-boot-id` updated for rollbacks. |
 
 A cache entry is keyed by the asset's sha256, so the same binaries under
 another name or from another bucket are one entry. The store never

@@ -9,9 +9,10 @@ description: >
 
 # Node Storage
 
-atelet and the workers keep node-local state under `/var/lib/ate`. Apart from
-the snapshot directory below, its layout is an implementation detail, please
-don't depend on it.
+atelet and the workers keep node-local state under `/var/lib/ate`. atelet
+keeps what no worker may read or change under `/var/lib/atelet`, which only
+atelet mounts. Apart from the snapshot directory below, both layouts are
+implementation details, please don't depend on them.
 
 ## Dedicated Snapshot Storage
 
