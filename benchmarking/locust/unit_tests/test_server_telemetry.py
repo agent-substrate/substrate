@@ -108,7 +108,7 @@ SNAPSHOT_OP = '{ate_snapshot_phase="total"}'
 SUMS = {
     "count": "atelet_snapshot_size_bytes_count" + MEMORY_IMAGE,
     "size": "atelet_snapshot_size_bytes_sum" + MEMORY_IMAGE,
-    "bytes": "sum(atelet_snapshot_size_bytes_sum)",
+    "bytes": "sum(atelet_snapshot_size_bytes_sum",
     # Checkpoint seconds: both checkpoint_mb_s and checkpoint_mean_s read it.
     "seconds": "ate_actor_checkpoint_duration_seconds_sum" + SNAPSHOT_OP,
     "restore_sum": "ate_actor_restore_duration_seconds_sum" + SNAPSHOT_OP,
@@ -140,7 +140,7 @@ def snapshot_prom(quantile=None, start=None, end=None, at=(100, 105), oom=None):
         else:
             name = next((n for n, s in SUMS.items() if s in query), None)
             val = by_time.get(time_ts, {}).get(name)
-            then = re.search(r" @ (\d+)\)", query)
+            then = re.search(r" @ (\d+)", query)
             if then and val is not None:
                 was = by_time.get(int(then.group(1)), {}).get(name, "0")
                 val = str(float(val) - float(was))
@@ -462,7 +462,7 @@ class ServerTelemetryTest(unittest.TestCase):
         # Percentiles diff buckets from the window start, never a fixed 5m.
         queries = [c.args[1] for c in mock_instant.call_args_list]
         self.assertFalse(any("[5m]" in q for q in queries))
-        self.assertTrue(any("@ 100)" in q for q in queries))
+        self.assertTrue(any("@ 100 or" in q for q in queries))
 
         # Both edges read half the lag late: 107 and 112.
         mock_instant.side_effect = snapshot_prom(
@@ -470,7 +470,7 @@ class ServerTelemetryTest(unittest.TestCase):
         mock_instant.reset_mock()
         self.assertEqual(snapshots(lag_s=15)["checkpoints_in_window"], 50)
         queries = [c.args[1] for c in mock_instant.call_args_list]
-        self.assertTrue(any("@ 107)" in q for q in queries))
+        self.assertTrue(any("@ 107 or" in q for q in queries))
 
         # Sum reset or zero count -> size_avg_mb None.
         mock_instant.side_effect = snapshot_prom(
@@ -614,6 +614,21 @@ class ServerTelemetryTest(unittest.TestCase):
             self.assertIn(live, block)
         self.assertIn('container="node"', q["node"])
         self.assertIn("and on (pod)", q["worker"])
+
+    def test_window_growth_subtracts_per_series(self):
+        # A series gone by the window end, such as a previous test's atelet
+        # that the telemetry-meter still exports at the start, must not be
+        # subtracted from the sum.
+        s = 'atelet_snapshot_size_bytes_count{file_name="memory-ranges"}'
+        self.assertEqual(server_telemetry._window_growth(s, 100),
+                         f"{s} - ({s} @ 100 or {s} * 0)")
+        with mock.patch("server_telemetry.query_prometheus_instant",
+                        return_value=[]) as mock_instant:
+            server_telemetry._window_delta("http://p", s, 100, 105)
+            server_telemetry._query_window_quantile("http://p", 0.5, s, 100, 105)
+        delta, _, quantile = [c.args[1] for c in mock_instant.call_args_list]
+        self.assertEqual(delta, f"sum({s} - ({s} @ 100 or {s} * 0))")
+        self.assertIn(f"sum by (le) ({s} - ({s} @ 100 or {s} * 0))", quantile)
 
     def test_oom_query_shape(self):
         q = server_telemetry._oom_growth_query('container="node"', 100, 600)

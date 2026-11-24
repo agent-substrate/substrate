@@ -30,7 +30,12 @@ You need a cluster that meets the
 [test cluster prerequisites](../README.md#test-cluster-prerequisites), with KVM
 nodes for microVM workers and
 [`benchmarking/monitoring.yaml`](../../monitoring.yaml) applied. Without
-Prometheus the system stats and snapshot numbers are `null`. One node is enough,
+Prometheus the system stats and snapshot numbers are `null`. On GKE, atelet
+sends its snapshot metrics over OTLP, so Prometheus sees them only through the
+[telemetry meter](../../telemetry/README.md). Apply
+[`benchmarking/telemetry/meter.yaml`](../../telemetry/meter.yaml) and set
+`ATE_OTLP_ENDPOINT=http://telemetry-meter.benchmarking.svc.cluster.local:4317`
+in the env file. One node is enough,
 and the runner Job and the system components then share it with the worker. To
 keep them off the worker's node on a second node, a new baseline version can add
 `--cordon-system-infra-components` to each test's `ateArgs`.
@@ -86,7 +91,12 @@ compare a Python row with a Go or Node.js row through its `_rtt` row.
 `warmup_s` runs to the end of the golden actor's warmup. A template without a
 wakeup probe, such as sweperf's, waits a fixed 20s there. `golden_snapshot_s`
 also includes deleting the golden actor, which comes before the tag is saved.
-glutton's
-`ResumeActorFirstResume` row is the first resume from the golden snapshot. Each
-field is described in the
+glutton's `ResumeActorFirstResume` row is the first resume from the golden
+snapshot. Each field is described in the
 [benchmarking guide](../../../docs/guides/benchmarking.md#benchmark-output-files).
+
+`active_actors_*`, `working_set_actor_*` and `working_set_per_actor_*` can be
+null. The worker samples its actors once a minute and atelet polls once a
+minute, but each activation here lasts only a few seconds, so a run can go
+without a sample. `working_set_worker_*` and `working_set_node_*` come from
+cAdvisor and are always there.

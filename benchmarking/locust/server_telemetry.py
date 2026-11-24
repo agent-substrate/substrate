@@ -197,22 +197,30 @@ def _parse_instant_float(res: list[dict[str, Any]]) -> float | None:
     return None
 
 
+def _window_growth(selector: str, start_ts: int) -> str:
+    """Each series' growth since start_ts, for a query read at the window end.
+
+    Subtracts per series, so a series that is gone by the end, such as a
+    previous test's atelet that the telemetry-meter still exports at the
+    start, adds nothing. A series absent at the start counts from zero.
+    """
+    return f"{selector} - ({selector} @ {start_ts} or {selector} * 0)"
+
+
 def _window_delta(
     prom_url: str, selector: str, start_ts: int, end_ts: int
 ) -> tuple[float | None, float | None]:
-    """Returns (growth, total) for the counter sum(selector): its value at
-    end_ts minus its value at start_ts, and its value at end_ts.
+    """Returns (growth, total) for the counter sum(selector): the growth of
+    its series between start_ts and end_ts, and its value at end_ts.
 
     Exact where increase() is not: increase() drops everything before the first
     sample of a series born inside the window. Both edges are read in one query
-    at `end_ts`, so a series absent at the start counts from zero while a failed
-    read leaves the delta unknown. A negative delta means a process restarted
-    and reset the counter, so it is unknown too.
+    at `end_ts`, so a failed read leaves the delta unknown. A negative delta
+    means a process restarted and reset the counter, so it is unknown too.
     """
     now = f"sum({selector})"
     delta = _parse_instant_float(query_prometheus_instant(
-        prom_url, f"{now} - (sum({selector} @ {start_ts}) or vector(0))",
-        time_ts=end_ts,
+        prom_url, f"sum({_window_growth(selector, start_ts)})", time_ts=end_ts,
     ))
     end = _parse_instant_float(
         query_prometheus_instant(prom_url, now, time_ts=end_ts)
@@ -235,11 +243,9 @@ def _query_window_quantile(
     Uses the same two reads as `_window_delta`, so percentiles cover the same
     events as the counts; rate() would skip growth before its first sample.
     """
-    now = f"sum by (le) ({buckets})"
-    then = f"sum by (le) ({buckets} @ {start_ts})"
     query = (
-        f"histogram_quantile({quantile}, {now} - ({then} or {now} * 0))"
-        f" / {unit_scale}"
+        f"histogram_quantile({quantile}, sum by (le) "
+        f"({_window_growth(buckets, start_ts)})) / {unit_scale}"
     )
     return _parse_instant_float(
         query_prometheus_instant(prom_url, query, time_ts=end_ts)
