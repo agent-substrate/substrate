@@ -1,0 +1,163 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Installs the charts on kind and runs the e2e suites against the install: a
+# smoke subset on the older supported Kubernetes versions, and every suite on
+# the newest, each with both data planes. Each job installs the kind scenario
+# of its data plane, with the e2e values in hack/e2e-chart-values on top.
+name: helm-install
+on:
+  pull_request:
+    paths:
+    - charts/**
+    - hack/create-kind-cluster.sh
+    - hack/install-charts-kind.sh
+    - hack/install-postgres.sh
+    - hack/install-rustfs.sh
+    - hack/e2e-chart-values/**
+    - manifests/ate-install/**
+    - .github/workflows/helm-install.yaml
+  push:
+    branches: [main]
+  schedule:
+  - cron: '23 5 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  helm-install:
+    name: helm-install (${{ matrix.kubernetes }}, ${{ matrix.dataplane }}, ${{ matrix.suites }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: ${{ matrix.dataplane == 'agentgateway' }} # As the agentgateway e2e-test job in pr-workflow.
+    strategy:
+      fail-fast: false
+      matrix:
+        kubernetes: ['1.35', '1.36', '1.37']
+        dataplane: [envoy, agentgateway]
+        include:
+        - kubernetes: '1.35'
+          node-image: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+          suites: smoke
+        - kubernetes: '1.36'
+          node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          suites: smoke
+        - kubernetes: '1.37'
+          node-image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          suites: all
+        - dataplane: envoy
+          scenario: kind
+        - dataplane: agentgateway
+          scenario: kind-agentgateway
+    env:
+      KIND_NODE_IMAGE: ${{ matrix.node-image }}
+      IMAGE_TAG: ci
+      VALUES_OVERLAY: hack/e2e-chart-values
+      E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      ARTIFACTS: ${{ github.workspace }}/_artifacts
+      # Read the envoy-dataplane build cache that pr-workflow writes on main.
+      DOCKER_BUILD_FLAGS: --cache-from type=gha,scope=envoy-dataplane
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: 'go.mod'
+        cache: false
+    - name: Restore Go build cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: e2e-go-${{ runner.os }}-${{ github.sha }}
+        restore-keys: e2e-go-${{ runner.os }}-
+    - name: Set up Docker Buildx
+      # Host networking and plain HTTP let buildx push to the kind registry.
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        driver-opts: network=host
+        buildkitd-config-inline: |
+          [registry."localhost:5001"]
+            http = true
+    - name: Expose GitHub runtime to buildx
+      # buildx's gha cache backend reads these from the environment.
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      with:
+        script: |
+          for (const [key, value] of Object.entries(process.env)) {
+            if (key.startsWith('ACTIONS_')) core.exportVariable(key, value);
+          }
+    - name: Create cluster (Kubernetes ${{ matrix.kubernetes }})
+      run: hack/create-kind-cluster.sh
+    - name: Install the charts (${{ matrix.scenario }})
+      run: hack/install-charts-kind.sh "${{ matrix.scenario }}"
+    - name: Enable NFS
+      if: matrix.suites == 'all'
+      run: |
+        sudo modprobe nfs || true
+        sudo modprobe nfsd || true
+    - name: Install CSI NFS driver
+      if: matrix.suites == 'all'
+      run: go run ./cmd/ate-setup --kind setup csi nfs
+    - name: Deploy the demos
+      # The suites build actors from the demo ActorTemplates.
+      run: |
+        go run ./cmd/ate-setup --kind deploy demo counter
+        go run ./cmd/ate-setup --kind deploy demo egress
+    - name: Trust local TLS origins in egress gateway
+      run: hack/setup-e2e-egress-tls-kind.sh
+    - name: Run the smoke tests
+      # Suspend and resume with state, ingress through the router, and egress
+      # through the egress gateway.
+      if: matrix.suites == 'smoke'
+      env:
+        E2E_PARALLELISM: 8
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-smoke.xml
+      run: >-
+        hack/run-e2e-kind.sh
+        -run '^(TestActorSnapshotLifecycle|TestActorDirectAccess|TestIngressAuthentication|TestActorEgress|TestActorEgressHTTPS)$'
+        -args --no-color --preview=
+    - name: Run the e2e suites
+      if: matrix.suites == 'all'
+      env:
+        E2E_PARALLELISM: 8
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-e2e.xml
+      run: hack/run-e2e-kind.sh -args --no-color --preview=
+    - name: Require every run to have run tests
+      if: always()
+      run: go -C tools/junittool run . verify -manifest "${ARTIFACTS}/expected-junit.txt"
+    - name: Summarize test failures
+      if: always()
+      run: go -C tools/junittool run . report "${ARTIFACTS}"
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: test-results-helm-${{ matrix.kubernetes }}-${{ matrix.dataplane }}
+        path: ${{ env.ARTIFACTS }}
+        if-no-files-found: error
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        hack/run-tool.sh helm --kube-context kind-kind list -A || true
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
+        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
+          echo "=== logs: ${p} ==="
+          kubectl --context kind-kind logs -n ate-system "${p}" --all-containers --tail=300 || true
+        done

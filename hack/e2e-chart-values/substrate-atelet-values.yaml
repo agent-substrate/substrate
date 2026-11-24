@@ -13,14 +13,12 @@
 # limitations under the License.
 
 
-# substrate-atelet values for a kind cluster that hack/create-kind-cluster.sh
-# creates. The settings match the kind overlay in manifests/ate-install/kind.
-#
-# Before the install, run hack/install-rustfs.sh.
+# substrate-atelet values for the e2e suites in internal/e2e. Apply them after
+# the values of the kind or kind-agentgateway scenario in charts/scenarios, as
+# hack/install-charts-kind.sh does with VALUES_OVERLAY.
 
-# Pull worker images through the kind registry, and log at debug level for
-# development and e2e tests.
 atelet:
+  # Helm replaces lists, so these repeat the extraArgs of the kind scenarios.
   extraArgs:
   - --localhost-registry-replacement=kind-registry:5000
   - --log-level=debug
@@ -28,16 +26,3 @@ atelet:
   # actors 30s after it, so the e2e suites see both within a run.
   - --snapshot-upload-delay=2s
   - --snapshot-detach-delay=30s
-
-# Use the bundled RustFS.
-objectStorePlugin:
-  credentialsSecret: rustfs-credentials
-  extraEnv:
-  - name: ATE_STORAGE_BACKEND
-    value: s3
-  - name: AWS_REGION
-    value: us-east-1
-  - name: AWS_ENDPOINT_URL
-    value: http://rustfs.ate-system.svc:9000
-  - name: AWS_S3_USE_PATH_STYLE
-    value: "true"
