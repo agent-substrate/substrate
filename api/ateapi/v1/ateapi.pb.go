@@ -1955,7 +1955,7 @@ type CredentialHeader struct {
 	// for example, use "Bearer " (including the space) for Authorization.
 	//
 	// +k8s:optional
-	// +k8s:customValidation # format
+	// +k8s:format=ate-http-header-value
 	Prefix string `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	// Source-agnostic reference interpreted by a registered credential provider:
 	// `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`

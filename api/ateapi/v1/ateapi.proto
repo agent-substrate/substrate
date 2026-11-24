@@ -833,7 +833,7 @@ message CredentialHeader {
   // for example, use "Bearer " (including the space) for Authorization.
   //
   // +k8s:optional
-  // +k8s:customValidation # format
+  // +k8s:format=ate-http-header-value
   string prefix = 2;
 
   // Source-agnostic reference interpreted by a registered credential provider:

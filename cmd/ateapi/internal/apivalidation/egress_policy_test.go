@@ -852,7 +852,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Prefix = "Bearer\r"
 		},
 		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
+			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value").WithOrigin("format=ate-http-header-value"),
 		},
 	}, {
 		name: "no credential source",
@@ -1026,19 +1026,6 @@ func TestCredentialURIValidation(t *testing.T) {
 	} {
 		if validCredentialURI(uri) {
 			t.Errorf("validCredentialURI(%q) = true", uri)
-		}
-	}
-}
-
-func TestHeaderValueValidation(t *testing.T) {
-	for _, value := range []string{"Bearer token", "value\tvalue", "\u0080\u0081"} {
-		if !validHeaderValue(value) {
-			t.Errorf("validHeaderValue(%q) = false", value)
-		}
-	}
-	for _, value := range []string{"a\rb", "a\nb", "a\x00b", "a\x1fb", "a\x7fb"} {
-		if validHeaderValue(value) {
-			t.Errorf("validHeaderValue(%q) = true", value)
 		}
 	}
 }

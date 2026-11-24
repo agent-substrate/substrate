@@ -55,3 +55,9 @@ formats:
     # allow optional/required to cover "" for subfields
     pattern: (^$|^[-A-Za-z0-9!#$%&'*+.^_`|~]+$)
     message: must be an HTTP header name
+
+  # HTTP header values
+  - name: ate-http-header-value
+    docs: This field must be a valid HTTP field value (no control characters other than tab)
+    pattern: '^[^\x00-\x08\x0A-\x1F\x7F]*$'
+    message: must be a valid HTTP field value

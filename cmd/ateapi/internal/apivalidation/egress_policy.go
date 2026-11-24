@@ -215,15 +215,6 @@ func validateHostnamePattern(raw string, p *field.Path) field.ErrorList {
 	return nil
 }
 
-func ValidateCustom_CredentialHeader_Prefix(_ context.Context, _ operation.Operation, p *field.Path, prefix, _ *string) field.ErrorList {
-	if !validHeaderValue(*prefix) {
-		return field.ErrorList{
-			field.Invalid(p, *prefix, "must be a valid HTTP field value prefix"),
-		}
-	}
-	return nil
-}
-
 func ValidateCustom_CredentialHeader_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
 	if !validCredentialURI(*uri) {
 		return field.ErrorList{
@@ -252,15 +243,6 @@ func validCredentialURI(raw string) bool {
 	}
 	for _, part := range parts {
 		if part == "" {
-			return false
-		}
-	}
-	return true
-}
-
-func validHeaderValue(value string) bool {
-	for _, c := range []byte(value) {
-		if c != '\t' && (c < ' ' || c == 0x7f) {
 			return false
 		}
 	}
