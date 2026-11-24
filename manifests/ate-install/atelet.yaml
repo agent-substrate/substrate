@@ -366,10 +366,12 @@ spec:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
         # The node's image provider plugin, if any, listens on
-        # /run/ate/image-provider.sock, atelet's --image-provider-socket
-        # default.
+        # /run/ate/image-provider/plugin.sock, atelet's
+        # --image-provider-socket default. atelet only dials it. A directory
+        # mount sees the new socket file a restarted plugin creates.
         - name: image-provider
-          mountPath: /run/ate
+          mountPath: /run/ate/image-provider
+          readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
         - name: servicedns-ca
@@ -401,7 +403,7 @@ spec:
           type: DirectoryOrCreate
       - name: image-provider
         hostPath:
-          path: /run/ate
+          path: /run/ate/image-provider
           type: DirectoryOrCreate
       # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
       - name: kubelet-plugins

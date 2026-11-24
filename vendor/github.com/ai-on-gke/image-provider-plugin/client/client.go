@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -36,8 +37,9 @@ import (
 )
 
 // DefaultSocketPath is the Unix domain socket an image provider plugin
-// listens on.
-const DefaultSocketPath = "/run/ate/image-provider.sock"
+// listens on. It has a directory of its own, so a client can mount only that
+// directory, read-only.
+const DefaultSocketPath = "/run/ate/image-provider/plugin.sock"
 
 // ErrNotSupported reports that the plugin declined to serve an image. Callers
 // should pull the image themselves.
@@ -45,6 +47,10 @@ var ErrNotSupported = errors.New("image not supported by the image provider plug
 
 // ErrLeaseNotHeld reports that the plugin does not hold a lease.
 var ErrLeaseNotHeld = errors.New("lease not held by the image provider plugin")
+
+// ErrNoPlugin reports that no plugin socket exists. Callers pull the image
+// themselves, and do not count it as a request to a plugin.
+var ErrNoPlugin = errors.New("no image provider plugin socket")
 
 type contextKeyKeychain struct{}
 
@@ -89,8 +95,8 @@ type PrepareRequest struct {
 	LeaseID string
 }
 
-// PrepareResult holds the prepared read-only host layer directories for an
-// OCI image.
+// PrepareResult holds the prepared read-only root filesystem of an OCI
+// image.
 type PrepareResult struct {
 	// ImageDigest is the resolved manifest digest ("sha256:<hex>").
 	ImageDigest string
@@ -98,9 +104,9 @@ type PrepareResult struct {
 	// Config is the image configuration (entrypoint, cmd, env and so on).
 	Config *v1.Config
 
-	// LayerDirs contains the complete ordered list of read-only host layer
-	// directories (bottom-most base layer first, matching OCI manifest order).
-	LayerDirs []string
+	// Rootfs is the host directory of the image's read-only root
+	// filesystem, with all layers applied. It is under the mount root.
+	Rootfs string
 
 	// ProviderName is the provider name the plugin reported.
 	ProviderName string
@@ -154,10 +160,11 @@ type Client interface {
 }
 
 // GRPCClient implements Client over a Unix domain socket. It always asks for
-// LAYER_FORM_DIRS.
+// LAYER_FORM_ROOTFS, and sends its mount root in every request.
 type GRPCClient struct {
 	mu           sync.RWMutex
 	socketPath   string
+	mountRoot    string
 	conn         *grpc.ClientConn
 	client       imageprovider.ImageProviderPluginClient
 	providerName string
@@ -165,11 +172,16 @@ type GRPCClient struct {
 
 var _ Client = (*GRPCClient)(nil)
 
-// NewGRPCClient creates a client for the plugin at socketPath. It does not
+// NewGRPCClient creates a client for the plugin at socketPath. mountRoot is
+// the host directory the plugin mounts this client's images under. It must
+// be a clean absolute path that no other client uses. The client does not
 // connect until the first call.
-func NewGRPCClient(socketPath string) (*GRPCClient, error) {
+func NewGRPCClient(socketPath, mountRoot string) (*GRPCClient, error) {
 	if socketPath == "" {
 		return nil, errors.New("image provider socket path cannot be empty")
+	}
+	if !filepath.IsAbs(mountRoot) || filepath.Clean(mountRoot) != mountRoot {
+		return nil, fmt.Errorf("mount root %q must be a clean absolute path", mountRoot)
 	}
 	target := socketPath
 	if !strings.HasPrefix(target, "unix://") {
@@ -184,13 +196,15 @@ func NewGRPCClient(socketPath string) (*GRPCClient, error) {
 	}
 	return &GRPCClient{
 		socketPath:   socketPath,
+		mountRoot:    mountRoot,
 		conn:         conn,
 		client:       imageprovider.NewImageProviderPluginClient(conn),
-		providerName: "image-provider",
+		providerName: "unknown",
 	}, nil
 }
 
-// Name returns the provider name the plugin last reported.
+// Name returns the provider name the plugin last reported, or "unknown" before
+// the plugin first answers.
 func (c *GRPCClient) Name() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -264,20 +278,21 @@ func keychainAuth(ctx context.Context, imageRef string) (*imageprovider.Registry
 }
 
 // CanProvide reports whether the plugin serves the image. It returns
-// (false, nil) when the plugin socket does not exist, so callers notice when
-// a plugin is installed or removed. A plugin that is draining, or in a state
-// this client does not know, is not used for new images.
+// ErrNoPlugin when the plugin socket does not exist, so callers notice when a
+// plugin is installed or removed. A plugin that is draining, or in a state
+// this client does not know, is not used for new images. CanProvide sends no
+// registry credentials.
 func (c *GRPCClient) CanProvide(ctx context.Context, req *PrepareRequest) (bool, error) {
 	if req == nil {
 		return false, errors.New("prepare request cannot be nil")
 	}
 	if !IsSocketAvailable(c.socketPath) {
-		return false, nil
+		return false, ErrNoPlugin
 	}
 	res, err := c.client.CanProvide(ctx, &imageprovider.CanProvideRequest{
-		ImageRef: req.ImageRef,
-		Auth:     resolveAuth(ctx, req),
-		Form:     imageprovider.LayerForm_LAYER_FORM_DIRS,
+		ImageRef:  req.ImageRef,
+		Form:      imageprovider.LayerForm_LAYER_FORM_ROOTFS,
+		MountRoot: c.mountRoot,
 	})
 	if err != nil {
 		return false, fmt.Errorf("calling CanProvide on image provider: %w", err)
@@ -292,7 +307,10 @@ func (c *GRPCClient) State(ctx context.Context) (imageprovider.PluginState, erro
 	if !IsSocketAvailable(c.socketPath) {
 		return imageprovider.PluginState_PLUGIN_STATE_UNSPECIFIED, nil
 	}
-	res, err := c.client.CanProvide(ctx, &imageprovider.CanProvideRequest{})
+	res, err := c.client.CanProvide(ctx, &imageprovider.CanProvideRequest{
+		Form:      imageprovider.LayerForm_LAYER_FORM_ROOTFS,
+		MountRoot: c.mountRoot,
+	})
 	if err != nil {
 		return imageprovider.PluginState_PLUGIN_STATE_UNSPECIFIED, fmt.Errorf("calling CanProvide on image provider: %w", err)
 	}
@@ -300,18 +318,20 @@ func (c *GRPCClient) State(ctx context.Context) (imageprovider.PluginState, erro
 	return res.GetState(), nil
 }
 
-// PrepareImage prepares the image's layers, takes the lease req.LeaseID, and
-// returns the layer directories. It returns an error wrapping
-// ErrNotSupported when the plugin declines the image.
+// PrepareImage prepares the image, takes the lease req.LeaseID, and returns
+// its root filesystem. It returns an error wrapping ErrNotSupported when the
+// plugin declines the image, and fails when the root filesystem is not under
+// the mount root.
 func (c *GRPCClient) PrepareImage(ctx context.Context, req *PrepareRequest) (*PrepareResult, error) {
 	if req == nil {
 		return nil, errors.New("prepare request cannot be nil")
 	}
 	res, err := c.client.PrepareImage(ctx, &imageprovider.PrepareImageRequest{
-		ImageRef: req.ImageRef,
-		Auth:     resolveAuth(ctx, req),
-		Form:     imageprovider.LayerForm_LAYER_FORM_DIRS,
-		LeaseId:  req.LeaseID,
+		ImageRef:  req.ImageRef,
+		Auth:      resolveAuth(ctx, req),
+		Form:      imageprovider.LayerForm_LAYER_FORM_ROOTFS,
+		LeaseId:   req.LeaseID,
+		MountRoot: c.mountRoot,
 	})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && (st.Code() == codes.FailedPrecondition || st.Code() == codes.Unimplemented) {
@@ -328,14 +348,18 @@ func (c *GRPCClient) PrepareImage(ctx context.Context, req *PrepareRequest) (*Pr
 			return nil, fmt.Errorf("decoding image config for %s: %w", req.ImageRef, err)
 		}
 	}
-	dirs := res.GetLayerDirs()
-	if dirs == nil {
-		return nil, fmt.Errorf("image provider returned %T for %s, want layer dirs", res.GetLayers(), req.ImageRef)
+	rootfs := res.GetRootfs()
+	if rootfs == nil {
+		return nil, fmt.Errorf("image provider returned %T for %s, want a rootfs", res.GetLayers(), req.ImageRef)
+	}
+	dir := filepath.Clean(rootfs.GetDir())
+	if !isUnder(c.mountRoot, dir) {
+		return nil, fmt.Errorf("image provider returned rootfs %q for %s, want a directory under %s", rootfs.GetDir(), req.ImageRef, c.mountRoot)
 	}
 	return &PrepareResult{
 		ImageDigest:  res.GetImageDigest(),
 		Config:       cfg,
-		LayerDirs:    dirs.GetDirs(),
+		Rootfs:       dir,
 		ProviderName: c.Name(),
 		AuthRefresh:  res.GetAuthRefresh(),
 	}, nil
@@ -349,17 +373,20 @@ func (c *GRPCClient) ReleaseImage(ctx context.Context, req *ReleaseRequest) erro
 	if _, err := c.client.ReleaseImage(ctx, &imageprovider.ReleaseImageRequest{
 		LeaseId:     req.LeaseID,
 		ImageDigest: req.ImageDigest,
-		Form:        imageprovider.LayerForm_LAYER_FORM_DIRS,
+		Form:        imageprovider.LayerForm_LAYER_FORM_ROOTFS,
+		MountRoot:   c.mountRoot,
 	}); err != nil {
 		return fmt.Errorf("calling ReleaseImage on image provider: %w", err)
 	}
 	return nil
 }
 
-// ReconcileImages replaces the plugin's leases with active.
+// ReconcileImages replaces the plugin's leases under the mount root with
+// active.
 func (c *GRPCClient) ReconcileImages(ctx context.Context, active []*ActiveLease) error {
 	req := &imageprovider.ReconcileImagesRequest{
 		ActiveLeases: make([]*imageprovider.ActiveLease, 0, len(active)),
+		MountRoot:    c.mountRoot,
 	}
 	for _, a := range active {
 		if a == nil {
@@ -369,7 +396,7 @@ func (c *GRPCClient) ReconcileImages(ctx context.Context, active []*ActiveLease)
 			LeaseId:     a.LeaseID,
 			ImageRef:    a.ImageRef,
 			ImageDigest: a.ImageDigest,
-			Form:        imageprovider.LayerForm_LAYER_FORM_DIRS,
+			Form:        imageprovider.LayerForm_LAYER_FORM_ROOTFS,
 		})
 	}
 	if _, err := c.client.ReconcileImages(ctx, req); err != nil {
@@ -398,8 +425,9 @@ func (c *GRPCClient) RefreshAuth(ctx context.Context, req *RefreshRequest) (imag
 		}
 	}
 	res, err := c.client.RefreshAuth(ctx, &imageprovider.RefreshAuthRequest{
-		LeaseId: req.LeaseID,
-		Auth:    auth,
+		LeaseId:   req.LeaseID,
+		Auth:      auth,
+		MountRoot: c.mountRoot,
 	})
 	if err != nil {
 		switch status.Code(err) {
@@ -416,6 +444,15 @@ func (c *GRPCClient) RefreshAuth(ctx context.Context, req *RefreshRequest) (imag
 // Close closes the gRPC connection.
 func (c *GRPCClient) Close() error {
 	return c.conn.Close()
+}
+
+// isUnder reports whether the clean path dir is strictly under root.
+func isUnder(root, dir string) bool {
+	if !filepath.IsAbs(dir) {
+		return false
+	}
+	rel, err := filepath.Rel(root, dir)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 // IsSocketAvailable reports whether socketPath, with an optional unix://

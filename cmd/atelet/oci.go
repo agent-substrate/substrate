@@ -30,6 +30,7 @@ import (
 
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/sys/user"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -41,6 +42,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -52,6 +54,11 @@ const (
 	// context detached from the caller, so a failed or cancelled request still
 	// returns its leases.
 	providerReleaseTimeout = 30 * time.Second
+	// providerCanProvideTimeout and providerPrepareTimeout bound the plugin
+	// calls that prepare an image, so a hung plugin leaves the image cache
+	// the rest of the caller's time to pull it.
+	providerCanProvideTimeout = 5 * time.Second
+	providerPrepareTimeout    = time.Minute
 )
 
 // errProviderDeclined reports that the image provider plugin does not serve
@@ -67,7 +74,9 @@ type imageSource struct {
 	// provider is nil when --image-provider-socket is empty.
 	provider providerclient.Client
 	// keychain resolves the registry credentials the provider gets.
-	keychain    authn.Keychain
+	keychain authn.Keychain
+	// leases tracks the provider leases taken but not yet recorded in a spec.
+	leases      *providerLeaseTracker
 	instruments *Instruments
 }
 
@@ -81,65 +90,88 @@ func (s imageSource) ensure(ctx context.Context, ref, leaseID string) (*imagecac
 	if img, err := s.cache.CachedImage(ctx, ref); err != nil || img != nil {
 		return img, err
 	}
-	start := time.Now()
-	img, err := s.prepare(ctx, ref, leaseID)
+	img, d, err := s.prepare(ctx, ref, leaseID)
+	if errors.Is(err, providerclient.ErrNoPlugin) {
+		return s.cache.EnsureImage(ctx, ref)
+	}
+	outcome, errorType := pluginOutcome(err)
+	s.instruments.recordImageProvider(ctx, s.provider.Name(), outcome, errorType, d)
 	if err == nil {
-		s.instruments.recordImageProvider(ctx, s.provider.Name(), ateattr.ImageProviderOutcomeSuccess, time.Since(start))
 		return img, nil
 	}
-	if !errors.Is(err, errProviderDeclined) {
+	if outcome == ateattr.ImageProviderOutcomeError {
 		slog.WarnContext(ctx, "Image provider plugin failed; pulling into the image cache",
 			slog.String("image", ref), slog.String("provider", s.provider.Name()), slog.Any("err", err))
 	}
-	img, err = s.cache.EnsureImage(ctx, ref)
-	outcome := ateattr.ImageProviderOutcomeFallback
-	if err != nil {
-		outcome = ateattr.ImageProviderOutcomeError
-	}
-	s.instruments.recordImageProvider(ctx, s.provider.Name(), outcome, time.Since(start))
-	return img, err
+	return s.cache.EnsureImage(ctx, ref)
 }
 
-// prepare has the provider prepare ref's layers under the lease leaseID. It
-// returns an error wrapping errProviderDeclined if the provider does not
-// serve ref.
-func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imagecache.Image, error) {
-	if s.keychain != nil {
-		ctx = providerclient.WithKeychainContext(ctx, s.keychain)
+// pluginOutcome classifies prepare's error for ate.imageprovider.requests.
+// A failed call reports its gRPC status code, and an answer atelet rejected
+// reports invalid_result.
+func pluginOutcome(err error) (outcome, errorType string) {
+	switch {
+	case err == nil:
+		return ateattr.ImageProviderOutcomeSuccess, ""
+	case errors.Is(err, errProviderDeclined):
+		return ateattr.ImageProviderOutcomeDeclined, ""
 	}
+	if st, ok := status.FromError(err); ok {
+		return ateattr.ImageProviderOutcomeError, st.Code().String()
+	}
+	return ateattr.ImageProviderOutcomeError, "invalid_result"
+}
+
+// prepare has the provider prepare ref's layers under the lease leaseID, and
+// returns how long the plugin calls took. It returns an error wrapping
+// errProviderDeclined if the provider does not serve ref, and
+// providerclient.ErrNoPlugin if no plugin socket exists.
+func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imagecache.Image, time.Duration, error) {
+	start := time.Now()
 	req := &providerclient.PrepareRequest{ImageRef: ref, LeaseID: leaseID}
-	ok, err := s.provider.CanProvide(ctx, req)
+	canCtx, cancel := context.WithTimeout(ctx, providerCanProvideTimeout)
+	ok, err := s.provider.CanProvide(canCtx, req)
+	cancel()
 	if err != nil {
-		return nil, err
+		return nil, time.Since(start), err
 	}
 	if !ok {
-		return nil, errProviderDeclined
+		return nil, time.Since(start), errProviderDeclined
 	}
-	res, err := s.provider.PrepareImage(ctx, req)
+	s.leases.take(leaseID, ref)
+	// Only PrepareImage gets registry credentials, for an image the plugin
+	// agreed to serve.
+	prepCtx, cancel := context.WithTimeout(ctx, providerPrepareTimeout)
+	if s.keychain != nil {
+		prepCtx = providerclient.WithKeychainContext(prepCtx, s.keychain)
+	}
+	res, err := s.provider.PrepareImage(prepCtx, req)
+	cancel()
+	d := time.Since(start)
 	if err != nil {
 		// The plugin may have taken the lease before the call failed, for
 		// example on a timeout. A release without a digest matches it.
 		s.release(ctx, leaseID, "")
 	}
 	if errors.Is(err, providerclient.ErrNotSupported) {
-		return nil, fmt.Errorf("%w: %w", errProviderDeclined, err)
+		return nil, d, fmt.Errorf("%w: %w", errProviderDeclined, err)
 	}
 	if err != nil {
-		return nil, err
+		return nil, d, err
 	}
-	img, err := streamedImage(res, leaseID)
+	img, err := streamedImage(res, ref, leaseID)
 	if err != nil {
 		s.release(ctx, leaseID, res.ImageDigest)
-		return nil, err
+		return nil, d, err
 	}
-	return img, nil
+	return img, d, nil
 }
 
-// streamedImage converts the provider's result for one image, held under the
-// lease leaseID.
-func streamedImage(res *providerclient.PrepareResult, leaseID string) (*imagecache.Image, error) {
-	if len(res.LayerDirs) == 0 {
-		return nil, errors.New("the image provider plugin returned no layer directories")
+// streamedImage converts the provider's result for ref, held under the lease
+// leaseID. It rejects a digest that differs from the one ref pins.
+func streamedImage(res *providerclient.PrepareResult, ref, leaseID string) (*imagecache.Image, error) {
+	if res.Rootfs == "" {
+		return nil, errors.New("the image provider plugin returned no rootfs")
 	}
 	if res.Config == nil {
 		return nil, errors.New("the image provider plugin returned no image config")
@@ -148,12 +180,16 @@ func streamedImage(res *providerclient.PrepareResult, leaseID string) (*imagecac
 	if err != nil {
 		return nil, fmt.Errorf("the image provider plugin returned image digest %q: %w", res.ImageDigest, err)
 	}
-	return &imagecache.Image{Digest: digest, Config: *res.Config, ProviderDirs: res.LayerDirs, LeaseID: leaseID}, nil
+	if pinned, err := name.NewDigest(ref); err == nil && pinned.DigestStr() != digest.String() {
+		return nil, fmt.Errorf("the image provider plugin returned digest %s for %s", digest, ref)
+	}
+	return &imagecache.Image{Digest: digest, Config: *res.Config, ProviderRootfs: res.Rootfs, LeaseID: leaseID}, nil
 }
 
 // release drops the provider lease leaseID on the image with digest. A failed
 // release is logged.
 func (s imageSource) release(ctx context.Context, leaseID, digest string) {
+	s.leases.forget(leaseID)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerReleaseTimeout)
 	defer cancel()
 	if err := s.provider.ReleaseImage(ctx, &providerclient.ReleaseRequest{LeaseID: leaseID, ImageDigest: digest}); err != nil {
@@ -302,7 +338,14 @@ func prepareOCIDirectory(ctx context.Context, images imageSource, actorUID, cont
 	}); err != nil {
 		return nil, "", fmt.Errorf("while writing overlay spec: %w", err)
 	}
-
+	if img.LeaseID != "" {
+		images.leases.forget(img.LeaseID)
+	}
+	for _, v := range imageVolumes {
+		if v.LeaseID != "" {
+			images.leases.forget(v.LeaseID)
+		}
+	}
 	return img, cwd, nil
 }
 

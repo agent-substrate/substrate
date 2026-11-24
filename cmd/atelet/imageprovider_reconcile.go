@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
@@ -99,20 +100,71 @@ func activeProviderLeases(actorsDir string) ([]*providerclient.ActiveLease, erro
 	return leases, nil
 }
 
-// providerReconcileTimeout bounds one ReconcileImages call, which runs with
-// providerLeaseMu held for writing.
-const providerReconcileTimeout = 30 * time.Second
+const (
+	// providerReconcileTimeout bounds one ReconcileImages call, which runs
+	// with providerLeaseTracker.mu held.
+	providerReconcileTimeout = 30 * time.Second
+	// providerReconcilePeriod is how often atelet reconciles the plugin's
+	// leases while the socket stays the same, which drops the leases whose
+	// release failed.
+	providerReconcilePeriod = 5 * time.Minute
+)
+
+// providerLeaseTracker orders the provider leases that bundles take and return
+// against reconciles, so the plugin never learns a lease set that misses a
+// lease atelet holds. mu is held only for bookkeeping, except that a reconcile
+// holds it across its RPC: the plugin would drop a lease taken after the
+// reconcile read the specs if its prepare finished first.
+type providerLeaseTracker struct {
+	mu sync.Mutex
+	// inflight maps the leases taken, or being taken, and not yet recorded in
+	// an overlay spec, to their image refs.
+	inflight map[string]string
+}
+
+// take records that a bundle is about to take leaseID on ref.
+func (t *providerLeaseTracker) take(leaseID, ref string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.inflight == nil {
+		t.inflight = make(map[string]string)
+	}
+	t.inflight[leaseID] = ref
+}
+
+// forget drops leaseIDs once a spec records them or they are released.
+func (t *providerLeaseTracker) forget(leaseIDs ...string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, id := range leaseIDs {
+		delete(t.inflight, id)
+	}
+}
+
+// removeSpec removes bundle's overlay spec, so that a reconcile sees its
+// leases either all held or all gone.
+func (t *providerLeaseTracker) removeSpec(bundle string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return os.Remove(filepath.Join(bundle, imagecache.OverlaySpecFileName))
+}
 
 // reconcileProviderLeases replaces the plugin's leases with those the overlay
-// specs on the node record. It holds providerLeaseMu, so no bundle is between
-// taking a lease and recording it in its spec.
+// specs on the node record and those bundles are taking.
 func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) error {
-	s.providerLeaseMu.Lock()
-	defer s.providerLeaseMu.Unlock()
+	t := &s.providerLeases
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	leases, err := activeProviderLeases(actorsDir)
 	if err != nil {
 		return err
 	}
+	for id, ref := range t.inflight {
+		if !slices.ContainsFunc(leases, func(l *providerclient.ActiveLease) bool { return l.LeaseID == id }) {
+			leases = append(leases, &providerclient.ActiveLease{LeaseID: id, ImageRef: ref})
+		}
+	}
+	slices.SortFunc(leases, func(a, b *providerclient.ActiveLease) int { return cmp.Compare(a.LeaseID, b.LeaseID) })
 	rpcCtx, cancel := context.WithTimeout(ctx, providerReconcileTimeout)
 	defer cancel()
 	if err := s.imageProvider.ReconcileImages(rpcCtx, leases); err != nil {
@@ -125,9 +177,11 @@ func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) 
 
 // monitorImageProvider reconciles the plugin's leases each time the plugin's
 // socket appears or is replaced, at startup or after the plugin restarts,
-// until ctx ends. A failed reconcile is retried on the next check.
+// and every providerReconcilePeriod, until ctx ends. A failed reconcile after
+// a socket change is retried on the next check.
 func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir string) {
 	var last os.FileInfo
+	var lastReconcile time.Time
 	ticker := time.NewTicker(imageProviderMonitorPeriod)
 	defer ticker.Stop()
 	for {
@@ -137,6 +191,12 @@ func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir str
 				slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
 				info = nil
 			}
+			lastReconcile = time.Now()
+		} else if info != nil && time.Since(lastReconcile) >= providerReconcilePeriod {
+			if err := s.reconcileProviderLeases(ctx, actorsDir); err != nil {
+				slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
+			}
+			lastReconcile = time.Now()
 		}
 		last = info
 		select {
