@@ -49,8 +49,14 @@ const (
 // Riptide or Nydus.
 //
 // Given an OCI image reference and resolved registry credentials, the plugin
-// prepares the image's layers on the host in the requested LayerForm and
-// returns them in order for container rootfs composition.
+// prepares the image on the host in the requested LayerForm.
+//
+// Several clients, for example Substrate and Ray, can share one plugin on a
+// node. Each client passes its own mount_root in every request. The plugin
+// mounts images for a client only under that client's mount_root, and keys
+// leases by mount_root and lease_id, so clients never see each other's
+// leases. Two clients must not use the same mount_root. The plugin serves
+// only the mount roots it was configured with.
 //
 // The extensions fields exist only for customized forks of Substrate and
 // their plugins, which define their own message types. Upstream Substrate,
@@ -61,29 +67,34 @@ const (
 // field, and so does every list item that a fork may annotate.
 type ImageProviderPluginClient interface {
 	// CanProvide reports whether the plugin and its provider are healthy and
-	// able to serve the given OCI image in the requested form.
+	// able to serve the given OCI image in the requested form under
+	// mount_root.
 	CanProvide(ctx context.Context, in *CanProvideRequest, opts ...grpc.CallOption) (*CanProvideResponse, error)
-	// PrepareImage prepares the image's layers in the requested form, takes the
-	// lease named by lease_id on the image, and returns the complete ordered
-	// list of read-only layers.
+	// PrepareImage prepares the image in the requested form under mount_root,
+	// takes the lease named by mount_root and lease_id on the image, and
+	// returns the image in that form.
 	//
 	// If the plugin already holds the lease, PrepareImage returns the leased
 	// image again without taking another lease, so the caller can retry it.
-	// Reusing a lease_id for a different image_ref or form returns
+	// Reusing a lease for a different image_ref or form returns
 	// codes.AlreadyExists.
 	//
-	// If the plugin cannot serve the image, PrepareImage returns
-	// codes.FailedPrecondition so the caller can fall back to pulling the whole
-	// image itself.
+	// If the plugin cannot serve the image, or does not serve mount_root,
+	// PrepareImage returns codes.FailedPrecondition so the caller can fall back
+	// to pulling the whole image itself.
 	PrepareImage(ctx context.Context, in *PrepareImageRequest, opts ...grpc.CallOption) (*PrepareImageResponse, error)
 	// ReleaseImage releases a lease when a workload checkpoints, suspends or
 	// terminates. Releasing a lease the plugin does not hold succeeds, so the
-	// caller can retry it. The plugin may remove an image's layers once no
-	// lease on them is left.
+	// caller can retry it. The plugin may unmount the image from mount_root
+	// once no lease under mount_root uses it, and may remove the image's data
+	// once no lease uses it.
 	ReleaseImage(ctx context.Context, in *ReleaseImageRequest, opts ...grpc.CallOption) (*ReleaseImageResponse, error)
-	// ReconcileImages replaces the plugin's leases with the leases that
-	// surviving workloads still hold. The caller sends it after it restarts or
-	// finds the plugin socket. The plugin removes layers that no lease uses.
+	// ReconcileImages replaces the plugin's leases under mount_root with the
+	// leases that the caller's surviving workloads still hold. It does not
+	// change leases under other mount roots. The caller sends it after it
+	// restarts or finds the plugin socket. The plugin removes images that no
+	// lease uses.
+	//
 	// The caller then calls RefreshAuth on each surviving lease. Until then, a
 	// plugin that reported AUTH_REFRESH_REQUIRED may have no credentials for
 	// it.
@@ -162,8 +173,14 @@ func (c *imageProviderPluginClient) RefreshAuth(ctx context.Context, in *Refresh
 // Riptide or Nydus.
 //
 // Given an OCI image reference and resolved registry credentials, the plugin
-// prepares the image's layers on the host in the requested LayerForm and
-// returns them in order for container rootfs composition.
+// prepares the image on the host in the requested LayerForm.
+//
+// Several clients, for example Substrate and Ray, can share one plugin on a
+// node. Each client passes its own mount_root in every request. The plugin
+// mounts images for a client only under that client's mount_root, and keys
+// leases by mount_root and lease_id, so clients never see each other's
+// leases. Two clients must not use the same mount_root. The plugin serves
+// only the mount roots it was configured with.
 //
 // The extensions fields exist only for customized forks of Substrate and
 // their plugins, which define their own message types. Upstream Substrate,
@@ -174,29 +191,34 @@ func (c *imageProviderPluginClient) RefreshAuth(ctx context.Context, in *Refresh
 // field, and so does every list item that a fork may annotate.
 type ImageProviderPluginServer interface {
 	// CanProvide reports whether the plugin and its provider are healthy and
-	// able to serve the given OCI image in the requested form.
+	// able to serve the given OCI image in the requested form under
+	// mount_root.
 	CanProvide(context.Context, *CanProvideRequest) (*CanProvideResponse, error)
-	// PrepareImage prepares the image's layers in the requested form, takes the
-	// lease named by lease_id on the image, and returns the complete ordered
-	// list of read-only layers.
+	// PrepareImage prepares the image in the requested form under mount_root,
+	// takes the lease named by mount_root and lease_id on the image, and
+	// returns the image in that form.
 	//
 	// If the plugin already holds the lease, PrepareImage returns the leased
 	// image again without taking another lease, so the caller can retry it.
-	// Reusing a lease_id for a different image_ref or form returns
+	// Reusing a lease for a different image_ref or form returns
 	// codes.AlreadyExists.
 	//
-	// If the plugin cannot serve the image, PrepareImage returns
-	// codes.FailedPrecondition so the caller can fall back to pulling the whole
-	// image itself.
+	// If the plugin cannot serve the image, or does not serve mount_root,
+	// PrepareImage returns codes.FailedPrecondition so the caller can fall back
+	// to pulling the whole image itself.
 	PrepareImage(context.Context, *PrepareImageRequest) (*PrepareImageResponse, error)
 	// ReleaseImage releases a lease when a workload checkpoints, suspends or
 	// terminates. Releasing a lease the plugin does not hold succeeds, so the
-	// caller can retry it. The plugin may remove an image's layers once no
-	// lease on them is left.
+	// caller can retry it. The plugin may unmount the image from mount_root
+	// once no lease under mount_root uses it, and may remove the image's data
+	// once no lease uses it.
 	ReleaseImage(context.Context, *ReleaseImageRequest) (*ReleaseImageResponse, error)
-	// ReconcileImages replaces the plugin's leases with the leases that
-	// surviving workloads still hold. The caller sends it after it restarts or
-	// finds the plugin socket. The plugin removes layers that no lease uses.
+	// ReconcileImages replaces the plugin's leases under mount_root with the
+	// leases that the caller's surviving workloads still hold. It does not
+	// change leases under other mount roots. The caller sends it after it
+	// restarts or finds the plugin socket. The plugin removes images that no
+	// lease uses.
+	//
 	// The caller then calls RefreshAuth on each surviving lease. Until then, a
 	// plugin that reported AUTH_REFRESH_REQUIRED may have no credentials for
 	// it.

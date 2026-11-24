@@ -25,13 +25,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	imageprovider "github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1"
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 
-	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -111,20 +109,71 @@ func activeProviderLeases(actorsDir string) ([]*providerclient.ActiveLease, erro
 	return leases, nil
 }
 
-// providerReconcileTimeout bounds one ReconcileImages call, which runs with
-// providerLeaseMu held for writing.
-const providerReconcileTimeout = 30 * time.Second
+const (
+	// providerReconcileTimeout bounds one ReconcileImages call, which runs
+	// with providerLeaseTracker.mu held.
+	providerReconcileTimeout = 30 * time.Second
+	// providerReconcilePeriod is how often atelet reconciles the plugin's
+	// leases while the socket stays the same, which drops the leases whose
+	// release failed.
+	providerReconcilePeriod = 5 * time.Minute
+)
+
+// providerLeaseTracker orders the provider leases that bundles take and return
+// against reconciles, so the plugin never learns a lease set that misses a
+// lease atelet holds. mu is held only for bookkeeping, except that a reconcile
+// holds it across its RPC: the plugin would drop a lease taken after the
+// reconcile read the specs if its prepare finished first.
+type providerLeaseTracker struct {
+	mu sync.Mutex
+	// inflight maps the leases taken, or being taken, and not yet recorded in
+	// an overlay spec, to their image refs.
+	inflight map[string]string
+}
+
+// take records that a bundle is about to take leaseID on ref.
+func (t *providerLeaseTracker) take(leaseID, ref string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.inflight == nil {
+		t.inflight = make(map[string]string)
+	}
+	t.inflight[leaseID] = ref
+}
+
+// forget drops leaseIDs once a spec records them or they are released.
+func (t *providerLeaseTracker) forget(leaseIDs ...string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, id := range leaseIDs {
+		delete(t.inflight, id)
+	}
+}
+
+// removeSpec removes bundle's overlay spec, so that a reconcile sees its
+// leases either all held or all gone.
+func (t *providerLeaseTracker) removeSpec(bundle string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return os.Remove(filepath.Join(bundle, imagecache.OverlaySpecFileName))
+}
 
 // reconcileProviderLeases replaces the plugin's leases with those the overlay
-// specs on the node record. It holds providerLeaseMu, so no bundle is between
-// taking a lease and recording it in its spec.
+// specs on the node record and those bundles are taking.
 func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) error {
-	s.providerLeaseMu.Lock()
-	defer s.providerLeaseMu.Unlock()
+	t := &s.providerLeases
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	leases, err := activeProviderLeases(actorsDir)
 	if err != nil {
 		return err
 	}
+	for id, ref := range t.inflight {
+		if !slices.ContainsFunc(leases, func(l *providerclient.ActiveLease) bool { return l.LeaseID == id }) {
+			leases = append(leases, &providerclient.ActiveLease{LeaseID: id, ImageRef: ref})
+		}
+	}
+	slices.SortFunc(leases, func(a, b *providerclient.ActiveLease) int { return cmp.Compare(a.LeaseID, b.LeaseID) })
 	rpcCtx, cancel := context.WithTimeout(ctx, providerReconcileTimeout)
 	defer cancel()
 	if err := s.imageProvider.ReconcileImages(rpcCtx, leases); err != nil {
@@ -147,38 +196,35 @@ func streamedActorUIDs(actorsDir string) (map[string]bool, error) {
 	return uids, err
 }
 
-// suspendStreamedActors asks the control plane to suspend each actor running
-// on the node that holds a provider lease. The suspend checkpoints the actor
-// and releases its leases, so a draining plugin can exit, and the actor
-// resumes later from its snapshot. An actor is asked for once while it holds
-// a lease; a failed request is retried on the next call. It returns how many
-// suspends succeeded.
-func (s *Atelet) suspendStreamedActors(ctx context.Context, actorsDir, workersDir string) int {
-	streamed, err := streamedActorUIDs(actorsDir)
+// startDrainSuspends finds the actors running on the node that hold provider
+// leases and has s.drain suspend those that are due. It returns how many
+// suspends it started, and a func that waits for them.
+func (s *Atelet) startDrainSuspends(ctx context.Context, actorsDir, workersDir string) (int, func()) {
+	holders, err := streamedActorUIDs(actorsDir)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to find the actors that hold image provider leases", slog.Any("err", err))
-		return 0
+		return 0, func() {}
 	}
-	s.drainMu.Lock()
-	for uid := range s.drainSuspended {
-		if !streamed[uid] {
-			delete(s.drainSuspended, uid)
+	var candidates []drainCandidate
+	if len(holders) > 0 {
+		if candidates, err = s.runningLeaseHolders(ctx, workersDir, holders); err != nil {
+			slog.WarnContext(ctx, "Failed to list workers to suspend actors off the image provider plugin", slog.Any("err", err))
+			return 0, func() {}
 		}
 	}
-	s.drainMu.Unlock()
-	if len(streamed) == 0 {
-		return 0
-	}
+	return s.drain.start(ctx, holders, candidates)
+}
 
+// runningLeaseHolders returns the actors in holders that the workers under
+// workersDir are running. It skips a worker that does not answer within
+// statsRPCTimeout.
+func (s *Atelet) runningLeaseHolders(ctx context.Context, workersDir string, holders map[string]bool) ([]drainCandidate, error) {
 	workers, err := os.ReadDir(workersDir)
 	if err != nil {
-		slog.WarnContext(ctx, "Failed to list workers to suspend actors off the image provider plugin", slog.Any("err", err))
-		return 0
+		return nil, err
 	}
-	var (
-		wg        sync.WaitGroup
-		suspended atomic.Int32
-	)
+	var candidates []drainCandidate
+	// TODO: share this worker walk with statsPoller.collect. See #4105.
 	for _, w := range workers {
 		podUID := w.Name()
 		if !w.IsDir() {
@@ -187,67 +233,50 @@ func (s *Atelet) suspendStreamedActors(ctx context.Context, actorsDir, workersDi
 		if _, err := os.Stat(workerSocketPath(podUID)); err != nil {
 			continue
 		}
-		worker, err := s.dialWorker(ctx, podUID)
-		if err != nil {
-			continue
-		}
-		rpcCtx, cancel := context.WithTimeout(ctx, statsRPCTimeout)
-		resp, err := worker.GetActiveWorkloadStats(rpcCtx, &ateworkerpb.GetActiveWorkloadStatsRequest{})
+		// One deadline over the dial and the call, as in statsPoller.collect.
+		callCtx, cancel := context.WithTimeout(ctx, statsRPCTimeout)
+		resp, err := s.activeWorkloads(callCtx, podUID)
 		cancel()
 		if err != nil {
-			slog.WarnContext(ctx, "Failed to list a worker's actors", slog.String("pod_uid", podUID), slog.Any("err", err))
+			slog.DebugContext(ctx, "Skipping a worker that did not list its actors", slog.String("pod_uid", podUID), slog.Any("err", err))
 			continue
 		}
 		for _, sample := range resp.GetSamples() {
-			actorUID := sample.GetActorUid()
-			if !streamed[actorUID] {
-				continue
-			}
-			s.drainMu.Lock()
-			asked := s.drainSuspended[actorUID]
-			s.drainSuspended[actorUID] = true
-			s.drainMu.Unlock()
-			if asked {
-				continue
-			}
-			wg.Go(func() {
-				suspendCtx, cancel := context.WithTimeout(ctx, drainSuspendTimeout)
-				defer cancel()
-				// The control plane runs the suspend back through atelet, so
-				// no actor lock may be held here.
-				_, err := s.workers.RequestActorSuspend(suspendCtx, &ateapi.RequestActorSuspendRequest{
-					Worker:   &ateapi.ObjectRef{Name: podUID},
-					Actor:    &ateapi.ObjectRef{Atespace: sample.GetAtespace(), Name: sample.GetActorName()},
-					ActorUid: actorUID,
+			if holders[sample.GetActorUid()] {
+				candidates = append(candidates, drainCandidate{
+					podUID:   podUID,
+					atespace: sample.GetAtespace(),
+					name:     sample.GetActorName(),
+					uid:      sample.GetActorUid(),
 				})
-				if err != nil {
-					s.drainMu.Lock()
-					delete(s.drainSuspended, actorUID)
-					s.drainMu.Unlock()
-					slog.WarnContext(ctx, "Failed to suspend an actor off the draining image provider plugin",
-						slog.String("actor_uid", actorUID), slog.String("pod_uid", podUID), slog.Any("err", err))
-					return
-				}
-				suspended.Add(1)
-				slog.InfoContext(ctx, "Suspended an actor off the draining image provider plugin",
-					slog.String("actor_uid", actorUID), slog.String("pod_uid", podUID))
-			})
+			}
 		}
 	}
-	wg.Wait()
-	return int(suspended.Load())
+	return candidates, nil
+}
+
+// activeWorkloads dials the worker podUID and lists the workloads it runs.
+func (s *Atelet) activeWorkloads(ctx context.Context, podUID string) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+	worker, err := s.dialWorker(ctx, podUID)
+	if err != nil {
+		return nil, err
+	}
+	return worker.GetActiveWorkloadStats(ctx, &ateworkerpb.GetActiveWorkloadStatsRequest{})
 }
 
 // monitorImageProvider watches the image provider plugin until ctx ends. Each
 // time the plugin's socket appears or is replaced, at startup or after the
 // plugin restarts, it reconciles the plugin's leases, and retries a failed
-// reconcile on the next check. Right after a reconcile, and every
-// providerAuthRefreshPeriod, it refreshes the registry credentials of the
-// leases that need it. While the plugin reports PLUGIN_STATE_DRAINING, it
-// suspends the actors that hold its leases.
+// reconcile on the next check. It also reconciles every
+// providerReconcilePeriod. A goroutine refreshes the registry credentials of
+// the leases that need it every providerAuthRefreshPeriod, and right after
+// each reconcile that follows a socket change. While the plugin reports
+// PLUGIN_STATE_DRAINING, it suspends the actors that hold its leases.
 func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir, workersDir string) {
+	refreshNow := make(chan struct{}, 1)
+	go s.runProviderAuthRefresh(ctx, socket, actorsDir, refreshNow)
 	var last os.FileInfo
-	var lastRefresh time.Time
+	var lastReconcile time.Time
 	ticker := time.NewTicker(imageProviderMonitorPeriod)
 	defer ticker.Stop()
 	for {
@@ -259,21 +288,25 @@ func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir, wo
 			} else {
 				// The plugin may have restarted and lost the credentials.
 				s.providerAuth.reset()
-				lastRefresh = time.Time{}
+				select {
+				case refreshNow <- struct{}{}:
+				default:
+					// A refresh is already due.
+				}
+				s.drain.forget()
 			}
+			lastReconcile = time.Now()
+		} else if info != nil && time.Since(lastReconcile) >= providerReconcilePeriod {
+			if err := s.reconcileProviderLeases(ctx, actorsDir); err != nil {
+				slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
+			}
+			lastReconcile = time.Now()
 		}
 		last = info
-		if info != nil && time.Since(lastRefresh) >= providerAuthRefreshPeriod {
-			s.refreshProviderAuth(ctx, actorsDir)
-			lastRefresh = time.Now()
-		}
-		if info != nil && s.imageProviderDraining(ctx) && s.drainSuspending.CompareAndSwap(false, true) {
-			// Suspends can take minutes; the monitor keeps reconciling and
-			// refreshing meanwhile.
-			go func() {
-				defer s.drainSuspending.Store(false)
-				s.suspendStreamedActors(ctx, actorsDir, workersDir)
-			}()
+		if info != nil && s.imageProviderDraining(ctx) {
+			// Suspends run in the background, drainSuspendConcurrency at a
+			// time. Each tick starts those that are due.
+			s.startDrainSuspends(ctx, actorsDir, workersDir)
 		}
 		select {
 		case <-ctx.Done():

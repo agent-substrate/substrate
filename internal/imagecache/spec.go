@@ -118,22 +118,34 @@ func storeLowerDirs(storeLayers []string) []string {
 }
 
 // encoded returns spec as WriteSpec stores it, without the lowerdirs that
-// Store layers imply.
-func (s OverlaySpec) encoded() OverlaySpec {
+// Store layers imply. It fails if an image's lowerdirs are not those of its
+// Store layers.
+func (s OverlaySpec) encoded() (OverlaySpec, error) {
 	s.Version = specVersionStore
-	encode := func(lowerDirs *[]string, storeLayers []string) {
-		if len(storeLayers) > 0 {
+	encode := func(name string, lowerDirs *[]string, storeLayers []string) error {
+		switch {
+		case len(storeLayers) == 0:
+			if len(*lowerDirs) > 0 {
+				s.Version = specVersionLowerDirs
+			}
+		case len(*lowerDirs) > 0 && !slices.Equal(*lowerDirs, storeLowerDirs(storeLayers)):
+			return fmt.Errorf("%s lowerDirs %v are not those of its Store layers", name, *lowerDirs)
+		default:
 			*lowerDirs = nil
-		} else if len(*lowerDirs) > 0 {
-			s.Version = specVersionLowerDirs
 		}
+		return nil
 	}
-	encode(&s.LowerDirs, s.StoreLayers)
+	if err := encode("rootfs", &s.LowerDirs, s.StoreLayers); err != nil {
+		return OverlaySpec{}, err
+	}
 	s.ImageVolumes = slices.Clone(s.ImageVolumes)
 	for i := range s.ImageVolumes {
-		encode(&s.ImageVolumes[i].LowerDirs, s.ImageVolumes[i].StoreLayers)
+		v := &s.ImageVolumes[i]
+		if err := encode("image volume "+v.Name, &v.LowerDirs, v.StoreLayers); err != nil {
+			return OverlaySpec{}, err
+		}
 	}
-	return s
+	return s, nil
 }
 
 // decoded fills in the lowerdirs of the spec's Store images.
@@ -171,7 +183,10 @@ func (s *OverlaySpec) decoded() error {
 // could parse with layers missing and leave them eligible for eviction
 // while the actor is using them.
 func WriteSpec(bundlePath string, spec *OverlaySpec) error {
-	enc := spec.encoded()
+	enc, err := spec.encoded()
+	if err != nil {
+		return fmt.Errorf("while encoding overlay spec: %w", err)
+	}
 	spec.Version = enc.Version
 	b, err := json.MarshalIndent(enc, "", "  ")
 	if err != nil {

@@ -25,8 +25,14 @@ option go_package = "github.com/ai-on-gke/image-provider-plugin/api/imageprovide
 // Riptide or Nydus.
 //
 // Given an OCI image reference and resolved registry credentials, the plugin
-// prepares the image's layers on the host in the requested LayerForm and
-// returns them in order for container rootfs composition.
+// prepares the image on the host in the requested LayerForm.
+//
+// Several clients, for example Substrate and Ray, can share one plugin on a
+// node. Each client passes its own mount_root in every request. The plugin
+// mounts images for a client only under that client's mount_root, and keys
+// leases by mount_root and lease_id, so clients never see each other's
+// leases. Two clients must not use the same mount_root. The plugin serves
+// only the mount roots it was configured with.
 //
 // The extensions fields exist only for customized forks of Substrate and
 // their plugins, which define their own message types. Upstream Substrate,
@@ -37,32 +43,37 @@ option go_package = "github.com/ai-on-gke/image-provider-plugin/api/imageprovide
 // field, and so does every list item that a fork may annotate.
 service ImageProviderPlugin {
   // CanProvide reports whether the plugin and its provider are healthy and
-  // able to serve the given OCI image in the requested form.
+  // able to serve the given OCI image in the requested form under
+  // mount_root.
   rpc CanProvide(CanProvideRequest) returns (CanProvideResponse);
 
-  // PrepareImage prepares the image's layers in the requested form, takes the
-  // lease named by lease_id on the image, and returns the complete ordered
-  // list of read-only layers.
+  // PrepareImage prepares the image in the requested form under mount_root,
+  // takes the lease named by mount_root and lease_id on the image, and
+  // returns the image in that form.
   //
   // If the plugin already holds the lease, PrepareImage returns the leased
   // image again without taking another lease, so the caller can retry it.
-  // Reusing a lease_id for a different image_ref or form returns
+  // Reusing a lease for a different image_ref or form returns
   // codes.AlreadyExists.
   //
-  // If the plugin cannot serve the image, PrepareImage returns
-  // codes.FailedPrecondition so the caller can fall back to pulling the whole
-  // image itself.
+  // If the plugin cannot serve the image, or does not serve mount_root,
+  // PrepareImage returns codes.FailedPrecondition so the caller can fall back
+  // to pulling the whole image itself.
   rpc PrepareImage(PrepareImageRequest) returns (PrepareImageResponse);
 
   // ReleaseImage releases a lease when a workload checkpoints, suspends or
   // terminates. Releasing a lease the plugin does not hold succeeds, so the
-  // caller can retry it. The plugin may remove an image's layers once no
-  // lease on them is left.
+  // caller can retry it. The plugin may unmount the image from mount_root
+  // once no lease under mount_root uses it, and may remove the image's data
+  // once no lease uses it.
   rpc ReleaseImage(ReleaseImageRequest) returns (ReleaseImageResponse);
 
-  // ReconcileImages replaces the plugin's leases with the leases that
-  // surviving workloads still hold. The caller sends it after it restarts or
-  // finds the plugin socket. The plugin removes layers that no lease uses.
+  // ReconcileImages replaces the plugin's leases under mount_root with the
+  // leases that the caller's surviving workloads still hold. It does not
+  // change leases under other mount roots. The caller sends it after it
+  // restarts or finds the plugin socket. The plugin removes images that no
+  // lease uses.
+  //
   // The caller then calls RefreshAuth on each surviving lease. Until then, a
   // plugin that reported AUTH_REFRESH_REQUIRED may have no credentials for
   // it.
@@ -75,27 +86,21 @@ service ImageProviderPlugin {
   rpc RefreshAuth(RefreshAuthRequest) returns (RefreshAuthResponse);
 }
 
-// LayerForm is the form in which the plugin returns an image's layers.
+// LayerForm is the form in which the plugin returns an image.
+//
+// New forms extend the API. Each new form adds a LayerForm value and a
+// matching arm in PrepareImageResponse.layers, for example LAYER_FORM_BLK
+// for a block device that a microVM attaches. A plugin that does not
+// support a form returns can_provide = false from CanProvide, and
+// codes.FailedPrecondition from PrepareImage.
 enum LayerForm {
-  // LAYER_FORM_UNSPECIFIED is treated as LAYER_FORM_DIRS.
+  // LAYER_FORM_UNSPECIFIED is invalid. Requests that carry it fail with
+  // codes.InvalidArgument.
   LAYER_FORM_UNSPECIFIED = 0;
 
-  // LAYER_FORM_DIRS returns mounted read-only host directories that the
-  // caller stacks as overlayfs lowerdirs, with its own writable upper layer
-  // on top. Each directory is used as it is, so it marks whiteouts as
-  // overlayfs does: 0:0 character devices for whiteouts and
-  // trusted.overlay.opaque=y on opaque directories.
-  LAYER_FORM_DIRS = 1;
-
-  // LAYER_FORM_EROFS returns EROFS image files that a microVM maps over
-  // virtio-pmem with DAX and stacks inside the guest. Each file is
-  // uncompressed with a 4 KiB block size and stays unchanged while the image
-  // is leased.
-  LAYER_FORM_EROFS = 2;
-
-  // LAYER_FORM_ROOTFS returns one merged read-only root filesystem directory
-  // on the host.
-  LAYER_FORM_ROOTFS = 3;
+  // LAYER_FORM_ROOTFS returns the image as one read-only root filesystem
+  // directory on the host, with all layers applied.
+  LAYER_FORM_ROOTFS = 1;
 }
 
 // RegistryAuth carries resolved registry credentials, for example from a
@@ -109,13 +114,19 @@ message RegistryAuth {
   string registry_token = 6 [ debug_redact = true ];
 }
 
+// CanProvideRequest carries no registry credentials. The caller sends them
+// only with PrepareImage, for an image the plugin agreed to serve.
 message CanProvideRequest {
   string image_ref = 1;
-  RegistryAuth auth = 2;
 
   // form is the layer form the caller needs. A plugin that cannot
   // produce it returns can_provide = false.
-  LayerForm form = 3;
+  LayerForm form = 2;
+
+  // mount_root is the caller's mount root. See PrepareImageRequest. A plugin
+  // that does not serve it returns can_provide = false. It must not be
+  // empty.
+  string mount_root = 3;
 
   // extensions is for customized forks only. See the service comment.
   repeated google.protobuf.Any extensions = 4;
@@ -172,45 +183,28 @@ message PrepareImageRequest {
   // form is the layer form to return.
   LayerForm form = 3;
 
-  // required_erofs_digests, if set, lists in order the EROFS image digests
-  // ("sha256:<hex>") that a snapshot being restored mapped. The plugin
-  // returns exactly these images or codes.FailedPrecondition. Only valid with
-  // LAYER_FORM_EROFS.
-  repeated string required_erofs_digests = 4;
-
   // lease_id names the lease this call takes, for example from the workload
-  // UID and container name. It must not be empty.
-  string lease_id = 5;
+  // UID and container name. It is unique within mount_root. It must not be
+  // empty.
+  string lease_id = 4;
+
+  // mount_root is a host directory that the plugin owns and the caller does
+  // not write to. The plugin returns the image under it. Each client uses
+  // one fixed mount_root, which also scopes its leases. It must not be
+  // empty.
+  string mount_root = 5;
 
   // extensions is for customized forks only. See the service comment.
   repeated google.protobuf.Any extensions = 6;
 }
 
-// LayerDirs is the complete ordered list of read-only host layer directories,
-// bottom-most base layer first, matching OCI manifest order.
-message LayerDirs {
-  repeated string dirs = 1;
-}
-
-// ErofsLayer is one read-only EROFS image file on the host.
-message ErofsLayer {
-  // path is the host path of the image file.
-  string path = 1;
-
-  // digest is the sha256 of the file ("sha256:<hex>").
-  string digest = 2;
-}
-
-// ErofsLayers is the complete ordered list of EROFS image files, bottom-most
-// first. The plugin may return one file per OCI layer or fewer merged files.
-message ErofsLayers {
-  repeated ErofsLayer layers = 1;
-}
-
-// Rootfs is the image's merged read-only root filesystem on the host. It stays
-// mounted while the image is leased.
+// Rootfs is the image's read-only root filesystem on the host, with all
+// layers applied and no whiteouts left. It stays mounted and unchanged while
+// the image is leased. The caller must not write to it.
 message Rootfs {
-  // dir is the host path of the root filesystem directory.
+  // dir is the host path of the root filesystem directory, under the
+  // request's mount_root. The caller may stack an overlayfs on dir, so dir
+  // must be at most one stacking filesystem, such as overlayfs, deep.
   string dir = 1;
 }
 
@@ -226,24 +220,21 @@ message PrepareImageResponse {
   // "nydus".
   string provider_name = 3;
 
-  // layers holds the image in the requested form. A caller rejects a response
-  // whose layers do not match the form it asked for.
+  // layers holds the image in the requested form. A caller rejects a
+  // response whose layers do not match the form it asked for.
+  //
+  // Each LayerForm has one arm here. A new form adds a new arm, for example
+  // a block device for LAYER_FORM_BLK.
   oneof layers {
-    // layer_dirs is set for LAYER_FORM_DIRS.
-    LayerDirs layer_dirs = 4;
-
-    // erofs_layers is set for LAYER_FORM_EROFS.
-    ErofsLayers erofs_layers = 5;
-
     // rootfs is set for LAYER_FORM_ROOTFS.
-    Rootfs rootfs = 6;
+    Rootfs rootfs = 4;
   }
 
-  // extensions is for customized forks only. See the service comment.
-  repeated google.protobuf.Any extensions = 7;
-
   // auth_refresh says whether the caller must call RefreshAuth on the lease.
-  AuthRefresh auth_refresh = 8;
+  AuthRefresh auth_refresh = 5;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 6;
 }
 
 message ReleaseImageRequest {
@@ -252,15 +243,18 @@ message ReleaseImageRequest {
 
   // image_digest and form are the lease's image_digest, as PrepareImage
   // returned it, and form. A plugin that lost its leases, for example in a
-  // restart, uses them to find the layers. Otherwise, if they do not match
+  // restart, uses them to find the image. Otherwise, if they do not match
   // the lease, ReleaseImage returns codes.InvalidArgument. An empty
   // image_digest matches the lease, so a caller whose PrepareImage failed
   // can still release a lease the plugin took.
   string image_digest = 2;
   LayerForm form = 3;
 
+  // mount_root is the mount_root the caller passed to PrepareImage.
+  string mount_root = 4;
+
   // extensions is for customized forks only. See the service comment.
-  repeated google.protobuf.Any extensions = 4;
+  repeated google.protobuf.Any extensions = 5;
 }
 
 message ReleaseImageResponse {
@@ -269,7 +263,7 @@ message ReleaseImageResponse {
 }
 
 // ActiveLease is a lease that a surviving workload still holds. It names the
-// layers by digest rather than by host path, since the plugin owns the paths.
+// image by digest rather than by host path, since the plugin owns the paths.
 message ActiveLease {
   // lease_id is the lease_id the caller passed to PrepareImage.
   string lease_id = 1;
@@ -281,20 +275,20 @@ message ActiveLease {
 
   LayerForm form = 4;
 
-  // erofs_digests lists in order the digests of the EROFS image files that
-  // PrepareImage returned. The plugin keeps exactly these files. Only set
-  // for LAYER_FORM_EROFS.
-  repeated string erofs_digests = 5;
-
   // extensions is for customized forks only. See the service comment.
-  repeated google.protobuf.Any extensions = 6;
+  repeated google.protobuf.Any extensions = 5;
 }
 
 message ReconcileImagesRequest {
+  // active_leases are all the leases under mount_root that the caller still
+  // holds.
   repeated ActiveLease active_leases = 1;
 
+  // mount_root is the caller's mount root. Only leases under it change.
+  string mount_root = 2;
+
   // extensions is for customized forks only. See the service comment.
-  repeated google.protobuf.Any extensions = 2;
+  repeated google.protobuf.Any extensions = 3;
 }
 
 message ReconcileImagesResponse {
@@ -309,8 +303,11 @@ message RefreshAuthRequest {
   // auth replaces the lease's registry credentials.
   RegistryAuth auth = 2;
 
+  // mount_root is the mount_root the caller passed to PrepareImage.
+  string mount_root = 3;
+
   // extensions is for customized forks only. See the service comment.
-  repeated google.protobuf.Any extensions = 3;
+  repeated google.protobuf.Any extensions = 4;
 }
 
 message RefreshAuthResponse {

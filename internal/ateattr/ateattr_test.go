@@ -390,7 +390,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{ImageCacheOutcomeTimeout, "timeout"},
 
 		{ImageProviderOutcomeSuccess, "success"},
-		{ImageProviderOutcomeFallback, "fallback"},
+		{ImageProviderOutcomeDeclined, "declined"},
 		{ImageProviderOutcomeError, "error"},
 
 		{SchedulerOutcomeAssigned, "assigned"},

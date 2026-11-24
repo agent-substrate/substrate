@@ -174,27 +174,44 @@ func TestCheckpointDurationShape(t *testing.T) {
 	}
 }
 
+// Only the error outcome carries an error.type.
 func TestRecordImageProvider(t *testing.T) {
-	inst, reader := newTestInstruments(t)
-	inst.recordImageProvider(context.Background(), "nydus", ateattr.ImageProviderOutcomeFallback, time.Second)
-
-	want := attribute.NewSet(
-		ateattr.ImageProviderKey.String("nydus"),
-		ateattr.ImageProviderOutcomeKey.String(ateattr.ImageProviderOutcomeFallback),
-	)
-	requests, ok := collectHistogram(t, reader, imageProviderRequestsMetric).Data.(metricdata.Sum[int64])
-	if !ok || len(requests.DataPoints) != 1 {
-		t.Fatalf("%s = %+v, want one int64 sum datapoint", imageProviderRequestsMetric, requests)
-	}
-	if dp := requests.DataPoints[0]; dp.Value != 1 || !dp.Attributes.Equals(&want) {
-		t.Errorf("%s datapoint = %v %v, want 1 %v", imageProviderRequestsMetric, dp.Value, dp.Attributes.ToSlice(), want.ToSlice())
-	}
-	duration, ok := collectHistogram(t, reader, imageProviderDurationMetric).Data.(metricdata.Histogram[float64])
-	if !ok || len(duration.DataPoints) != 1 {
-		t.Fatalf("%s = %+v, want one float64 histogram datapoint", imageProviderDurationMetric, duration)
-	}
-	if dp := duration.DataPoints[0]; dp.Sum != 1 || !dp.Attributes.Equals(&want) {
-		t.Errorf("%s datapoint = %v %v, want sum 1 %v", imageProviderDurationMetric, dp.Sum, dp.Attributes.ToSlice(), want.ToSlice())
+	for _, tc := range []struct {
+		outcome, errorType string
+		want               attribute.Set
+	}{{
+		outcome: ateattr.ImageProviderOutcomeSuccess,
+		want: attribute.NewSet(
+			ateattr.ImageProviderKey.String("nydus"),
+			ateattr.ImageProviderOutcomeKey.String(ateattr.ImageProviderOutcomeSuccess),
+		),
+	}, {
+		outcome:   ateattr.ImageProviderOutcomeError,
+		errorType: "Unavailable",
+		want: attribute.NewSet(
+			ateattr.ImageProviderKey.String("nydus"),
+			ateattr.ImageProviderOutcomeKey.String(ateattr.ImageProviderOutcomeError),
+			ateattr.ErrorTypeKey.String("Unavailable"),
+		),
+	}} {
+		t.Run(tc.outcome, func(t *testing.T) {
+			inst, reader := newTestInstruments(t)
+			inst.recordImageProvider(context.Background(), "nydus", tc.outcome, tc.errorType, time.Second)
+			requests, ok := collectHistogram(t, reader, imageProviderRequestsMetric).Data.(metricdata.Sum[int64])
+			if !ok || len(requests.DataPoints) != 1 {
+				t.Fatalf("%s = %+v, want one int64 sum datapoint", imageProviderRequestsMetric, requests)
+			}
+			if dp := requests.DataPoints[0]; dp.Value != 1 || !dp.Attributes.Equals(&tc.want) {
+				t.Errorf("%s datapoint = %v %v, want 1 %v", imageProviderRequestsMetric, dp.Value, dp.Attributes.ToSlice(), tc.want.ToSlice())
+			}
+			duration, ok := collectHistogram(t, reader, imageProviderDurationMetric).Data.(metricdata.Histogram[float64])
+			if !ok || len(duration.DataPoints) != 1 {
+				t.Fatalf("%s = %+v, want one float64 histogram datapoint", imageProviderDurationMetric, duration)
+			}
+			if dp := duration.DataPoints[0]; dp.Sum != 1 || !dp.Attributes.Equals(&tc.want) {
+				t.Errorf("%s datapoint = %v %v, want sum 1 %v", imageProviderDurationMetric, dp.Sum, dp.Attributes.ToSlice(), tc.want.ToSlice())
+			}
+		})
 	}
 }
 
@@ -448,5 +465,18 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 				t.Errorf("checkpointSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRecordImageProviderAuthRefreshFailure(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+	inst.recordImageProviderAuthRefreshFailure(context.Background(), "riptide")
+	want := attribute.NewSet(ateattr.ImageProviderKey.String("riptide"))
+	failures, ok := collectHistogram(t, reader, imageProviderAuthRefreshFailuresMetric).Data.(metricdata.Sum[int64])
+	if !ok || len(failures.DataPoints) != 1 {
+		t.Fatalf("%s = %+v, want one int64 sum datapoint", imageProviderAuthRefreshFailuresMetric, failures)
+	}
+	if dp := failures.DataPoints[0]; dp.Value != 1 || !dp.Attributes.Equals(&want) {
+		t.Errorf("%s datapoint = %v %v, want 1 %v", imageProviderAuthRefreshFailuresMetric, dp.Value, dp.Attributes.ToSlice(), want.ToSlice())
 	}
 }

@@ -82,7 +82,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	imageProviderDuration, err := meter.Float64Histogram(
 		imageProviderDurationMetric,
 		metric.WithUnit("s"),
-		metric.WithDescription("Time the image provider plugin takes to prepare an image's layers on the node."),
+		metric.WithDescription("Time the image provider plugin on the node takes to answer for one image: CanProvide and PrepareImage, without a pull into the image cache."),
 		metric.WithExplicitBucketBoundaries(snapshotPhaseBuckets...),
 	)
 	if err != nil {
@@ -107,17 +107,22 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	}, nil
 }
 
-// recordImageProvider records one request to the image provider plugin.
-func (i *Instruments) recordImageProvider(ctx context.Context, provider, outcome string, d time.Duration) {
+// recordImageProvider records one request to the image provider plugin that
+// took d. errorType is set only for ImageProviderOutcomeError.
+func (i *Instruments) recordImageProvider(ctx context.Context, provider, outcome, errorType string, d time.Duration) {
 	if i == nil {
 		return
 	}
-	attrs := metric.WithAttributes(
+	attrs := []attribute.KeyValue{
 		ateattr.ImageProviderKey.String(provider),
 		ateattr.ImageProviderOutcomeKey.String(outcome),
-	)
-	i.imageProviderRequests.Add(ctx, 1, attrs)
-	i.imageProviderDuration.Record(ctx, d.Seconds(), attrs)
+	}
+	if errorType != "" {
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(errorType))
+	}
+	opt := metric.WithAttributes(attrs...)
+	i.imageProviderRequests.Add(ctx, 1, opt)
+	i.imageProviderDuration.Record(ctx, d.Seconds(), opt)
 }
 
 // recordImageProviderAuthRefreshFailure records one failed RefreshAuth call.

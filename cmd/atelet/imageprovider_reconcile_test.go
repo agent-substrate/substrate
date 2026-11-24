@@ -16,22 +16,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
+	"time"
 
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	providermock "github.com/ai-on-gke/image-provider-plugin/client/mock"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
@@ -106,6 +109,47 @@ func TestReconcileProviderLeasesUnreadableSpec(t *testing.T) {
 	}
 }
 
+// A reconcile sends the lease a bundle is taking without waiting for the
+// pull, the spec's lease once the bundle records it, and nothing once the
+// bundle releases it, even if the release fails.
+func TestReconcileProviderLeasesWithBundles(t *testing.T) {
+	preview.InitForTest(t, string(preview.GateImageProviderPlugin))
+	useTempNodeDirs(t)
+	const ref = "registry.example/app:1"
+	provider := providermock.New("nydus")
+	s := &Atelet{imageProvider: provider, imageCache: newImageVolumeStore(t)}
+	rootfs := streamedRootfs(t)
+	provider.PrepareImageFunc = func(ctx context.Context, _ *providerclient.PrepareRequest) (*providerclient.PrepareResult, error) {
+		if err := s.reconcileProviderLeases(ctx, nodepath.ActorsDir); err != nil {
+			return nil, err
+		}
+		return streamedResult(rootfs), nil
+	}
+	provider.ReleaseImageFunc = func(context.Context, *providerclient.ReleaseRequest) error {
+		return errors.New("plugin unavailable")
+	}
+
+	if _, _, err := prepareOCIDirectory(t.Context(), s.imageSource(), "actor-1", "app", ref, nil, nil); err != nil {
+		t.Fatalf("prepareOCIDirectory: %v", err)
+	}
+	if err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
+		t.Fatalf("reconcileProviderLeases: %v", err)
+	}
+	s.releaseProviderLeases(t.Context(), "actor-1")
+	if err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
+		t.Fatalf("reconcileProviderLeases: %v", err)
+	}
+
+	want := [][]*providerclient.ActiveLease{
+		{{LeaseID: "actor-1/app", ImageRef: ref}},
+		{{LeaseID: "actor-1/app", ImageRef: ref, ImageDigest: testStreamedDigest}},
+		nil,
+	}
+	if diff := cmp.Diff(want, provider.ReconcileCalls, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // A restarted plugin listens on a new socket file. atelet must reconcile
 // then, also when the socket is back before the next check.
 func TestNewProviderSocket(t *testing.T) {
@@ -163,28 +207,8 @@ func (f *fakeStatsWorkerServer) GetActiveWorkloadStats(context.Context, *atework
 	return &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: f.samples}, nil
 }
 
-// fakeSuspendWorkers records RequestActorSuspend calls and fails the first
-// failFirst of them.
-type fakeSuspendWorkers struct {
-	ateapi.WorkerServiceClient
-	mu        sync.Mutex
-	failFirst int
-	requests  []*ateapi.RequestActorSuspendRequest
-}
-
-func (f *fakeSuspendWorkers) RequestActorSuspend(_ context.Context, req *ateapi.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapi.RequestActorSuspendResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.requests = append(f.requests, req)
-	if len(f.requests) <= f.failFirst {
-		return nil, status.Error(codes.Unavailable, "control plane unavailable")
-	}
-	return &ateapi.RequestActorSuspendResponse{}, nil
-}
-
-// Only running actors that hold a lease are suspended, once each, and a
-// failed request is retried.
-func TestSuspendStreamedActors(t *testing.T) {
+// Only running actors that hold a lease are asked to suspend, once each.
+func TestStartDrainSuspends(t *testing.T) {
 	actorsDir, workersDir := t.TempDir(), t.TempDir()
 	writeTestBundle(t, actorsDir, "actor-streamed", "main", &imagecache.OverlaySpec{
 		ImageRef: "registry.example/app:1", StoreLayers: []string{"/cache/aaa"},
@@ -220,20 +244,21 @@ func TestSuspendStreamedActors(t *testing.T) {
 	workerSocketPath = func(string) string { return sock }
 	t.Cleanup(func() { workerSocketPath = origSocketPath })
 
-	workers := &fakeSuspendWorkers{failFirst: 1}
-	s := &Atelet{workerDialer: newWorkerDialer(1), workers: workers, drainSuspended: map[string]bool{}}
-
-	for i, want := range []int{0, 1, 0} {
-		if got := s.suspendStreamedActors(t.Context(), actorsDir, workersDir); got != want {
-			t.Errorf("suspendStreamedActors call %d = %d, want %d", i, got, want)
+	workers := newFakeDrainWorkers()
+	s := &Atelet{workerDialer: newWorkerDialer(1), drain: newDrainSuspender(workers, clocktesting.NewFakePassiveClock(time.Unix(0, 0)))}
+	for i, want := range []int{1, 0} {
+		got, wait := s.startDrainSuspends(t.Context(), actorsDir, workersDir)
+		wait()
+		if got != want {
+			t.Errorf("startDrainSuspends call %d started %d, want %d", i, got, want)
 		}
 	}
-	want := &ateapi.RequestActorSuspendRequest{
+	want := []*ateapi.RequestActorSuspendRequest{{
 		Worker:   &ateapi.ObjectRef{Name: podUID},
 		Actor:    &ateapi.ObjectRef{Atespace: "ns", Name: "streamed"},
 		ActorUid: "actor-streamed",
-	}
-	if diff := cmp.Diff([]*ateapi.RequestActorSuspendRequest{want, want}, workers.requests, protocmp.Transform()); diff != "" {
+	}}
+	if diff := cmp.Diff(want, workers.requests, protocmp.Transform()); diff != "" {
 		t.Errorf("RequestActorSuspend calls mismatch (-want +got):\n%s", diff)
 	}
 }
