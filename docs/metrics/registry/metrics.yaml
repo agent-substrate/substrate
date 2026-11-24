@@ -1384,6 +1384,8 @@ groups:
       A miss causes a pull and an unpack. Thus the hit ratio of a node is an
       early sign of the resume time. Calculate the ratio as hit / (hit + miss).
       Do not put the failures or the stopped lookups in the denominator.
+      A CachedImage miss is not counted, because the caller then either pulls
+      through EnsureImage, which counts it, or gets the image elsewhere.
     annotations:
       substrate:
         emitted_by: [atelet]

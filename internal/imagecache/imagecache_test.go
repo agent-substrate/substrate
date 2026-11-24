@@ -20,6 +20,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -38,6 +39,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 // newTestRegistry starts an in-memory OCI registry and returns its host
@@ -243,35 +246,58 @@ func TestEnsureImage_TagPullAndDigestHit(t *testing.T) {
 }
 
 // CachedImage serves only digest refs already on disk, and never contacts the
-// registry.
+// registry. It counts hits and failures, but not misses.
 func TestCachedImage(t *testing.T) {
 	srv, host := newTestRegistry(t)
 	ref := host + "/test/app:latest"
 	pushImage(t, ref, v1.Config{}, layerFromEntries(t, []tarEntry{
 		{name: "app", typeflag: tar.TypeReg, body: "app"},
 	}))
-	store := newTestStore(t)
+	store, reader := newMeteredStore(t)
 	ctx := context.Background()
 	img, err := store.EnsureImage(ctx, ref)
 	if err != nil {
 		t.Fatalf("EnsureImage: %v", err)
 	}
 	srv.Close()
+	corrupt := v1.Hash{Algorithm: "sha256", Hex: strings.Repeat("1", 64)}
+	if err := os.WriteFile(store.recordPath(corrupt), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name    string
 		ref     string
 		wantHit bool
+		wantErr bool
+		want    map[requestSeries]int64
 	}{
-		{name: "cached digest", ref: host + "/test/app@" + img.Digest.String(), wantHit: true},
+		{
+			name: "cached digest", ref: host + "/test/app@" + img.Digest.String(), wantHit: true,
+			want: map[requestSeries]int64{{outcome: ateattr.ImageCacheOutcomeHit}: 1},
+		},
 		{name: "tag", ref: ref},
 		{name: "uncached digest", ref: host + "/test/app@sha256:" + strings.Repeat("0", 64)},
 		{name: "unparseable", ref: "Not A Ref"},
+		{
+			name: "corrupt record", ref: host + "/test/app@" + corrupt.String(), wantErr: true,
+			want: map[requestSeries]int64{{outcome: ateattr.ImageCacheOutcomeError, errorType: errTypeOther}: 1},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			before := collectRequests(t, reader)
 			got, err := store.CachedImage(ctx, tc.ref)
-			if err != nil {
-				t.Fatalf("CachedImage(%q): %v", tc.ref, err)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("CachedImage(%q) error = %v, want error %v", tc.ref, err, tc.wantErr)
+			}
+			counted := map[requestSeries]int64{}
+			for series, n := range collectRequests(t, reader) {
+				if d := n - before[series]; d != 0 {
+					counted[series] = d
+				}
+			}
+			if !maps.Equal(counted, tc.want) {
+				t.Errorf("CachedImage(%q) counted %v, want %v", tc.ref, counted, tc.want)
 			}
 			if !tc.wantHit {
 				if got != nil {
