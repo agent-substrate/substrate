@@ -68,7 +68,7 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 			}},
 		}},
 	}
-	volumes := []*ateapi.ExternalVolumeStatus{{
+	volumes := []*ateapi.ActorExternalVolumeStatus{{
 		Name:       "data-vol",
 		VolumeType: "mock-standard",
 	}}
@@ -140,7 +140,7 @@ func TestInitialActorVolumes(t *testing.T) {
 		},
 	}
 
-	want := []*ateapi.ExternalVolumeStatus{
+	want := []*ateapi.ActorExternalVolumeStatus{
 		{
 			Name:       "data-vol-1",
 			VolumeType: "mock-standard",
@@ -212,22 +212,22 @@ func TestCreateActorVolumes(t *testing.T) {
 	tests := []struct {
 		name           string
 		tmpl           *ateapi.ActorTemplate
-		inputVolumes   []*ateapi.ExternalVolumeStatus
+		inputVolumes   []*ateapi.ActorExternalVolumeStatus
 		storageClasses map[string]*storagev1.StorageClass
 		wantErr        bool
-		wantRes        []*ateapi.ExternalVolumeStatus
+		wantRes        []*ateapi.ActorExternalVolumeStatus
 	}{
 		{
 			name: "partial failure returns error and preserves succeeded, failed, and remaining volumes",
 			tmpl: multiVolTmpl,
-			inputVolumes: []*ateapi.ExternalVolumeStatus{
+			inputVolumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "vol1", VolumeType: "mock-standard"},
 				// Its type differs from its StorageClass's provisioner, so creating it fails.
 				{Name: "vol2", VolumeType: "mock-fast"},
 				{Name: "vol3", VolumeType: "mock-standard"},
 			},
 			wantErr: true,
-			wantRes: []*ateapi.ExternalVolumeStatus{
+			wantRes: []*ateapi.ActorExternalVolumeStatus{
 				{
 					Name:            "vol1",
 					StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1",
@@ -240,14 +240,14 @@ func TestCreateActorVolumes(t *testing.T) {
 		{
 			name: "volume with a storage volume id is not created again",
 			tmpl: standardTmpl,
-			inputVolumes: []*ateapi.ExternalVolumeStatus{
+			inputVolumes: []*ateapi.ActorExternalVolumeStatus{
 				{
 					Name:            "data-vol",
 					StorageVolumeId: "existing-vol-id",
 				},
 			},
 			wantErr: false,
-			wantRes: []*ateapi.ExternalVolumeStatus{
+			wantRes: []*ateapi.ActorExternalVolumeStatus{
 				{
 					Name:            "data-vol",
 					StorageVolumeId: "existing-vol-id",
@@ -257,18 +257,18 @@ func TestCreateActorVolumes(t *testing.T) {
 		{
 			name: "volume not found in template returns error",
 			tmpl: &ateapi.ActorTemplate{},
-			inputVolumes: []*ateapi.ExternalVolumeStatus{
+			inputVolumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "missing-vol"},
 			},
 			wantErr: true,
-			wantRes: []*ateapi.ExternalVolumeStatus{
+			wantRes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "missing-vol"},
 			},
 		},
 		{
 			name: "storage class parameters are propagated to volume context",
 			tmpl: standardTmpl,
-			inputVolumes: []*ateapi.ExternalVolumeStatus{
+			inputVolumes: []*ateapi.ActorExternalVolumeStatus{
 				{
 					Name:       "data-vol",
 					VolumeType: "mock-standard",
@@ -285,7 +285,7 @@ func TestCreateActorVolumes(t *testing.T) {
 				},
 			},
 			wantErr: false,
-			wantRes: []*ateapi.ExternalVolumeStatus{
+			wantRes: []*ateapi.ActorExternalVolumeStatus{
 				{
 					Name:            "data-vol",
 					StorageVolumeId: "mock-vol-substrate-actor-uid-123-data-vol",
@@ -355,7 +355,7 @@ func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
 		"standard": {ObjectMeta: metav1.ObjectMeta{Name: "standard"}, Provisioner: "mock-standard"},
 	}}
-	input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
+	input := []*ateapi.ActorExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
 
 	res, err := createActorVolumes(context.Background(), registry, scLister, "actor-uid-123", tmpl, input)
 	if got := apierror.Code(err); got != codes.Internal {
@@ -383,14 +383,14 @@ func TestDeleteActorVolumes(t *testing.T) {
 	tests := []struct {
 		name        string
 		actorUID    string
-		volumes     []*ateapi.ExternalVolumeStatus
+		volumes     []*ateapi.ActorExternalVolumeStatus
 		wantDeleted []string
 		wantErr     bool
 	}{
 		{
 			name:     "uses storage volume ID when present",
 			actorUID: "uid-abc",
-			volumes: []*ateapi.ExternalVolumeStatus{
+			volumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock"},
 			},
 			wantDeleted: []string{"storage-vol-123"},
@@ -399,7 +399,7 @@ func TestDeleteActorVolumes(t *testing.T) {
 		{
 			name:     "falls back to actorVolumeID when storage volume ID is empty",
 			actorUID: "uid-abc",
-			volumes: []*ateapi.ExternalVolumeStatus{
+			volumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "vol1", StorageVolumeId: "", VolumeType: "mock"},
 			},
 			wantDeleted: []string{"substrate-uid-abc-vol1"},
@@ -479,7 +479,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					}},
@@ -510,7 +510,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "mounted-vol", StorageVolumeId: "storage-vol-mounted", VolumeType: "mock"},
 						{Name: "unmounted-vol", StorageVolumeId: "storage-vol-unmounted", VolumeType: "mock"},
 					}},
@@ -539,7 +539,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					}},
@@ -569,7 +569,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					}},
@@ -587,7 +587,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 					}},
 				},
@@ -608,7 +608,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					}},
@@ -632,7 +632,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "unknown-plugin"},
 					}},
 				},
@@ -646,7 +646,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapi.ActorStatus{
 					AssignedNode: "",
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 					}},
 				},

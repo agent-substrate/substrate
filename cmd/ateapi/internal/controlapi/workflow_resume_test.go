@@ -2014,7 +2014,7 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status: &ateapi.ActorStatus{
 			State: ateapi.ActorState_ACTOR_STATE_RESUMING,
-			ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+			ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{
 				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock"},
 				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock"},
 			}},
@@ -2102,7 +2102,7 @@ func TestEnsureVolumesCreated(t *testing.T) {
 				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 				Status: &ateapi.ActorStatus{
 					State:           tt.state,
-					ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{{Name: "data", VolumeType: "mock"}}},
+					ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: []*ateapi.ActorExternalVolumeStatus{{Name: "data", VolumeType: "mock"}}},
 				},
 			})
 			actor, err := persistence.GetActor(ctx, actorRef)
@@ -3136,8 +3136,8 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 }
 
 // mockVolume returns a volume served by the "mock" plugin.
-func mockVolume(name, storageID string) *ateapi.ExternalVolumeStatus {
-	return &ateapi.ExternalVolumeStatus{Name: name, StorageVolumeId: storageID, VolumeType: "mock"}
+func mockVolume(name, storageID string) *ateapi.ActorExternalVolumeStatus {
+	return &ateapi.ActorExternalVolumeStatus{Name: name, StorageVolumeId: storageID, VolumeType: "mock"}
 }
 
 // volumeTemplate returns a template that declares the volumes named in
@@ -3158,7 +3158,7 @@ func volumeTemplate(declared []string, mounted ...string) *ateapi.ActorTemplate 
 // seedVolumeAssignFixture stores one free gvisor worker on node and a
 // SUSPENDED actor holding volumes, and returns the stored actor plus a
 // started worker cache.
-func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence store.Interface, node string, volumes ...*ateapi.ExternalVolumeStatus) (*ateapi.Actor, *workercache.Cache) {
+func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence store.Interface, node string, volumes ...*ateapi.ActorExternalVolumeStatus) (*ateapi.Actor, *workercache.Cache) {
 	t.Helper()
 	if _, err := persistence.CreateWorker(ctx, &ateapi.Worker{
 		Metadata:        &ateapi.ResourceMetadata{Name: testWorkerUID("pod-1")},
@@ -3177,7 +3177,7 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 	}
 	storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED, ExternalVolumes: &ateapi.ExternalVolumes{Volumes: volumes}},
+		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED, ExternalVolumes: &ateapi.ActorExternalVolumes{Volumes: volumes}},
 	})
 	actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
@@ -3214,7 +3214,7 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 	tests := []struct {
 		name string
 		// last is the second mounted volume, placed after every other volume.
-		last *ateapi.ExternalVolumeStatus
+		last *ateapi.ActorExternalVolumeStatus
 		// wantErr is a substring of the expected FailedPrecondition; empty
 		// means the attach succeeds.
 		wantErr string

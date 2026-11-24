@@ -198,7 +198,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
-	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes().GetVolumes(), func(vol *ateapi.ExternalVolumeStatus) bool {
+	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes().GetVolumes(), func(vol *ateapi.ActorExternalVolumeStatus) bool {
 		return vol.GetStorageVolumeId() == ""
 	})
 	if !pending {
@@ -710,7 +710,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 
 // checkVolumesAttachable returns FailedPrecondition unless every volume has a
 // storage volume ID.
-func checkVolumesAttachable(volumes []*ateapi.ExternalVolumeStatus) error {
+func checkVolumesAttachable(volumes []*ateapi.ActorExternalVolumeStatus) error {
 	for _, vol := range volumes {
 		if vol.GetStorageVolumeId() == "" {
 			return apierror.FailedPrecondition("volume %q has no storage volume ID to attach", vol.GetName())
