@@ -40,11 +40,10 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 		name         string
 		uid          string
 		families     actornet.IPFamilies
-		network      string
 		destinations []string
 	}{
-		{"IPv4", "66666666-6666-6666-6666-666666666664", actornet.IPv4, "tcp4", []string{"93.184.216.34:443", "93.184.216.34:8080", "93.184.216.34:9999"}},
-		{"IPv6", "66666666-6666-6666-6666-666666666666", actornet.IPv6, "tcp6", []string{"[2001:db8::1]:443", "[2001:db8::1]:8080", "[2001:db8::1]:9999"}},
+		{"IPv4", "66666666-6666-6666-6666-666666666664", actornet.IPv4, []string{"93.184.216.34:443", "93.184.216.34:8080", "93.184.216.34:9999"}},
+		{"dual stack", "66666666-6666-6666-6666-666666666666", actornet.IPv4 | actornet.IPv6, []string{"93.184.216.34:443", "[2001:db8::1]:8080", "93.184.216.34:9999"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
@@ -55,7 +54,7 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 			}
 			t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
-			listeners, err := netns.Listen(ctx, n.GatewayNetNS, tc.network, []uint16{egressPort})
+			listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
 			if err != nil {
 				t.Fatalf("netns.Listen: %v", err)
 			}
@@ -82,7 +81,7 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 
 			for _, want := range tc.destinations {
 				if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
-					c, err := net.Dial(tc.network, want)
+					c, err := net.Dial("tcp", want)
 					if err != nil {
 						return err
 					}
@@ -124,7 +123,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	}
 	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
-	listeners, err := netns.Listen(ctx, n.GatewayNetNS, "tcp4", []uint16{egressPort})
+	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
 	if err != nil {
 		t.Fatalf("netns.Listen: %v", err)
 	}

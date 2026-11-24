@@ -41,7 +41,7 @@ func TestClosingSandboxDNSStopsServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := relay.Serve(context.Background(), ns, nil, "127.0.0.1")
+	srv, err := relay.Serve(context.Background(), ns, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

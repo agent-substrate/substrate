@@ -82,17 +82,17 @@ func TestInit(t *testing.T) {
 	}
 }
 
-var pascalCase = regexp.MustCompile(`^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*$`)
+var upperCamelCase = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*[a-z0-9]$`)
 
-func TestRealGatesArePascalCase(t *testing.T) {
+func TestRealGatesAreUpperCamelCase(t *testing.T) {
 	// Sanity-check the pattern itself.
-	for _, s := range []string{"ExternalVolumes", "Foo", "FooV2", "FooBar2Baz"} {
-		if !pascalCase.MatchString(s) {
+	for _, s := range []string{"ExternalVolumes", "ActorIPv6", "Foo", "FooV2", "FooBar2Baz"} {
+		if !upperCamelCase.MatchString(s) {
 			t.Errorf("pattern rejected valid name %q", s)
 		}
 	}
 	for _, s := range []string{"", "externalVolumes", "External_Volumes", "External-Volumes", "EXTERNAL", All, "F", "Foo Bar"} {
-		if pascalCase.MatchString(s) {
+		if upperCamelCase.MatchString(s) {
 			t.Errorf("pattern accepted invalid name %q", s)
 		}
 	}
@@ -101,8 +101,8 @@ func TestRealGatesArePascalCase(t *testing.T) {
 		t.Fatal("no real gates defined")
 	}
 	for _, g := range realKnownGates {
-		if !pascalCase.MatchString(string(g)) {
-			t.Errorf("gate %q is not PascalCase", g)
+		if !upperCamelCase.MatchString(string(g)) {
+			t.Errorf("gate %q is not UpperCamelCase", g)
 		}
 	}
 }

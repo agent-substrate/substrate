@@ -78,7 +78,7 @@ type actor struct {
 // Start starts atunnel from cfg, as a worker's main does, and hosts actors
 // actors whose egress tunnels to gatewayAddress.
 func Start(ctx context.Context, cfg atunnel.Config, actors int, gatewayAddress string) (*Host, error) {
-	t, err := atunnel.Start(ctx, cfg, actornet.IPv4.ActorHTTPUpstream(), noop.Meter{})
+	t, err := atunnel.Start(ctx, cfg, actornet.ActorHTTPUpstream, noop.Meter{})
 	if err != nil {
 		return nil, err
 	}

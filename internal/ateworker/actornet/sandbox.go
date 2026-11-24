@@ -61,6 +61,7 @@ func (n *SandboxNetwork) holdsNetNS() bool { return n.RuntimeNetNS > 0 }
 // SandboxNetworkConfig describes one actor's private networking.
 type SandboxNetworkConfig struct {
 	ActorUID string
+	// Families selects IPv4 or dual-stack networking. Zero defaults to IPv4.
 	Families IPFamilies
 
 	// Veth separates gVisor's interfaces from the kernel-owned gateway.
@@ -92,6 +93,9 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 	}
 	if cfg.Families&^(IPv4|IPv6) != 0 {
 		return nil, fmt.Errorf("actornet: invalid IP families %d", cfg.Families)
+	}
+	if !cfg.Families.Has(IPv4) {
+		return nil, fmt.Errorf("actornet: IPv4 actor networking is required")
 	}
 
 	actorNSName := nodepath.ActorNetNSName(actorUID)
@@ -224,10 +228,8 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 		if err != nil {
 			return err
 		}
-		if cfg.Families.Has(IPv4) {
-			if err := netlink.AddrReplace(atSide, HostVethAddr); err != nil {
-				return fmt.Errorf("while assigning the atunnel-side IPv4 address: %w", err)
-			}
+		if err := netlink.AddrReplace(atSide, HostVethAddr); err != nil {
+			return fmt.Errorf("while assigning the atunnel-side IPv4 address: %w", err)
 		}
 		if cfg.Families.Has(IPv6) {
 			if err := netlink.AddrReplace(atSide, HostVethIPv6Addr); err != nil {
@@ -248,10 +250,8 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 		if err != nil {
 			return err
 		}
-		if cfg.Families.Has(IPv4) {
-			if err := netlink.AddrReplace(eth0, ActorVethAddr); err != nil {
-				return fmt.Errorf("while assigning the actor IPv4 address: %w", err)
-			}
+		if err := netlink.AddrReplace(eth0, ActorVethAddr); err != nil {
+			return fmt.Errorf("while assigning the actor IPv4 address: %w", err)
 		}
 		if cfg.Families.Has(IPv6) {
 			if err := netlink.AddrReplace(eth0, ActorVethIPv6Addr); err != nil {
@@ -261,10 +261,8 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 		if err := netlink.LinkSetUp(eth0); err != nil {
 			return err
 		}
-		if cfg.Families.Has(IPv4) {
-			if err := netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethGwIP}); err != nil {
-				return err
-			}
+		if err := netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethGwIP}); err != nil {
+			return err
 		}
 		if cfg.Families.Has(IPv6) {
 			if err := netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethIPv6GwIP}); err != nil {
@@ -433,23 +431,10 @@ type egressServer interface {
 
 // ServeSandboxEgress serves redirected TCP in the gateway namespace.
 // Closing the returned listeners stops accepting new connections.
-func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns netns.Handle, ports []uint16, families IPFamilies) ([]io.Closer, []func(), error) {
-	var listeners []net.Listener
-	for _, family := range []struct {
-		flag    IPFamilies
-		network string
-	}{{IPv4, "tcp4"}, {IPv6, "tcp6"}} {
-		if !families.Has(family.flag) {
-			continue
-		}
-		opened, err := netns.Listen(ctx, ns, family.network, ports)
-		if err != nil {
-			for _, listener := range listeners {
-				_ = listener.Close()
-			}
-			return nil, nil, fmt.Errorf("while opening actor egress listeners: %w", err)
-		}
-		listeners = append(listeners, opened...)
+func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns netns.Handle, ports []uint16) ([]io.Closer, []func(), error) {
+	listeners, err := netns.Listen(ctx, ns, ports)
+	if err != nil {
+		return nil, nil, fmt.Errorf("while opening actor egress listeners: %w", err)
 	}
 	// Bound before anything is served, so a connection accepted here cannot
 	// pick up a later activation's credentials.
@@ -491,9 +476,6 @@ type SandboxSession struct {
 // gateway namespace. A nil server leaves that unserved, which fails closed.
 // DNS queries are checked against the policy cfg.DNSPolicy supplies.
 func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, resolver *dns.Relay) (_ *SandboxSession, retErr error) {
-	if cfg.Families == 0 {
-		cfg.Families = IPv4
-	}
 	network, err := SetupSandboxNetwork(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -506,7 +488,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	if resolver != nil {
-		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy, cfg.Families.GatewayIP())
+		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy)
 		if err != nil {
 			return nil, err
 		}
@@ -515,7 +497,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	// Egress last: its binding is released by the serve goroutine, so nothing
 	// may fail between binding and starting it.
 	if egress != nil {
-		closers, serveEgress, err := serveSandboxEgress(ctx, egress, cfg.ActorUID, network.GatewayNetNS, []uint16{cfg.EgressPort}, cfg.Families)
+		closers, serveEgress, err := serveSandboxEgress(ctx, egress, cfg.ActorUID, network.GatewayNetNS, []uint16{cfg.EgressPort})
 		if err != nil {
 			return nil, err
 		}

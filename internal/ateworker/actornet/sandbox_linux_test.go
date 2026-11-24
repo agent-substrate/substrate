@@ -114,7 +114,7 @@ func TestSetupSandboxNetwork(t *testing.T) {
 		// The actor's app, bound where a real one binds, inside its namespace.
 		var lis net.Listener
 		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
-			l, err := net.Listen("tcp", net.JoinHostPort(ActorVethIPv4, "80"))
+			l, err := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
 			lis = l
 			return err
 		}); err != nil {
@@ -131,7 +131,7 @@ func TestSetupSandboxNetwork(t *testing.T) {
 	// Reaching each actor is a matter of which namespace the dial is made from.
 	for uid, a := range actors {
 		client := &http.Client{Transport: &http.Transport{DialContext: netns.Dialer(a.net.RuntimeNetNS)}, Timeout: 5 * time.Second}
-		resp, err := client.Get((&url.URL{Scheme: "http", Host: net.JoinHostPort(ActorVethIPv4, "80")}).String())
+		resp, err := client.Get((&url.URL{Scheme: "http", Host: net.JoinHostPort(ActorVethIP, "80")}).String())
 		if err != nil {
 			t.Fatalf("reaching actor %s: %v", uid, err)
 		}
@@ -144,8 +144,17 @@ func TestSetupSandboxNetwork(t *testing.T) {
 
 	// Sandbox addresses must not be reachable from the worker namespace.
 	direct := &http.Client{Timeout: 2 * time.Second}
-	if _, err := direct.Get("http://" + net.JoinHostPort(ActorVethIPv4, "80")); err == nil {
+	if _, err := direct.Get("http://" + net.JoinHostPort(ActorVethIP, "80")); err == nil {
 		t.Error("the worker namespace reached an actor directly; addresses are not isolated")
+	}
+}
+
+func TestSetupSandboxNetworkRejectsIPv6Only(t *testing.T) {
+	_, err := SetupSandboxNetwork(context.Background(), SandboxNetworkConfig{
+		ActorUID: "ipv6-only", EgressPort: testEgressPort, Families: IPv6,
+	})
+	if err == nil || !strings.Contains(err.Error(), "IPv4 actor networking is required") {
+		t.Fatalf("SetupSandboxNetwork() error = %v, want IPv4 requirement", err)
 	}
 }
 
@@ -160,7 +169,6 @@ func TestSetupSandboxNetworkUsesSelectedFamilies(t *testing.T) {
 		want6    bool
 	}{
 		{"IPv4", "14141414-1414-1414-1414-141414141414", IPv4, true, false},
-		{"IPv6", "16161616-1616-1616-1616-161616161616", IPv6, false, true},
 		{"dual stack", "46464646-4646-4646-4646-464646464646", IPv4 | IPv6, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,7 +192,7 @@ func TestSetupSandboxNetworkUsesSelectedFamilies(t *testing.T) {
 				got4, got6 := false, false
 				for _, addr := range addrs {
 					if addr.IP.To4() != nil {
-						if addr.IP.String() == ActorVethIPv4 {
+						if addr.IP.String() == ActorVethIP {
 							got4 = true
 						}
 						continue
@@ -269,7 +277,7 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 
 	var app net.Listener
 	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
-		l, e := net.Listen("tcp", net.JoinHostPort(ActorVethIPv4, "80"))
+		l, e := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
 		app = l
 		return e
 	}); err != nil {
@@ -288,7 +296,7 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 	}()
 
 	dial := netns.Dialer(n.GatewayNetNS)
-	c, err := dial(ctx, "tcp", net.JoinHostPort(ActorVethIPv4, "80"))
+	c, err := dial(ctx, "tcp", net.JoinHostPort(ActorVethIP, "80"))
 	if err != nil {
 		t.Fatalf("ingress dial: %v", err)
 	}
@@ -301,7 +309,7 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 	// An unopened port must be refused, not redirected to atunnel.
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if c2, e := dial(cctx, "tcp", net.JoinHostPort(ActorVethIPv4, "81")); e == nil {
+	if c2, e := dial(cctx, "tcp", net.JoinHostPort(ActorVethIP, "81")); e == nil {
 		c2.Close()
 		t.Error("a port with no listener was accepted, so ingress is not reaching the sandbox")
 	}
@@ -602,7 +610,7 @@ func TestEgressRules(t *testing.T) {
 					t.Fatalf("getting %s/%s rules: %v", tc.table.Name, chainName, err)
 				}
 				for _, rule := range rules {
-					fmt.Fprintf(&got, "%s/%s: %s\n", tc.table.Name, chainName, nftRuleShape(rule))
+					fmt.Fprintf(&got, "%s/%s: %s\n", tc.table.Name, chainName, nftRuleString(rule))
 				}
 			}
 
@@ -611,7 +619,9 @@ func TestEgressRules(t *testing.T) {
 	}
 }
 
-func nftRuleShape(rule *nftables.Rule) string {
+// nftRuleString returns a stable test-only description of nftables expressions,
+// such as "payload network 16:4 -> r1; cmp r1 == a9fe1100".
+func nftRuleString(rule *nftables.Rule) string {
 	parts := make([]string, 0, len(rule.Exprs))
 	for _, expression := range rule.Exprs {
 		switch e := expression.(type) {

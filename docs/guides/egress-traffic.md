@@ -15,17 +15,23 @@ This document specifies supported egress traffic and the contract between
 Substrate and its egress policy enforcement point (PEP).
 
 > [!NOTE]
-> Actor IPv6 networking is a preview feature. Enable it with
-> `ATE_PREVIEW=ActorIpv6Networking` when installing Substrate. Without the
-> gate, actors use IPv4 and workers on IPv6-only pods fail to start.
+> Substrate supports IPv4-only, IPv6-only, and dual-stack Kubernetes clusters.
+> The cluster family does not determine the private actor network family.
 
-With the preview gate enabled, each actor gets the IPv4 and IPv6 families
-Kubernetes assigned to its worker pod. Before traffic reaches the PEP,
-ateworker rejects packets destined for the
+Every actor gets the private IPv4 network `169.254.17.0/30`, including actors on
+IPv6-only clusters. Actor networks are either IPv4-only or dual-stack; they are
+never IPv6-only. Actor IPv6 networking is a preview feature. With
+`ATE_PREVIEW=ActorIPv6`, an actor whose worker Pod has an IPv6 address also gets
+`fd00:169:254::/126`. Actor ingress, DNS, and wakeup probes use the IPv4 network.
+Applications must listen on IPv4 or on a dual-stack socket. IPv6-only listeners,
+such as Go's `tcp6`, are not supported.
+
+Before traffic reaches the PEP, ateworker rejects packets destined for the
 IPv4 link-local range `169.254.0.0/16` or the IPv6 link-local range `fe80::/10`.
 The internal actor networks `169.254.17.0/30` and `fd00:169:254::/126` are exempt
-because they carry traffic for the actor gateway, DNS relay, ingress, and wakeup
-probes. Localhost traffic remains inside the actor sandbox.
+because they carry traffic to the actor gateway. The IPv4 network also carries
+DNS, ingress, and wakeup probes. Localhost traffic remains inside the actor
+sandbox.
 
 Actor TCP egress (except DNS to the sandbox's gateway) is redirected to atunnel,
 which opens a CONNECT tunnel to the egress gateway. Egress gateway applies policy.

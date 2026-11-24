@@ -237,12 +237,12 @@ func do(ctx context.Context) error {
 	}
 
 	workerPodIPs := register.ParsePodIPs(*podIPs)
-	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6Networking)
+	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6)
 	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs, ipv6ActorNetworking)
 	if err != nil {
 		return err
 	}
-	tunnel, err := atunnel.Start(ctx, *tunnelConfig, families.ActorHTTPUpstream(), mp.Meter(serviceName))
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream, mp.Meter(serviceName))
 	if err != nil {
 		return err
 	}
@@ -302,7 +302,7 @@ func do(ctx context.Context) error {
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
 	var runtimeAttributes sandboxruntimes.Attributes
-	if ipv6ActorNetworking {
+	if families.Has(actornet.IPv6) {
 		runtimeAttributes = sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: families.String()}
 	}
 	reportConfig := register.ReportConfig{

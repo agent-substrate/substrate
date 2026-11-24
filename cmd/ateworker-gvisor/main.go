@@ -51,7 +51,6 @@ import (
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/bootid"
-	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -59,7 +58,6 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/internal/sandboxruntimes"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -265,13 +263,13 @@ func do(ctx context.Context) error {
 	}
 
 	workerPodIPs := register.ParsePodIPs(*podIPs)
-	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6Networking)
+	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6)
 	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs, ipv6ActorNetworking)
 	if err != nil {
 		return err
 	}
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := atunnel.Start(ctx, *tunnelConfig, families.ActorHTTPUpstream(), mp.Meter(serviceName))
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream, mp.Meter(serviceName))
 	if err != nil {
 		return err
 	}
@@ -326,10 +324,6 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
-	var runtimeAttributes sandboxruntimes.Attributes
-	if ipv6ActorNetworking {
-		runtimeAttributes = sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: families.String()}
-	}
 	reportConfig := register.ReportConfig{
 		SocketPath:           nodepath.WorkerSupportSocket,
 		CredentialBundlePath: tunnelConfig.CredentialBundle,
@@ -338,7 +332,6 @@ func do(ctx context.Context) error {
 		Actors:               *maxActors,
 		PodIPs:               workerPodIPs,
 		MemoryReservedBytes:  memoryReservedBytes,
-		RuntimeAttributes:    runtimeAttributes,
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
@@ -779,7 +772,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName(), s.families); err != nil {
+		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		containersToDelete = append(containersToDelete, ac.GetName())
@@ -792,7 +785,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), s.families.ActorVethIP(), wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
@@ -1262,7 +1255,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		err = setupAppRootfs(req.GetActorDirs(), ac.GetName(), s.families)
+		err = setupAppRootfs(req.GetActorDirs(), ac.GetName())
 		timing.appRootfs += lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
@@ -1290,7 +1283,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, s.families.ActorVethIP(), wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
+	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
 	timing.wakeupProbe = lap(&tLast)
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
