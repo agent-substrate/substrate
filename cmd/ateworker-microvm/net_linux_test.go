@@ -129,6 +129,16 @@ func TestSetupActorTap(t *testing.T) {
 				t.Errorf("tap addresses = %v, want gateway %s", addrs, want)
 			}
 		}
+		neighbors, err := netlink.NeighList(link.Attrs().Index, netlink.FAMILY_V6)
+		if err != nil {
+			return err
+		}
+		for _, neighbor := range neighbors {
+			if neighbor.IP.Equal(actornet.ActorVethIPv6Addr.IP) && neighbor.HardwareAddr.String() == actorGuestMAC && neighbor.State == netlink.NUD_PERMANENT {
+				return nil
+			}
+		}
+		t.Errorf("tap IPv6 neighbors = %v, want %s at %s permanent", neighbors, actornet.ActorVethIPv6Addr.IP, actorGuestMAC)
 		return nil
 	}); err != nil {
 		t.Fatalf("inspecting the tap: %v", err)

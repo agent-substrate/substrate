@@ -47,7 +47,10 @@ const (
 	actorTapMTU = 1500
 )
 
-var gatewayHWAddr = actornet.MustParseMAC(gatewayMAC)
+var (
+	gatewayHWAddr    = actornet.MustParseMAC(gatewayMAC)
+	actorGuestHWAddr = actornet.MustParseMAC(actorGuestMAC)
+)
 
 // setupActorTap creates the guest's tap with a fixed gateway address and MAC.
 // Returns the FDs cloud-hypervisor adopts on boot or restore.
@@ -90,6 +93,17 @@ func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, qu
 		}
 		if err := netlink.LinkSetUp(link); err != nil {
 			return fmt.Errorf("bringing up tap %q: %w", name, err)
+		}
+		if families.Has(actornet.IPv6) {
+			if err := netlink.NeighSet(&netlink.Neigh{
+				LinkIndex:    link.Attrs().Index,
+				Family:       netlink.FAMILY_V6,
+				State:        netlink.NUD_PERMANENT,
+				IP:           actornet.ActorVethIPv6Addr.IP,
+				HardwareAddr: actorGuestHWAddr,
+			}); err != nil {
+				return fmt.Errorf("setting the IPv6 guest neighbor on tap %q: %w", name, err)
+			}
 		}
 		return nil
 	})
