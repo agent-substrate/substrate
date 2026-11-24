@@ -155,9 +155,9 @@ func isUpgrade(md *extproc.RequestMetadata) bool {
 }
 
 // isWebSocketHandshake reports whether md opens a WebSocket: a GET whose
-// Upgrade is exactly "websocket" and whose Connection lists "upgrade". Envoy
-// compares these in ASCII, so this does too. A looser match would allow a
-// request here that Envoy forwards as some other upgrade.
+// Upgrade is the single token websocket and whose Connection lists upgrade.
+// Envoy compares these in ASCII, so this does too. A looser match would allow
+// a request here that Envoy forwards as some other upgrade.
 func isWebSocketHandshake(md *extproc.RequestMetadata) bool {
 	upgrade := md.Header("upgrade")
 	return md.Method == http.MethodGet &&

@@ -1526,7 +1526,7 @@ func (x *EgressRule) GetTlsPassthrough() *TlsPassthroughRule {
 // authority (Host or :authority) and port. The gateway resolves the name and
 // dials it.
 //
-// The rule also matches to WebSocket (ws://).
+// The rule also matches WebSocket (ws://) if the gateway supports it.
 type HttpRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Hostname patterns: a DNS name, or a DNS name with "*" as its leftmost
@@ -1629,7 +1629,7 @@ func (x *HttpRule) GetEffects() *HttpRuleEffects {
 // Interception is for HTTP. A connection that sends no SNI does not match,
 // and a non-HTTP protocol inside an intercepted connection fails.
 //
-// The rule also matches to WebSocket over TLS (wss://).
+// The rule also matches WebSocket over TLS (wss://) if the gateway supports it.
 type HttpsRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Server names matched against the SNI, in the pattern syntax of
