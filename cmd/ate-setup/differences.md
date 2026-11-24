@@ -27,7 +27,7 @@ These were treated as contracts and reproduced exactly:
   kind × router that `render_ate_system_manifests` computed with
   nested `if`s, including the plain GKE install rendering the `base`
   kustomization rather than the raw directory, which would re-apply the
-  podcertificate-controller and undo its size10 flags and worker count.
+  podcertificate-controller and undo its worker count.
 - **Timeouts.** 60s namespace, 60s rollout (`--rollout-timeout` /
   `ATE_INSTALL_ROLLOUT_TIMEOUT`, as in the scripts), 120s for the
   podcertificate-controller and CSI waits the scripts fixed there, 300s for the
@@ -185,16 +185,14 @@ model, so NotFound is ignored — and so is a kind that no longer resolves, sinc
 teardown after the CRDs are gone must not fail. Beyond that, deletes are
 strict.
 
-**Cluster profiles are new.** `--cluster-size` and `--cordon-system-infra-components`
-postdate the shell installer. `size10`
-renders the `podcert-size10` overlay and resizes the bundled PostgreSQL from
-`postgres-size10/postgres-config-patch.yaml`;
-`--cordon-system-infra-components` composes the
-`cordon-system-infra-components` component over every system infra apply
-path. The size10 PostgreSQL changes are made to the decoded objects before the
-one server-side apply, not patched on afterwards: one rollout, the rollout wait
-sees the resized pod, and there is no second field manager for a later apply to
-fight with.
+**Cluster profiles are new.** `--cluster-size` and
+`--cordon-system-infra-components` postdate the shell installer. Every control
+plane apply path composes the `sizing-default` component, then `sizing-large`
+under `size10`, and the `cordon-system-infra-components` component under
+`--cordon-system-infra-components`. The changes are made before the one
+server-side apply, not patched on afterwards: one rollout, the rollout wait
+sees the resized pod, and there is no second field manager for a later apply
+to fight with.
 
 **Timing lines are new.** `ate-setup` prints `(kubectl apply took 1.234s)`
 after each apply, delete, rollout wait, trust bundle wait, `ko` invocation, and
@@ -301,5 +299,5 @@ rendering, overlay selection, config resolution, the authentication config, the
 apiserver environment ConfigMap and Secret, Cloud SQL resolution, the OTLP
 endpoint override, delegated script arguments, manifest deletion, per-demo
 rendering, image reference rewriting, kustomize composition, the control plane
-pinning on every apply path, and the size10 PostgreSQL resize against the real
+pinning on every apply path, and the default and size10 sizing against the real
 manifests.

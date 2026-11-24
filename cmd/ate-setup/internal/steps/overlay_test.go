@@ -29,11 +29,13 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	k8stesting "k8s.io/client-go/testing"
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 	"sigs.k8s.io/yaml"
 
@@ -424,87 +426,143 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, a
 	return pinned, all
 }
 
+// renderPath is a manifest a deploy command renders through Env.render.
+type renderPath struct {
+	name string
+	cfg  config.Config
+	path func(e *Env) string
+	// pinned are the workloads --cordon-system-infra-components pins.
+	pinned []string
+}
+
+// renderPaths lists every manifest the deploy commands render through
+// Env.render, so tests can check that the Components reach each one: the
+// system bundles, the lone redeploy files, podcert, postgres, the router and
+// egress variants, the bundled credential provider, and ate-otel-config.
+func renderPaths() []renderPath {
+	return []renderPath{
+		{
+			name:   "base bundle",
+			cfg:    config.Config{Router: config.RouterEnvoy},
+			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			pinned: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name:   "kind bundle",
+			cfg:    config.Config{Router: config.RouterEnvoy, Kind: true},
+			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			pinned: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name:   "agentgateway bundle",
+			cfg:    config.Config{Router: config.RouterAgentgateway},
+			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			pinned: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name:   "api server file",
+			path:   func(e *Env) string { return e.Cfg.Manifest("ate-api-server.yaml") },
+			pinned: []string{"ate-api-server"},
+		},
+		{
+			name:   "kind api server overlay",
+			cfg:    config.Config{Kind: true},
+			path:   func(e *Env) string { return e.apiServerManifestPath() },
+			pinned: []string{"ate-api-server"},
+		},
+		{
+			name:   "idp server file",
+			path:   func(e *Env) string { return e.idpServerManifestPath() },
+			pinned: []string{"ate-idp-server"},
+		},
+		{
+			name:   "podcert file",
+			path:   func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
+			pinned: []string{"podcertificate-controller"},
+		},
+		{
+			name:   "podcert file under size10",
+			cfg:    config.Config{ClusterSize: config.ClusterSizeSize10},
+			path:   func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
+			pinned: []string{"podcertificate-controller"},
+		},
+		{
+			name:   "postgres file",
+			path:   func(e *Env) string { return e.postgresManifestPath() },
+			pinned: []string{"postgres"},
+		},
+		{
+			name:   "egress file",
+			path:   func(e *Env) string { return e.atenetEgressManifestPath() },
+			pinned: []string{"atenet-egress"},
+		},
+		{
+			name:   "agentgateway egress overlay",
+			cfg:    config.Config{Router: config.RouterAgentgateway},
+			path:   func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-egress") },
+			pinned: []string{"atenet-egress"},
+		},
+		{
+			name:   "credential provider file",
+			path:   func(e *Env) string { return e.k8sCredentialProviderPath(k8sCredentialProviderManifest) },
+			pinned: []string{k8sCredentialProviderDeployment},
+		},
+		{
+			name:   "kind agentgateway bundle",
+			cfg:    config.Config{Router: config.RouterAgentgateway, Kind: true},
+			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			pinned: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
+		},
+		{
+			name:   "controller file",
+			path:   func(e *Env) string { return e.Cfg.Manifest("ate-controller.yaml") },
+			pinned: []string{"ate-controller"},
+		},
+		{
+			name: "atelet file",
+			path: func(e *Env) string { return e.ateletManifestPath() },
+		},
+		{
+			name: "kind atelet overlay",
+			cfg:  config.Config{Kind: true},
+			path: func(e *Env) string { return e.ateletManifestPath() },
+		},
+		{
+			name:   "router file",
+			path:   func(e *Env) string { return e.Cfg.Manifest("atenet-router.yaml") },
+			pinned: []string{"atenet-router"},
+		},
+		{
+			name:   "agentgateway router overlay",
+			cfg:    config.Config{Router: config.RouterAgentgateway},
+			path:   func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-router") },
+			pinned: []string{"atenet-router"},
+		},
+		{
+			name:   "kind postgres overlay",
+			cfg:    config.Config{Kind: true},
+			path:   func(e *Env) string { return e.postgresManifestPath() },
+			pinned: []string{"postgres"},
+		},
+		{
+			name: "otel config",
+			path: func(e *Env) string { return e.otelConfigPath() },
+		},
+		{
+			name: "kind otel config",
+			cfg:  config.Config{Kind: true},
+			path: func(e *Env) string { return e.otelConfigPath() },
+		},
+	}
+}
+
 // Under --cordon-system-infra-components every system infra apply path has
 // to carry the pinning, since each workload reaches the cluster through a
-// different one: the system bundle, the lone redeploy files, the podcert
-// overlay, the postgres file, the egress variants, and the bundled credential
-// provider. postgres gets a pool of its own; every other system infra
+// different one. postgres gets a pool of its own; every other system infra
 // workload shares one.
 func TestRenderCordonSystemInfraComponents(t *testing.T) {
 	root := repoRoot(t)
-	for _, tc := range []struct {
-		name string
-		cfg  config.Config
-		path func(e *Env) string
-		want []string
-	}{
-		{
-			name: "base bundle",
-			cfg:  config.Config{Router: config.RouterEnvoy},
-			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			want: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
-		},
-		{
-			name: "kind bundle",
-			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
-			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			want: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
-		},
-		{
-			name: "agentgateway bundle",
-			cfg:  config.Config{Router: config.RouterAgentgateway},
-			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
-			want: []string{"ate-api-server", "ate-idp-server", "ate-controller", "atenet-router"},
-		},
-		{
-			name: "api server file",
-			path: func(e *Env) string { return e.Cfg.Manifest("ate-api-server.yaml") },
-			want: []string{"ate-api-server"},
-		},
-		{
-			name: "kind api server overlay",
-			cfg:  config.Config{Kind: true},
-			path: func(e *Env) string { return e.apiServerManifestPath() },
-			want: []string{"ate-api-server"},
-		},
-		{
-			name: "idp server file",
-			path: func(e *Env) string { return e.idpServerManifestPath() },
-			want: []string{"ate-idp-server"},
-		},
-		{
-			name: "podcert file",
-			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
-			want: []string{"podcertificate-controller"},
-		},
-		{
-			name: "podcert size10 overlay",
-			cfg:  config.Config{ClusterSize: config.ClusterSizeSize10},
-			path: func(e *Env) string { return e.Cfg.Manifest("podcert-size10") },
-			want: []string{"podcertificate-controller"},
-		},
-		{
-			name: "postgres file",
-			path: func(e *Env) string { return e.postgresManifestPath() },
-			want: []string{"postgres"},
-		},
-		{
-			name: "egress file",
-			path: func(e *Env) string { return e.atenetEgressManifestPath() },
-			want: []string{"atenet-egress"},
-		},
-		{
-			name: "agentgateway egress overlay",
-			cfg:  config.Config{Router: config.RouterAgentgateway},
-			path: func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-egress") },
-			want: []string{"atenet-egress"},
-		},
-		{
-			name: "credential provider file",
-			path: func(e *Env) string { return e.k8sCredentialProviderPath(k8sCredentialProviderManifest) },
-			want: []string{k8sCredentialProviderDeployment},
-		},
-	} {
+	for _, tc := range renderPaths() {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
 			cfg.Root = root
@@ -516,7 +574,7 @@ func TestRenderCordonSystemInfraComponents(t *testing.T) {
 				t.Fatalf("render: %v", err)
 			}
 			pinned, all := pinnedWorkloads(t, rendered)
-			for _, name := range tc.want {
+			for _, name := range tc.pinned {
 				if !slices.Contains(all, name) {
 					t.Errorf("rendered manifest has no workload %s (found %v)", name, all)
 				}
@@ -531,7 +589,7 @@ func TestRenderCordonSystemInfraComponents(t *testing.T) {
 			// The DaemonSet-shaped and demo workloads stay off the pools; only
 			// the named system infra workloads are pinned.
 			for name := range pinned {
-				if !slices.Contains(tc.want, name) {
+				if !slices.Contains(tc.pinned, name) {
 					t.Errorf("workload %s is pinned but is not a system infra workload", name)
 				}
 			}
@@ -564,8 +622,8 @@ func TestRenderBytesCordonSystemInfraComponents(t *testing.T) {
 	}
 }
 
-// Without the flag, render is a plain read or build and adds nothing.
-func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
+// Without the flag, render pins nothing.
+func TestRenderWithoutCordonPinsNothing(t *testing.T) {
 	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
 	rendered, err := e.render(e.Cfg.Manifest("ate-api-server.yaml"))
 	if err != nil {
@@ -574,12 +632,152 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 	if pinned, _ := pinnedWorkloads(t, rendered); len(pinned) != 0 {
 		t.Errorf("render without --cordon-system-infra-components pinned %v", pinned)
 	}
-	raw, err := os.ReadFile(e.Cfg.Manifest("ate-api-server.yaml"))
-	if err != nil {
+}
+
+// writeComponent writes a kustomize Component that sets label
+// test.ate.dev/component to value on every resource, plus any extra
+// kustomization lines, and returns its directory.
+func writeComponent(t *testing.T, value, extra string) string {
+	t.Helper()
+	dir := t.TempDir()
+	kustomization := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+labels:
+  - pairs:
+      test.ate.dev/component: %q
+%s`, value, extra)
+	if err := os.WriteFile(dir+"/kustomization.yaml", []byte(kustomization), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if string(rendered) != string(raw) {
-		t.Error("render of a plain file without --cordon-system-infra-components is not the file's bytes")
+	return dir
+}
+
+// labeledWorkloads returns the value of label test.ate.dev/component on every
+// Deployment, StatefulSet and DaemonSet in a rendered manifest, by name. It
+// fails the test if the manifest carries a CRD.
+func labeledWorkloads(t *testing.T, manifest []byte) map[string]string {
+	t.Helper()
+	labels := map[string]string{}
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var obj metav1.PartialObjectMetadata
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		switch obj.Kind {
+		case "CustomResourceDefinition":
+			t.Errorf("render carries CRD %s", obj.Name)
+		case "Deployment", "StatefulSet", "DaemonSet":
+			labels[obj.Name] = obj.Labels["test.ate.dev/component"]
+		}
+	}
+	return labels
+}
+
+// --component directories apply after the built-in Components and in flag
+// order, so the last one wins a conflicting patch.
+func TestRenderUserComponentsOrder(t *testing.T) {
+	pool := `patches:
+  - target:
+      kind: Deployment
+      name: ate-api-server
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/nodeSelector/ate.dev~1workloadType
+        value: custom
+`
+	e := &Env{Cfg: &config.Config{
+		Root:                        repoRoot(t),
+		CordonSystemInfraComponents: true,
+		Components:                  []string{writeComponent(t, "first", ""), writeComponent(t, "second", pool)},
+	}}
+	rendered, err := e.render(e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if got := labeledWorkloads(t, rendered)["ate-api-server"]; got != "second" {
+		t.Errorf("ate-api-server has component label %q, want the last Component's %q", got, "second")
+	}
+	var d appsv1.Deployment
+	for _, doc := range strings.Split(string(rendered), "\n---\n") {
+		if strings.Contains(doc, "kind: Deployment") {
+			if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := d.Spec.Template.Spec.NodeSelector["ate.dev/workloadType"]; got != "custom" {
+		t.Errorf("ate-api-server pool = %q, want the --component patch's %q over --cordon-system-infra-components", got, "custom")
+	}
+}
+
+// A --component reaches every object on every render path, so a redeploy of
+// one workload does not revert what an earlier full install applied.
+func TestRenderUserComponentsEveryPath(t *testing.T) {
+	root := repoRoot(t)
+	component := writeComponent(t, "every", "")
+	for _, tc := range renderPaths() {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			cfg.Components = []string{component}
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.render(tc.path(e))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			var objects int
+			for _, doc := range strings.Split(string(rendered), "\n---\n") {
+				var obj metav1.PartialObjectMetadata
+				if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+					t.Fatalf("rendered document is not valid YAML: %v", err)
+				}
+				if obj.Kind == "" {
+					continue
+				}
+				objects++
+				if obj.Kind == "CustomResourceDefinition" {
+					t.Errorf("render carries CRD %s", obj.Name)
+				}
+				if got := obj.Labels["test.ate.dev/component"]; got != "every" {
+					t.Errorf("%s/%s has component label %q, want %q", obj.Kind, obj.Name, got, "every")
+				}
+			}
+			if objects == 0 {
+				t.Error("render produced no objects")
+			}
+		})
+	}
+}
+
+// The single-component redeploys apply ate-otel-config on its own. It has to
+// carry the Components too, or each redeploy reverts what the full install
+// applied to it.
+func TestApplyOtelConfigAppliesComponents(t *testing.T) {
+	cs := fake.NewClientset()
+	cs.Fake.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "v1", APIResources: []metav1.APIResource{{Name: "configmaps", Kind: "ConfigMap", Namespaced: true}}},
+	}
+	dc := dynamicfake.NewSimpleDynamicClient(clientgoscheme.Scheme)
+	var applied []byte
+	dc.PrependReactor("patch", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		applied = action.(k8stesting.PatchAction).GetPatch()
+		return true, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}}, nil
+	})
+	e := &Env{
+		Cfg:  &config.Config{Root: repoRoot(t), Components: []string{writeComponent(t, "otel", "")}},
+		Kube: kube.NewFromClients(nil, cs, dc, cs.Discovery()),
+	}
+
+	if err := e.applyOtelConfig(t.Context()); err != nil {
+		t.Fatalf("applyOtelConfig: %v", err)
+	}
+	var obj metav1.PartialObjectMetadata
+	if err := yaml.Unmarshal(applied, &obj); err != nil {
+		t.Fatalf("applied ConfigMap is not valid: %v", err)
+	}
+	if got := obj.Labels["test.ate.dev/component"]; got != "otel" {
+		t.Errorf("applied %s has component label %q, want %q", obj.Name, got, "otel")
 	}
 }
 

@@ -209,12 +209,6 @@ spec:
           capabilities:
             drop:
             - ALL
-        # Same reservation as atelet and no limits: the plugin now does the
-        # zstd work atelet used to, and must not get less CPU for it.
-        resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
         env:
         # Object storage settings for snapshot transfers and sandbox assets.
         # Unset or "gcs" selects GCS with ambient credentials; "s3" with the
@@ -303,12 +297,6 @@ spec:
             - DAC_OVERRIDE
             - FOWNER
             - FSETID
-        # Keep per-node reservations small; omit limits to allow usage to grow
-        # with the number of hosted actors.
-        resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
         env:
         - name: NODE_NAME
           valueFrom:
