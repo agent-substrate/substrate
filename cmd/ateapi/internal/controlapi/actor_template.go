@@ -49,7 +49,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapi.Create
 	stored, err := s.impl.CreateActorTemplate(ctx, in)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("ActorTemplate %s already exists", templateRef)
+			return nil, apierror.AlreadyExists("ActorTemplate %s already exists", templateRef).WithCause(err)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			return nil, apierror.FailedPrecondition("%v", err)
@@ -87,7 +87,7 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapi.GetActorT
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
 	template, err := s.impl.GetActorTemplate(ctx, templateRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
+		return nil, apierror.NotFound("ActorTemplate %s not found", templateRef).WithCause(err)
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor template from DB: %w", err)
 	}

@@ -51,7 +51,7 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 			sc, err := scLister.Get(scName)
 			if err != nil {
 				if k8serrors.IsNotFound(err) {
-					return nil, apierror.FailedPrecondition("StorageClass %q not found", scName)
+					return nil, apierror.FailedPrecondition("StorageClass %q not found", scName).WithCause(err)
 				}
 				return nil, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 			}
@@ -106,7 +106,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		sc, err := scLister.Get(scName)
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				return resultVolumes, apierror.FailedPrecondition("StorageClass %q not found", scName)
+				return resultVolumes, apierror.FailedPrecondition("StorageClass %q not found", scName).WithCause(err)
 			}
 			return resultVolumes, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 		}

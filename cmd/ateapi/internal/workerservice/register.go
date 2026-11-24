@@ -179,7 +179,7 @@ func (s *Server) workerOnCallerNode(ctx context.Context, name string, caller *at
 	worker, err := s.store.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 		}
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
@@ -204,9 +204,9 @@ func (s *Server) workerOnCallerNode(ctx context.Context, name string, caller *at
 func workerWriteError(name, doing string, err error) error {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return apierror.NotFound("Worker %s not found", name)
+		return apierror.NotFound("Worker %s not found", name).WithCause(err)
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return apierror.Aborted("concurrent update conflict, please retry")
+		return apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 	default:
 		return fmt.Errorf("while %s for worker %s: %w", doing, name, err)
 	}

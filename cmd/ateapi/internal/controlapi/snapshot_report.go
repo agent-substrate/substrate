@@ -80,7 +80,7 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 		return nil
 	}); err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return apierror.Aborted("concurrent update conflict, please retry")
+			return apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return err
 	}
@@ -94,7 +94,7 @@ func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resource
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, err
 	}

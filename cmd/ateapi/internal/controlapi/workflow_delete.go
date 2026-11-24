@@ -268,13 +268,13 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while marking actor for deletion: %w", err)
 	}
@@ -383,18 +383,18 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapi.Actor
 	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID).WithCause(err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			// The release step cleared the Actor's worker assignment, and
 			// only a resume, which refuses a DELETING Actor, sets it again.
-			return nil, apierror.Internal("Actor %s names a worker after its release", actorRef)
+			return nil, apierror.Internal("Actor %s names a worker after its release", actorRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}

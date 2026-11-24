@@ -43,7 +43,7 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 	// Worker hosting nothing.
 	if _, err := s.impl.GetWorker(ctx, name); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 		}
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
@@ -85,7 +85,7 @@ func (s *RPCService) GetWorker(ctx context.Context, req *ateapi.GetWorkerRequest
 
 	worker, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting worker: %w", err)
@@ -137,7 +137,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapi.Worker)
 	created, err := s.store.CreateWorker(ctx, outWorker)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("Worker %s already exists", inWorker.GetMetadata().GetName())
+			return nil, apierror.AlreadyExists("Worker %s already exists", inWorker.GetMetadata().GetName()).WithCause(err)
 		}
 		return nil, fmt.Errorf("while creating worker: %w", err)
 	}
@@ -322,7 +322,7 @@ var errWorkerDraining = errors.New("worker is draining")
 func (s *RPCService) mutateNamedWorker(ctx context.Context, name string, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error) {
 	observed, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting worker %s: %w", name, err)
@@ -345,13 +345,13 @@ func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition
 	}
 	switch {
 	case errors.Is(err, errWorkerDraining):
-		return nil, apierror.FailedPrecondition("Worker %s is draining", name)
+		return nil, apierror.FailedPrecondition("Worker %s is draining", name).WithCause(err)
 	case errors.Is(err, store.ErrNotFound):
-		return nil, apierror.NotFound("Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name).WithCause(err)
 	case errors.Is(err, store.ErrUIDConflict):
-		return nil, apierror.Aborted("Worker %s is not the one the request describes", name)
+		return nil, apierror.Aborted("Worker %s is not the one the request describes", name).WithCause(err)
 	case errors.Is(err, store.ErrVersionConflict):
-		return nil, apierror.Aborted("concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 	case errors.Is(err, store.ErrPreconditionRequired):
 		return nil, apierror.InvalidArgument("while updating worker %s: %v", name, err)
 	}

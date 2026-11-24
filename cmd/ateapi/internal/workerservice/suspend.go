@@ -75,7 +75,7 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 	worker, err := s.store.GetWorker(ctx, workerName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Worker %s not found", workerName)
+			return apierror.NotFound("Worker %s not found", workerName).WithCause(err)
 		}
 		return fmt.Errorf("while fetching worker %s: %w", workerName, err)
 	}
@@ -92,7 +92,7 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Actor %s not found", actorRef)
+			return apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return fmt.Errorf("while fetching actor %s: %w", actorRef, err)
 	}

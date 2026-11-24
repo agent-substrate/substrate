@@ -120,7 +120,7 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, nil, fmt.Errorf("while fetching actor: %w", err)
 	}
@@ -161,7 +161,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, fmt.Errorf("while setting actor state to REVERTING: %w", err)
 	}

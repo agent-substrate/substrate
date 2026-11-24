@@ -41,7 +41,7 @@ func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef
 	actor, err := w.store.GetActor(leaseCtx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while loading actor %s: %w", actorRef, err)
 	}

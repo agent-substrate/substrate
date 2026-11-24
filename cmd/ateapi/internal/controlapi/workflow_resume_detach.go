@@ -62,7 +62,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	_, err = w.scheduler.Schedule(ctx, constraints)
 	switch {
 	case errors.Is(err, scheduling.ErrDoesNotFit):
-		err = apierror.FailedPrecondition("%w", errActorDoesNotFit)
+		err = apierror.FailedPrecondition("%w", errActorDoesNotFit).WithCause(err)
 	case errors.Is(err, scheduling.ErrNoCapacity):
 		err = assignErr
 	}
@@ -162,7 +162,7 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
 		}
 		return nil, fmt.Errorf("while recording the detach of Actor %s from node %q: %w", actorRef, node, err)
 	}
@@ -188,7 +188,7 @@ func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.A
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
+			return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef).WithCause(err)
 		}
 		return nil, fmt.Errorf("while releasing Actor %s from deleted node %q: %w", actorRef, node, err)
 	}
