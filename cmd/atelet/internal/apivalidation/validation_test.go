@@ -1473,7 +1473,7 @@ func TestValidateVolume(t *testing.T) {
 		}, {
 			name: "external: invalid volume_type: uppercase",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
-			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
+			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "").WithOrigin("format=ate-volume-type-name")},
 		}, {
 			name: "external: volume_context with one long value, as a CSI driver may return",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {

@@ -34,3 +34,11 @@ formats:
     # allow optional/required to cover "" for subfields
     pattern: (^$|^[ -<>-~]+$)
     message: may contain any printable ASCII character except '='
+
+  # Volume plugin or CSI driver names
+  - name: ate-volume-type-name
+    docs: This field must be a DNS subdomain, optionally prefixed with "substrate.io/"
+    # allow optional/required to cover "" for subfields
+    # TODO: this prefix is not a domain we own!
+    pattern: (^$|^(substrate\.io/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$)
+    message: must be a DNS subdomain, optionally prefixed with "substrate.io/"

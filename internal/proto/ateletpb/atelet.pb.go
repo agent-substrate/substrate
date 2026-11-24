@@ -2363,7 +2363,7 @@ type ExternalVolumeSource struct {
 	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// +k8s:optional
 	// +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
-	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
+	// +k8s:format=ate-volume-type-name
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the
 	// driver's own, so the map is only bounded, not validated.

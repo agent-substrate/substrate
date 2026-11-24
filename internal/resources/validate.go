@@ -40,7 +40,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -570,19 +569,6 @@ func ValidateStorageVolumeID(fldPath *field.Path, id string) field.ErrorList {
 		}
 	}
 	return nil
-}
-
-// ValidateVolumeType allows an optional "substrate.io/" prefix, followed by a
-// valid DNS-1123 subdomain.
-func ValidateVolumeType(fldPath *field.Path, volumeType string) field.ErrorList {
-	if volumeType == "" {
-		return nil
-	}
-	var errs field.ErrorList
-	for _, msg := range validation.IsDNS1123Subdomain(strings.TrimPrefix(volumeType, "substrate.io/")) {
-		errs = append(errs, field.Invalid(fldPath, volumeType, msg))
-	}
-	return errs
 }
 
 // csiMapMaxBytes bounds a map a CSI driver produced. The CSI spec caps

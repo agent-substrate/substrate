@@ -657,7 +657,7 @@ message ExternalVolumeSource {
 
   // +k8s:optional
   // +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
-  // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
+  // +k8s:format=ate-volume-type-name
   string volume_type = 2;
 
   // volume_context is the driver's provisioning metadata. Its entries are the

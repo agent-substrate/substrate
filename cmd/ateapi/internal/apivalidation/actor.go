@@ -131,10 +131,6 @@ func ValidateCustom_WorkerAssignment_WorkerSpiffeId(_ context.Context, _ operati
 	return validateSPIFFEID(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeStatus_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateVolumeType(fldPath, *value)
-}
-
 func ValidateCustom_ExternalVolumeStatus_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateStorageVolumeID(fldPath, *value)
 }

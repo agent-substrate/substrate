@@ -1125,7 +1125,7 @@ type ExternalVolumeStatus struct {
 	// +k8s:maxLength=253
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset # set-once, like name above
-	// +k8s:customValidation
+	// +k8s:format=ate-volume-type-name
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume
 	// provisioning, needed by the node plugin for mounting (e.g. attachment

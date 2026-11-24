@@ -532,16 +532,6 @@ func TestValidateStorageVolumeID(t *testing.T) {
 	})
 }
 
-func TestValidateVolumeType(t *testing.T) {
-	runStringRule(t, ValidateVolumeType, []stringRuleCase{
-		{"empty", "", false},
-		{"dns subdomain", "pd.csi.storage.gke.io", false},
-		{"substrate prefix", "substrate.io/gcs", false},
-		{"uppercase", "PD", true},
-		{"other prefix", "example.io/gcs", true},
-	})
-}
-
 func TestValidateCapabilities(t *testing.T) {
 	tests := []struct {
 		name     string

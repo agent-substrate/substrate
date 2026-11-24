@@ -522,7 +522,7 @@ message ExternalVolumeStatus {
   // +k8s:maxLength=253
   // +k8s:update=NoModify
   // +k8s:update=NoUnset # set-once, like name above
-  // +k8s:customValidation
+  // +k8s:format=ate-volume-type-name
   string volume_type = 3;
 
   // volume_context contains metadata returned by the CSI driver during volume
