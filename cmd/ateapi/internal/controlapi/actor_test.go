@@ -1063,3 +1063,42 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 		})
 	}
 }
+
+// TestMarkActorForDeletion checks that ServiceImpl validates the Actor a
+// mark-for-deletion writes, as it does for an update.
+func TestMarkActorForDeletion(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+	impl := newServiceImpl(persistence, nil)
+
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	ref := resources.ActorRefFromActor(actor)
+	precondition := store.PreconditionFrom(actor)
+
+	if _, err := impl.MarkActorForDeletion(ctx, ref, precondition, func(toUpdate *ateapi.Actor) error {
+		toUpdate.SourceTag = &ateapi.ObjectRef{Atespace: testAtespace, Name: "tag-a"}
+		return nil
+	}); apierror.Code(err) != codes.InvalidArgument {
+		t.Errorf("MarkActorForDeletion setting source_tag: error = %v, want code InvalidArgument", err)
+	}
+
+	marked, err := impl.MarkActorForDeletion(ctx, ref, precondition, func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarkActorForDeletion failed: %v", err)
+	}
+	if marked.GetMetadata().GetDeleteTime() == nil || marked.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("marked actor = %v, want delete_time set and state DELETING", marked)
+	}
+
+	if _, err := impl.MarkActorForDeletion(ctx, ref, store.PreconditionFrom(marked), nil); err != nil {
+		t.Errorf("MarkActorForDeletion with a nil mutate failed: %v", err)
+	}
+}

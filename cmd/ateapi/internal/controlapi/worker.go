@@ -180,11 +180,19 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapi.UpdateWorkerR
 }
 
 func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error) {
-	return s.store.UpdateWorker(ctx, name, precondition, func(toUpdate *ateapi.Worker) error {
+	return s.store.UpdateWorker(ctx, name, precondition, validatedWorkerMutation(ctx, mutate))
+}
+
+// validatedWorkerMutation wraps mutate so the Worker it writes is validated as
+// an update of the stored Worker.
+func validatedWorkerMutation(ctx context.Context, mutate func(*ateapi.Worker) error) func(*ateapi.Worker) error {
+	return func(toUpdate *ateapi.Worker) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
-		if err := mutate(toUpdate); err != nil {
-			return err
+		if mutate != nil {
+			if err := mutate(toUpdate); err != nil {
+				return err
+			}
 		}
 		newVal := toUpdate
 
@@ -203,7 +211,7 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 		}
 
 		return nil
-	})
+	}
 }
 
 // BindActorToWorker and UpdateActorAndRelease validate the Actor they write as
@@ -235,7 +243,7 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapi.DeleteWorkerR
 }
 
 func (s *ServiceImpl) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
-	return s.store.MarkWorkerForDeletion(ctx, name, precondition, mutate)
+	return s.store.MarkWorkerForDeletion(ctx, name, precondition, validatedWorkerMutation(ctx, mutate))
 }
 
 func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, precondition store.Precondition) (*ateapi.Worker, error) {

@@ -945,3 +945,35 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 		t.Errorf("a request carrying a ceiling set capacity to %v, want none", capacity)
 	}
 }
+
+// TestMarkWorkerForDeletion checks that ServiceImpl validates the Worker a
+// mark-for-deletion writes, as it does for an update.
+func TestMarkWorkerForDeletion(t *testing.T) {
+	ctx := context.Background()
+	_, persistence := newWorkerAPIService(t)
+	impl := newServiceImpl(persistence, nil)
+	worker := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	precondition := store.PreconditionFrom(worker)
+
+	if _, err := impl.MarkWorkerForDeletion(ctx, apiWorkerName, precondition, func(toUpdate *ateapi.Worker) error {
+		toUpdate.WorkerPod = "worker-pod-2"
+		return nil
+	}); apierror.Code(err) != codes.InvalidArgument {
+		t.Errorf("MarkWorkerForDeletion changing worker_pod: error = %v, want code InvalidArgument", err)
+	}
+
+	marked, err := impl.MarkWorkerForDeletion(ctx, apiWorkerName, precondition, func(toUpdate *ateapi.Worker) error {
+		toUpdate.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarkWorkerForDeletion failed: %v", err)
+	}
+	if marked.GetMetadata().GetDeleteTime() == nil || marked.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("marked worker = %v, want delete_time set and state DRAINING", marked)
+	}
+
+	if _, err := impl.MarkWorkerForDeletion(ctx, apiWorkerName, store.PreconditionFrom(marked), nil); err != nil {
+		t.Errorf("MarkWorkerForDeletion with a nil mutate failed: %v", err)
+	}
+}
