@@ -1062,13 +1062,24 @@ func (s *AteWorkerService) configureGuestNetwork(ctx context.Context, ac *kata.A
 			Device:      actornet.ActorVethName, Lladdr: gatewayMAC, State: unix.NUD_PERMANENT,
 		})
 	}
-	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
+	iface := &agentpb.Interface{
 		Device:      actornet.ActorVethName,
 		Name:        actornet.ActorVethName,
 		HwAddr:      actorGuestMAC,
 		Mtu:         mtu,
 		IPAddresses: addresses,
-	}); err != nil {
+	}
+	if s.families.Has(actornet.IPv6) {
+		// The point-to-point link uses permanent neighbors, so NOARP also avoids
+		// freezing a tentative IPv6 address into the golden snapshot during DAD.
+		iface.RawFlags = unix.IFF_NOARP
+		withoutAddresses := *iface
+		withoutAddresses.IPAddresses = nil
+		if err := ac.UpdateInterface(ctx, &withoutAddresses); err != nil {
+			return err
+		}
+	}
+	if err := ac.UpdateInterface(ctx, iface); err != nil {
 		return err
 	}
 	if err := ac.UpdateRoutes(ctx, routes); err != nil {

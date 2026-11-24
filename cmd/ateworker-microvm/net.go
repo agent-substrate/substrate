@@ -94,15 +94,16 @@ func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, qu
 		if err := netlink.LinkSetUp(link); err != nil {
 			return fmt.Errorf("bringing up tap %q: %w", name, err)
 		}
+		guestNeighbors := []*netlink.Neigh{{Family: netlink.FAMILY_V4, IP: actornet.ActorVethAddr.IP}}
 		if families.Has(actornet.IPv6) {
-			if err := netlink.NeighSet(&netlink.Neigh{
-				LinkIndex:    link.Attrs().Index,
-				Family:       netlink.FAMILY_V6,
-				State:        netlink.NUD_PERMANENT,
-				IP:           actornet.ActorVethIPv6Addr.IP,
-				HardwareAddr: actorGuestHWAddr,
-			}); err != nil {
-				return fmt.Errorf("setting the IPv6 guest neighbor on tap %q: %w", name, err)
+			guestNeighbors = append(guestNeighbors, &netlink.Neigh{Family: netlink.FAMILY_V6, IP: actornet.ActorVethIPv6Addr.IP})
+		}
+		for _, neighbor := range guestNeighbors {
+			neighbor.LinkIndex = link.Attrs().Index
+			neighbor.State = netlink.NUD_PERMANENT
+			neighbor.HardwareAddr = actorGuestHWAddr
+			if err := netlink.NeighSet(neighbor); err != nil {
+				return fmt.Errorf("setting guest neighbor %s on tap %q: %w", neighbor.IP, name, err)
 			}
 		}
 		return nil
