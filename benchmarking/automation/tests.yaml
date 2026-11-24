@@ -114,6 +114,11 @@
 # seconds, or the step falls short of its rate. A resumepaused iteration is a
 # resume plus a pause, so size it by the p99 of both together.
 #
+# `--density-step-duration <duration>` in `flags` makes `runner.py` run the
+# actor density search in `density_runner.py` (see "Density Limit Benchmark"
+# in docs/guides/benchmarking.md). `duration` bounds when the search may
+# start a new step, and the orchestrator sizes the Job timeout from it.
+#
 # An optional `controlPlane:` block shapes the control plane for a capacity
 # run; pre_test applies it after the deploy. Its `apiServer:` section, which
 # is required, sizes ate-api-server:
