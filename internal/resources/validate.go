@@ -130,9 +130,9 @@ func DeepEqual[T any](a, b T) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// MaxResourceNameLength is the longest resource name ValidateResourceName
+// maxResourceNameLength is the longest resource name ValidateResourceName
 // accepts.
-const MaxResourceNameLength = content.DNS1123LabelMaxLength
+const maxResourceNameLength = content.DNS1123LabelMaxLength
 
 // ValidateResourceName checks that a string conforms to Agent Substrate's
 // rules for a resource name, which is a subset of the rules for an RFC-1123
@@ -332,7 +332,7 @@ func ValidateSnapshotLocation(location string) error {
 func validateGCSPrefixLength(location string) error {
 	// The longest prefix under the location is an actor's whose atespace and
 	// UID are as long as a resource name can be.
-	longestName := strings.Repeat("a", MaxResourceNameLength)
+	longestName := strings.Repeat("a", maxResourceNameLength)
 	longest, err := ActorSnapshotOwner(longestName, longestName).Prefix(location)
 	if err != nil {
 		return err

@@ -374,6 +374,11 @@ func (s *changingSource) Token() (*oauth2.Token, error) {
 	return &tok, nil
 }
 
+// failingSource fails every fetch with err.
+type failingSource struct{ err error }
+
+func (s failingSource) Token() (*oauth2.Token, error) { return nil, s.err }
+
 func TestIssue_ExchangesOncePerSourceToken(t *testing.T) {
 	// The first intermediary has less than minServeLifetime left, so the mint
 	// after the refresh waits for the new exchange.
@@ -950,6 +955,7 @@ func TestIssue_Errors(t *testing.T) {
 		code codes.Code
 	}{
 		{"no expiry from STS or the source", &fakeSTS{t: t, expiresIn: -1}, staticSource(time.Time{}), testGrants, "no expiry", codes.Unknown},
+		{"source refused", &fakeSTS{t: t}, failingSource{status.Error(codes.PermissionDenied, "IAM refused")}, testGrants, "IAM refused", codes.Unknown},
 		{"STS refuses", &fakeSTS{t: t, status: 400, body: `{"error":"invalid_grant"}`}, staticSource(now.Add(time.Hour)), testGrants, "400", codes.Unknown},
 		{"STS answers without a token", &fakeSTS{t: t, body: `{}`}, staticSource(now.Add(time.Hour)), testGrants, "no access token", codes.Unknown},
 		{"STS answers without a session key", &fakeSTS{t: t, body: `{"access_token":"intermediary"}`}, staticSource(now.Add(time.Hour)), testGrants, "no session key", codes.Unknown},

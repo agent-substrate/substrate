@@ -88,7 +88,9 @@ type intermediary struct {
 func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error) {
 	src, err := i.source.Token()
 	if err != nil {
-		return nil, fmt.Errorf("while getting the source token: %w", err)
+		// Formatted with %v so an IAM error code or timeout does not reach the
+		// caller as a code of its own.
+		return nil, fmt.Errorf("while getting the source token: %v", err)
 	}
 	if in := i.stored(src); in != nil {
 		return in, nil
@@ -258,7 +260,7 @@ func (i *Issuer) exchangeIntermediary(ctx context.Context, src *oauth2.Token) (*
 }
 
 // encode serializes rules as the ClientSideAccessBoundary STS decrypts. A
-// condition is parsed, not type checked, as the Java factory does.
+// condition is parsed without type checking, as the Java factory does.
 func encode(env *cel.Env, rules []gcsboundary.Rule) ([]byte, error) {
 	var b pb.ClientSideAccessBoundary
 	for _, r := range rules {

@@ -116,8 +116,8 @@ func TestIsValidResourceName(t *testing.T) {
 		{"valid start number", "1actor", true},
 		{"invalid end hyphen", "actor-", false},
 		{"invalid special chars", "actor@1", false},
-		{"longest", strings.Repeat("a", MaxResourceNameLength), true},
-		{"invalid length", strings.Repeat("a", MaxResourceNameLength+1), false},
+		{"longest", strings.Repeat("a", maxResourceNameLength), true},
+		{"invalid length", strings.Repeat("a", maxResourceNameLength+1), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
