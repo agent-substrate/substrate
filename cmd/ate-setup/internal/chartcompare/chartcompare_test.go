@@ -75,6 +75,10 @@ func excluded(kind, namespace, name string) bool {
 	case kind == "IPAddress":
 		// The API server allocates the Service IPs at random.
 		return true
+	case kind == "Event":
+		// The API server records Events as it runs, so whether an install
+		// has any, and their names, vary between runs.
+		return true
 	case namespace == "otel-system", kind == "Namespace" && name == "otel-system":
 		return true
 	case namespace == "ate-system" && strings.HasPrefix(name, "rustfs"):
