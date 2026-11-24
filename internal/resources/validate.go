@@ -556,21 +556,6 @@ func ValidateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
 	return nil
 }
 
-// ValidateStorageVolumeID rejects control characters (U+0000-U+0008, U+000B,
-// U+000C, U+000E-U+001F, U+007F-U+009F) in an external volume's storage ID.
-func ValidateStorageVolumeID(fldPath *field.Path, id string) field.ErrorList {
-	for _, r := range id {
-		if (r >= 0x0000 && r <= 0x0008) ||
-			r == 0x000B ||
-			r == 0x000C ||
-			(r >= 0x000E && r <= 0x001F) ||
-			(r >= 0x007F && r <= 0x009F) {
-			return field.ErrorList{field.Invalid(fldPath, id, "must not contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F)")}
-		}
-	}
-	return nil
-}
-
 // csiMapMaxBytes bounds a map a CSI driver produced. The CSI spec caps
 // map<string, string> fields at 4 KiB; this allows ten times that so a future
 // revision of the limit does not turn compliant drivers away. It is a

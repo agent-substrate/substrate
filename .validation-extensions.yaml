@@ -42,3 +42,9 @@ formats:
     # TODO: this prefix is not a domain we own!
     pattern: (^$|^(substrate\.io/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$)
     message: must be a DNS subdomain, optionally prefixed with "substrate.io/"
+
+  # External volume storage IDs
+  - name: ate-volume-storage-id
+    docs: This field must not contain control characters other than tab, newline and carriage return
+    pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]*$'
+    message: must not contain control characters

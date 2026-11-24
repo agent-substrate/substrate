@@ -652,7 +652,7 @@ message ExternalVolumeSource {
   //
   // +k8s:required
   // +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
-  // +k8s:customValidation # no control characters
+  // +k8s:format=ate-volume-storage-id
   string storage_volume_id = 1;
 
   // +k8s:optional

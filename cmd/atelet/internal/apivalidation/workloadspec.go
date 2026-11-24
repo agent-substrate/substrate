@@ -81,10 +81,6 @@ func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, 
 	return resources.ValidateDropCapabilities(fldPath, value)
 }
 
-func ValidateCustom_ExternalVolumeSource_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateStorageVolumeID(fldPath, *value)
-}
-
 func ValidateCustom_ExternalVolumeSource_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
 	return resources.ValidateCSIMap(fldPath, value)
 }

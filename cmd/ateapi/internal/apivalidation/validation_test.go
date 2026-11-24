@@ -907,7 +907,7 @@ func TestValidateExternalVolume(t *testing.T) {
 	}, {
 		name: "invalid storage volume id with null U+0000",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "vol\x00id" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "").WithOrigin("format=ate-volume-storage-id")},
 	}, {
 		name: "storage volume id too long",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = strings.Repeat("x", 257) }),

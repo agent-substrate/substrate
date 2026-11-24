@@ -511,7 +511,7 @@ message ExternalVolumeStatus {
   // +k8s:maxLength=256
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
-  // +k8s:customValidation # no control characters
+  // +k8s:format=ate-volume-storage-id
   string storage_volume_id = 2;
 
   // Internal volume plugin name or CSI driver name, from the StorageClass

@@ -1115,7 +1115,7 @@ type ExternalVolumeStatus struct {
 	// +k8s:maxLength=256
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset
-	// +k8s:customValidation # no control characters
+	// +k8s:format=ate-volume-storage-id
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// Internal volume plugin name or CSI driver name, from the StorageClass
 	// provisioner. Must be a DNS subdomain, optionally prefixed with

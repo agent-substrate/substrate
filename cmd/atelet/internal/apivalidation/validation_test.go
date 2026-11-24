@@ -1462,7 +1462,7 @@ func TestValidateVolume(t *testing.T) {
 		}, {
 			name: "external: storage_volume_id with a control character",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "vol\x01" }),
-			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "")},
+			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "").WithOrigin("format=ate-volume-storage-id")},
 		}, {
 			name: "external: storage_volume_id too long",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = strings.Repeat("x", 257) }),

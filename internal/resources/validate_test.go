@@ -521,17 +521,6 @@ func TestValidateProjectedPath(t *testing.T) {
 	})
 }
 
-func TestValidateStorageVolumeID(t *testing.T) {
-	runStringRule(t, ValidateStorageVolumeID, []stringRuleCase{
-		{"empty", "", false},
-		{"plain", "projects/p/disks/d-1", false},
-		{"newline is allowed", "a\nb", false},
-		{"NUL", "a\x00b", true},
-		{"DEL", "a\x7fb", true},
-		{"C1 control", "a\u0085b", true},
-	})
-}
-
 func TestValidateCapabilities(t *testing.T) {
 	tests := []struct {
 		name     string

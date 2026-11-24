@@ -3943,6 +3943,7 @@ func Validate_ExternalVolumeSource(
 	return errs
 }
 
+var formatPattern_ate_volume_storage_id = regexp.MustCompile("^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]*$")
 var formatPattern_ate_volume_type_name = regexp.MustCompile("(^$|^(substrate\\.io/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$)")
 
 // Validate_ExternalVolumeStatus validates an instance of ExternalVolumeStatus according
@@ -4012,8 +4013,7 @@ func Validate_ExternalVolumeStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_ExternalVolumeStatus_StorageVolumeId(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_volume_storage_id, "must not contain control characters", "format=ate-volume-storage-id"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
