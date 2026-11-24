@@ -59,12 +59,12 @@ func newWrappedRegistry(t *testing.T, wrap func(http.Handler) http.Handler) (*ht
 	return srv, u.Host
 }
 
-func layerFromEntries(t *testing.T, entries []tarEntry) v1.Layer {
+func layerFromEntries(t *testing.T, entries []tarEntry, opts ...tarball.LayerOption) v1.Layer {
 	t.Helper()
 	b := buildTar(t, entries)
 	l, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(b)), nil
-	})
+	}, opts...)
 	if err != nil {
 		t.Fatalf("tarball.LayerFromOpener: %v", err)
 	}
