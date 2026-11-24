@@ -161,8 +161,7 @@ are unsure about something, please ask. It can save us all a lot of time and
 effort.
 
 5) API changes MUST have an in-tree implementation. A new RPC, field, or CLI
-flag MUST come with code in this repo that uses it, either in the same PR or in
-an agreed-upon follow-up.
+flag MUST come with code in this repo that uses it, either in the same PR or (very rarely) in an agreed-upon followup.
 
 If you are building something that runs *on* Substrate rather than changing
 Substrate itself, see [Integration
