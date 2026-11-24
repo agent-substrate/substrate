@@ -39,7 +39,8 @@ service Control {
   }
 
   // Suspend a given actor to a new snapshot. A running actor is checkpointed
-  // on its worker. A SUSPENDED actor is returned as it is.
+  // on its worker. A SUSPENDED actor is returned as it is, unless a
+  // preconditions guard does not match.
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
     option (method).resource = "Actor";
   }
@@ -1823,6 +1824,11 @@ message SuspendActorRequest {
   //
   // +k8s:optional
   SuspendOptions options = 2;
+
+  // Act only if the actor still matches these guards.
+  //
+  // +k8s:optional
+  Preconditions preconditions = 3;
 }
 
 message SuspendActorResponse {
@@ -1861,6 +1867,11 @@ message ResumeActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // Act only if the actor still matches these guards.
+  //
+  // +k8s:optional
+  Preconditions preconditions = 2;
 }
 
 message ResumeActorResponse {
@@ -1877,6 +1888,11 @@ message RevertActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // Act only if the actor still matches these guards.
+  //
+  // +k8s:optional
+  Preconditions preconditions = 2;
 }
 
 // RevertActorResponse holds the reverted Actor.
@@ -2104,6 +2120,26 @@ message DeleteOptions {
   int64 version = 1;
 
   // Delete only if the resource still has this uid, that is, it is the one
+  // the caller read and not a later one created under the same name. Empty
+  // skips the check.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string uid = 2;
+}
+
+// Preconditions are the optional guards a custom method request may carry.
+// A guard that does not match the resource fails the request with `ABORTED`.
+message Preconditions {
+  // Act only if the resource is still at this version, that is, unchanged
+  // since the caller read it. Zero skips the check. A call can change the
+  // version before it fails, so read the resource again before a retry.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 version = 1;
+
+  // Act only if the resource still has this uid, that is, it is the one
   // the caller read and not a later one created under the same name. Empty
   // skips the check.
   //

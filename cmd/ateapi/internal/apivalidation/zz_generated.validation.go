@@ -6473,6 +6473,77 @@ func Validate_Ports(
 	return errs
 }
 
+// Validate_Preconditions validates an instance of Preconditions according
+// to declarative validation rules in the API schema.
+func Validate_Preconditions(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.Preconditions) (errs field.ErrorList) {
+
+	{ // field v1.Preconditions.Version
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.Preconditions) *int64 {
+				return &oldObj.Version
+			})
+		errs = append(errs, fn(fldPath.Child("version"), &obj.Version, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.Preconditions.Uid
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.Preconditions) *string {
+				return &oldObj.Uid
+			})
+		errs = append(errs, fn(fldPath.Child("uid"), &obj.Uid, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_RegisterWorkerRequest validates an instance of RegisterWorkerRequest according
 // to declarative validation rules in the API schema.
 func Validate_RegisterWorkerRequest(
@@ -7500,6 +7571,36 @@ func Validate_ResumeActorRequest(
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
+	{ // field v1.ResumeActorRequest.Preconditions
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.Preconditions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Preconditions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ResumeActorRequest) *v1.Preconditions {
+				return oldObj.Preconditions
+			})
+		errs = append(errs, fn(fldPath.Child("preconditions"), obj.Preconditions, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -7552,6 +7653,36 @@ func Validate_RevertActorRequest(
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.RevertActorRequest.Preconditions
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.Preconditions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Preconditions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.RevertActorRequest) *v1.Preconditions {
+				return oldObj.Preconditions
+			})
+		errs = append(errs, fn(fldPath.Child("preconditions"), obj.Preconditions, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -8608,6 +8739,36 @@ func Validate_SuspendActorRequest(
 				return oldObj.Options
 			})
 		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.SuspendActorRequest.Preconditions
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.Preconditions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Preconditions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.SuspendActorRequest) *v1.Preconditions {
+				return oldObj.Preconditions
+			})
+		errs = append(errs, fn(fldPath.Child("preconditions"), obj.Preconditions, oldVal, oldObj != nil)...)
 	}
 
 	return errs

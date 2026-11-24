@@ -15,10 +15,30 @@
 package controlapi
 
 import (
+	"errors"
+
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func toDeletePreconditions(opts *ateapi.DeleteOptions) store.Precondition {
 	return store.Precondition{UID: opts.GetUid(), Version: opts.GetVersion()}
+}
+
+func toPreconditions(p *ateapi.Preconditions) store.Precondition {
+	return store.Precondition{UID: p.GetUid(), Version: p.GetVersion()}
+}
+
+// checkActorPreconditions returns ABORTED if actor does not match precondition.
+func checkActorPreconditions(actorRef resources.ActorRef, precondition store.Precondition, actor *ateapi.Actor) error {
+	err := precondition.Check(actor.GetMetadata())
+	switch {
+	case errors.Is(err, store.ErrUIDConflict):
+		return apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
+	case errors.Is(err, store.ErrVersionConflict):
+		return apierror.Aborted("Actor %s is not at version %d", actorRef, precondition.Version)
+	}
+	return err
 }

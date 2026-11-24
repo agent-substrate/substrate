@@ -96,6 +96,31 @@ func TestEnsureMarkedReverting_AcceptsPaused(t *testing.T) {
 	}
 }
 
+// An actor recreated after the workflow read it fails the write with ABORTED,
+// the code the RPC returns, so the lifecycle metric records the same code.
+func TestEnsureMarkedReverting_RecreatedActorAborts(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_CRASHED)
+	stale, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("get seeded actor: %v", err)
+	}
+	if _, err := st.DeleteActor(ctx, actorRef, store.Precondition{}); err != nil {
+		t.Fatalf("DeleteActor: %v", err)
+	}
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_CRASHED)
+
+	_, err = w.ensureMarkedReverting(ctx, actorRef, stale)
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Errorf("ensureMarkedReverting code = %v, want %v; error = %v", got, codes.Aborted, err)
+	}
+}
+
 // TestRevertActor_ReturnsActorToItsSnapshot covers the whole workflow from each
 // accepted origin: the actor lands SUSPENDED holding the same external snapshot
 // it started with, and every pointer to the discarded execution is gone.
@@ -155,7 +180,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 				}
 			})
 
-			reverted, err := w.RevertActor(ctx, actorRef)
+			reverted, err := w.RevertActor(ctx, actorRef, store.Precondition{})
 			if err != nil {
 				t.Fatalf("RevertActor: %v", err)
 			}
@@ -205,7 +230,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			})
 			seedWireWorker(t, ctx, st, assignmentOf(running))
 			wire, atelet := newWireCaptureWorkflow(t, st)
-			suspended, err := wire.SuspendActor(ctx, actorRef, suspendSync)
+			suspended, err := wire.SuspendActor(ctx, actorRef, store.Precondition{}, suspendSync)
 			if err != nil {
 				t.Fatalf("SuspendActor after revert: %v", err)
 			}
@@ -294,7 +319,7 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 					}
 				}
 			}
-			reverted, err := w.RevertActor(ctx, ref)
+			reverted, err := w.RevertActor(ctx, ref, store.Precondition{})
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("RevertActor = %v, want %v", err, tt.wantCode)
 			}
@@ -316,7 +341,7 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 				atelet.mu.Lock()
 				atelet.onTerminate = nil
 				atelet.mu.Unlock()
-				reverted, err = w.RevertActor(ctx, ref)
+				reverted, err = w.RevertActor(ctx, ref, store.Precondition{})
 				if err != nil {
 					t.Fatalf("retry after conflict: %v", err)
 				}
@@ -373,7 +398,7 @@ func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 		}
 	})
 
-	reverted, err := w.RevertActor(ctx, actorRef)
+	reverted, err := w.RevertActor(ctx, actorRef, store.Precondition{})
 	if err != nil {
 		t.Fatalf("RevertActor: %v", err)
 	}
@@ -403,7 +428,7 @@ func TestRevertActor_RejectsSuspended(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 
-		if _, err := w.RevertActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
+		if _, err := w.RevertActor(ctx, actorRef, store.Precondition{}); apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("RevertActor = %v, want FailedPrecondition", err)
 		}
 	})
@@ -417,10 +442,10 @@ func TestRevertActor_RejectsSuspended(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_CRASHED)
 
-		if _, err := w.RevertActor(ctx, actorRef); err != nil {
+		if _, err := w.RevertActor(ctx, actorRef, store.Precondition{}); err != nil {
 			t.Fatalf("first RevertActor: %v", err)
 		}
-		if _, err := w.RevertActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
+		if _, err := w.RevertActor(ctx, actorRef, store.Precondition{}); apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("second RevertActor = %v, want FailedPrecondition", err)
 		}
 	})
@@ -438,7 +463,7 @@ func TestRevertActor_MissingTemplate(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, st, actorRef, "ns", "missing-tmpl", ateapi.ActorState_ACTOR_STATE_CRASHED)
 
-	reverted, err := w.RevertActor(ctx, actorRef)
+	reverted, err := w.RevertActor(ctx, actorRef, store.Precondition{})
 	if err != nil {
 		t.Fatalf("RevertActor: %v", err)
 	}
@@ -462,7 +487,7 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 		a.Status.Crash = newActorCrash("resume", crashMessageWorkerDraining)
 	})
 
-	reverted, err := w.RevertActor(ctx, actorRef)
+	reverted, err := w.RevertActor(ctx, actorRef, store.Precondition{})
 	if err != nil {
 		t.Fatalf("RevertActor: %v", err)
 	}

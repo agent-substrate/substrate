@@ -30,6 +30,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -1053,7 +1054,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			workflow := &ActorWorkflow{store: persistence}
 			actorRef := resources.ActorRefFromActor(created)
-			loaded, _, err := workflow.loadActorForResume(ctx, actorRef)
+			loaded, _, err := workflow.loadActorForResume(ctx, actorRef, store.Precondition{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1061,5 +1062,140 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				t.Fatalf("missing snapshot source for %s", scenario)
 			}
 		})
+	}
+}
+
+// TestActorCustomMethods_Preconditions checks that Suspend, Resume and Revert
+// refuse an actor that no longer matches the caller's guards with ABORTED, and
+// leave it untouched. The refused calls' lifecycle metric carries no labels
+// from the stored actor. Each seed state completes without atelet, so the
+// matching call succeeds.
+func TestActorCustomMethods_Preconditions(t *testing.T) {
+	const foreignUID = "1a7e4c83-6d20-4f95-b3c8-9e0a2f6d4b17"
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
+	ref := &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name}
+
+	methods := []struct {
+		name  string
+		state ateapi.ActorState
+		call  func(ctx context.Context, svc *RPCService, p *ateapi.Preconditions) error
+	}{
+		{
+			// SUSPENDED takes the shortcut that reports success without writing.
+			name:  "SuspendActor",
+			state: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+			call: func(ctx context.Context, svc *RPCService, p *ateapi.Preconditions) error {
+				_, err := svc.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+					Actor:         ref,
+					Options:       &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+					Preconditions: p,
+				})
+				return err
+			},
+		},
+		{
+			// RUNNING takes the fast path that returns before the lease.
+			name:  "ResumeActor",
+			state: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			call: func(ctx context.Context, svc *RPCService, p *ateapi.Preconditions) error {
+				_, err := svc.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref, Preconditions: p})
+				return err
+			},
+		},
+		{
+			// A CRASHED actor with no node reverts without atelet.
+			name:  "RevertActor",
+			state: ateapi.ActorState_ACTOR_STATE_CRASHED,
+			call: func(ctx context.Context, svc *RPCService, p *ateapi.Preconditions) error {
+				_, err := svc.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: ref, Preconditions: p})
+				return err
+			},
+		},
+	}
+	for _, m := range methods {
+		t.Run(m.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+			inst, reader := newTestInstruments(t)
+			w.instruments = inst
+			svc := &RPCService{impl: newServiceImpl(st, nil), actorWorkflow: w}
+			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", m.state)
+			seeded := mustReadActor(t, ctx, st, actorRef)
+			md := seeded.GetMetadata()
+
+			for _, tc := range []struct {
+				name string
+				p    *ateapi.Preconditions
+			}{
+				{"stale version", &ateapi.Preconditions{Version: md.GetVersion() + 7}},
+				{"foreign uid", &ateapi.Preconditions{Uid: foreignUID}},
+				{"foreign uid, matching version", &ateapi.Preconditions{Uid: foreignUID, Version: md.GetVersion()}},
+			} {
+				if err := m.call(ctx, svc, tc.p); apierror.Code(err) != codes.Aborted {
+					t.Errorf("%s: code = %v (err %v), want %v", tc.name, apierror.Code(err), err, codes.Aborted)
+				}
+			}
+			if diff := cmp.Diff(seeded, mustReadActor(t, ctx, st, actorRef), protocmp.Transform()); diff != "" {
+				t.Errorf("refused calls changed the actor (-seeded +stored):\n%s", diff)
+			}
+			for _, dp := range mustMetric(t, reader, lifecycleOpDurationMetric).Data.(metricdata.Histogram[float64]).DataPoints {
+				if name, ok := attrString(dp, ateattr.TemplateNameKey); ok {
+					t.Errorf("refused call recorded template %q, want no template label", name)
+				}
+			}
+
+			if err := m.call(ctx, svc, &ateapi.Preconditions{Uid: md.GetUid(), Version: md.GetVersion()}); err != nil {
+				t.Errorf("matching preconditions failed: %v", err)
+			}
+		})
+	}
+}
+
+// replacingLeaseStore runs replace once, just before the first lease is taken.
+type replacingLeaseStore struct {
+	store.Interface
+	replace func()
+}
+
+func (s *replacingLeaseStore) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
+	if s.replace != nil {
+		s.replace()
+		s.replace = nil
+	}
+	return s.Interface.AcquireLease(ctx, key)
+}
+
+// TestResumeActor_PreconditionCheckedUnderLease covers an actor deleted and
+// recreated between ResumeActor's read before the lease and its read under it.
+func TestResumeActor_PreconditionCheckedUnderLease(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
+	st := &replacingLeaseStore{Interface: persistence}
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	original := mustReadActor(t, ctx, persistence, actorRef)
+
+	var recreated *ateapi.Actor
+	st.replace = func() {
+		if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.Precondition{}, nil); err != nil {
+			t.Fatalf("MarkActorForDeletion: %v", err)
+		}
+		if _, err := persistence.DeleteActor(ctx, actorRef, store.Precondition{}); err != nil {
+			t.Fatalf("DeleteActor: %v", err)
+		}
+		seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		recreated = mustReadActor(t, ctx, persistence, actorRef)
+	}
+
+	_, _, err := w.ResumeActor(ctx, actorRef, store.Precondition{UID: original.GetMetadata().GetUid()})
+	if apierror.Code(err) != codes.Aborted {
+		t.Fatalf("ResumeActor code = %v (err %v), want %v", apierror.Code(err), err, codes.Aborted)
+	}
+	if diff := cmp.Diff(recreated, mustReadActor(t, ctx, persistence, actorRef), protocmp.Transform()); diff != "" {
+		t.Errorf("ResumeActor changed the recreated actor (-recreated +stored):\n%s", diff)
 	}
 }

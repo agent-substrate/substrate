@@ -344,6 +344,8 @@ rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
 message SuspendActorRequest {
   ObjectRef actor = 1;
+  SuspendOptions options = 2;
+  Preconditions preconditions = 3;
 }
 
 message SuspendActorResponse {
@@ -357,6 +359,7 @@ Rules:
 - Request message name **must** match the RPC name with a `Request` suffix.
 - The request **must** identify the target resource using an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - Response message name **must** match the RPC name with a `Response` suffix. A custom method **must not** return the resource directly; put it in a field of the response, so method-specific output can be added later (e.g., `ResumeActorResponse.resumed`).
+- A custom method that mutates the target resource **must** accept an optional `Preconditions preconditions` field (see section #7.2). The Worker custom methods (`DrainWorker`, `MarkWorkerAvailable`, `MarkWorkerUnavailable`) do not accept it yet.
 
 ---
 
@@ -553,7 +556,7 @@ updated, err := client.UpdateActor(ctx, &UpdateActorRequest{
 
 - `version` and `uid` are control fields managed by the server, not mutable fields. A client echoes them back as guards, it never edits them.
 - Both are **required**: an update that leaves `version` (0) or `uid` ("") unset is rejected with `INVALID_ARGUMENT`. There is no blind by-name update. A client that has not read the resource cannot update it; a client that has read it already holds both values.
-- The requirement is on Update only. Delete's guards stay optional (below), and Create assigns both fields rather than checking them.
+- The requirement is on Update only. The guards of Delete and of custom methods stay optional (below), and Create assigns both fields rather than checking them.
 
 - Modify what you read, do not reconstruct it: step 2 above mutates the message the server returned rather than assembling a new `Actor`. 
    - This matters when the server is newer than the client: a reconstructed message does not carry the fields the client does not recognize, and an update that omits an immutable field is rejected rather than silently rewriting it.
@@ -574,12 +577,22 @@ message DeleteOptions {
 }
 ```
 
+**Custom methods:** the guards are specified in a `Preconditions` message with the same fields and semantics as `DeleteOptions`. The server checks them against the resource it is about to act on, before any early return for a resource already in the requested state:
+
+```proto
+message SuspendActorRequest {
+  ObjectRef      actor         = 1;
+  SuspendOptions options       = 2;
+  Preconditions  preconditions = 3;
+}
+```
+
 **Server behavior (applies to `version` and `uid` alike):**
 - If the client provides a `version` or `uid` that does not match the server's current value: return `ABORTED`.
 - On Update, if the client omits either guard: return `INVALID_ARGUMENT`. The request is malformed, so this is decided before the resource is read.
-- On Delete, if the client omits a guard: skip that check.
+- On Delete or a custom method, if the client omits a guard: skip that check.
 
-So Update never gives last-writer-wins, while Delete still does by default.
+So Update never gives last-writer-wins, while Delete and custom methods still do by default.
 
 ---
 
