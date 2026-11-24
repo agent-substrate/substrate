@@ -42,9 +42,12 @@ type Cache struct {
 	store          workerListWatcher
 	relistInterval time.Duration
 
-	mu       sync.RWMutex
-	workers  map[string]*ateapi.Worker
-	handlers []func(*ateapi.Worker)
+	mu      sync.RWMutex
+	workers map[string]*ateapi.Worker
+	// deletedUIDs holds the UIDs of deleted workers and when each was
+	// deleted, so a replayed event for one doesn't re-add it.
+	deletedUIDs map[string]time.Time
+	handlers    []func(*ateapi.Worker)
 
 	ready atomic.Bool
 }
@@ -84,6 +87,7 @@ func New(store workerListWatcher, relistInterval time.Duration) *Cache {
 		store:          store,
 		relistInterval: relistInterval,
 		workers:        make(map[string]*ateapi.Worker),
+		deletedUIDs:    make(map[string]time.Time),
 	}
 }
 
@@ -138,14 +142,15 @@ func (c *Cache) Worker(name string) (*ateapi.Worker, error) {
 	return worker, nil
 }
 
-// Forget removes a worker that a store write proved no longer exists. The
-// normal delete watch remains authoritative, but this closes the short race in
-// which scheduling selected a worker just after its row was deleted and before
-// the watch event reached the cache.
-func (c *Cache) Forget(name string) {
+// Forget removes incarnation uid of the named worker, which a store write
+// proved no longer exists. The normal delete watch remains authoritative, but
+// this closes the short race in which scheduling selected a worker just after
+// its row was deleted and before the watch event reached the cache. A newer
+// incarnation under the same name is left alone.
+func (c *Cache) Forget(name, uid string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.workers, name)
+	c.recordDeleted(name, uid, time.Now())
 }
 
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
@@ -178,9 +183,19 @@ func (c *Cache) relist(ctx context.Context) error {
 	for _, w := range workers {
 		newMap[workerKey(w)] = w
 	}
+	now := time.Now()
 	c.mu.Lock()
+	// The outbox replays an event well within relistInterval, so an older
+	// tombstone has nothing left to fence.
+	for uid, deleted := range c.deletedUIDs {
+		if now.Sub(deleted) > c.relistInterval {
+			delete(c.deletedUIDs, uid)
+		}
+	}
 	var changed []*ateapi.Worker
 	for key, w := range newMap {
+		// The list shows this incarnation exists.
+		delete(c.deletedUIDs, w.GetMetadata().GetUid())
 		old, ok := c.workers[key]
 		if !ok || old.GetMetadata().GetVersion() != w.GetMetadata().GetVersion() {
 			changed = append(changed, w)
@@ -253,16 +268,35 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 	var handlers []func(*ateapi.Worker)
 	switch event.Type {
 	case store.WorkerEventDeleted:
-		delete(c.workers, key)
+		c.recordDeleted(key, event.Worker.GetMetadata().GetUid(), time.Now())
 	case store.WorkerEventCreated, store.WorkerEventUpdated:
-		existing, ok := c.workers[key]
-		if !ok || event.Worker.GetMetadata().GetVersion() >= existing.GetMetadata().GetVersion() {
+		if !c.isStale(key, event.Worker) {
 			c.workers[key] = event.Worker
 			handlers = c.handlers
 		}
 	}
 	c.mu.Unlock()
 	notify(handlers, event.Worker)
+}
+
+// recordDeleted removes the cached worker if it is incarnation uid, and
+// tombstones uid.
+func (c *Cache) recordDeleted(key, uid string, now time.Time) {
+	if c.workers[key].GetMetadata().GetUid() == uid {
+		delete(c.workers, key)
+	}
+	c.deletedUIDs[uid] = now
+}
+
+// isStale reports whether w is a deleted incarnation, or is no newer than the
+// cached copy of the same incarnation.
+func (c *Cache) isStale(key string, w *ateapi.Worker) bool {
+	if _, deleted := c.deletedUIDs[w.GetMetadata().GetUid()]; deleted {
+		return true
+	}
+	existing, ok := c.workers[key]
+	return ok && existing.GetMetadata().GetUid() == w.GetMetadata().GetUid() &&
+		w.GetMetadata().GetVersion() <= existing.GetMetadata().GetVersion()
 }
 
 func workerKey(w *ateapi.Worker) string {
