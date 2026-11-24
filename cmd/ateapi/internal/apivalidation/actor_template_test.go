@@ -238,6 +238,14 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			tmpl.Resources = &ateapi.ResourceRequirements{}
 		})},
 		field.ErrorList{
+			field.Required(field.NewPath("actor_template", "resources", "limits"), ""),
+		},
+	}, {
+		"empty resources.limits",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{}}
+		})},
+		field.ErrorList{
 			field.Required(field.NewPath("actor_template", "resources", "limits", "cpu_millicores"), ""),
 			field.Required(field.NewPath("actor_template", "resources", "limits", "memory_bytes"), ""),
 		},

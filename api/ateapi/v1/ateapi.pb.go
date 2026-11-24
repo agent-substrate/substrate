@@ -2820,7 +2820,9 @@ type ActorTemplate struct {
 	// micro-VM is booted at that size.
 	//
 	// +k8s:required
-	// +k8s:customValidation # cpu and memory limits are both set
+	// +k8s:subfield(limits)=+k8s:required
+	// +k8s:subfield(limits)=+k8s:subfield(cpu_millicores)=+k8s:required
+	// +k8s:subfield(limits)=+k8s:subfield(memory_bytes)=+k8s:required
 	Resources *ResourceRequirements `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
 	// Egress policy for the golden Actor during initialization. The template
 	// controller creates a policy with these rules through CreateActorEgressPolicy

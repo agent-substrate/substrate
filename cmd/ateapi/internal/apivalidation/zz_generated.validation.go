@@ -1385,10 +1385,56 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_ActorTemplate_Resources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
+			func() { // cohort = "limits"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Limits }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "limits.cpu_millicores"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Limits }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "cpu_millicores",
+							func(o *v1.Resources) *int64 { return &o.CpuMillicores }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *int64) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "limits.memory_bytes"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Limits }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "memory_bytes",
+							func(o *v1.Resources) *int64 { return &o.MemoryBytes }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *int64) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
