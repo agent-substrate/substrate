@@ -66,6 +66,17 @@ cannot overload ate-idp-server.
 | `iat` | Issue time, in Unix seconds |
 | `jti` | A random token ID |
 | `actor.ate.dev` | An object with the actor's `atespace`, `actorName`, and `actorUID` |
+| `cnf` | Present when bound to an upstream client certificate. `x5t#S256` is the unpadded base64url SHA-256 digest of the leaf certificate's DER bytes. |
+
+When the matching AgentGateway egress rule injects an actor JWT and selects an
+upstream client certificate, the gateway binds the JWT to that certificate.
+The upstream must verify the JWT and compare `cnf.x5t#S256` with the leaf
+certificate authenticated on its mTLS connection, rejecting a missing or
+mismatched certificate. JWTs sent without a rule-selected client certificate
+remain bearer tokens.
+
+Upgrade ateapi before enabling this combination with a gateway that sends
+the certificate digest. Older ateapi versions reject the new request field.
 
 The caller chooses the lifetime with `expiration_seconds`, which must be
 between 300 and 3600. The RPC also returns `expire_time`, equal to `exp`. A
@@ -141,7 +152,7 @@ ate-idp-server answers `GET` and `HEAD` on two paths, both as
   "response_types_supported": ["id_token"],
   "subject_types_supported": ["public"],
   "id_token_signing_alg_values_supported": ["ES256"],
-  "claims_supported": ["iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "worker-for-actor.ate.dev"]
+  "claims_supported": ["iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "worker-for-actor.ate.dev", "cnf"]
 }
 ```
 

@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"crypto/sha256"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
@@ -80,6 +81,19 @@ func ValidateMintActorJWTRequest(ctx context.Context, req *ateapi.MintActorJwtRe
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_MintActorJwtRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateCustom_MintActorJwtRequest_ClientCertificateSha256(_ context.Context, _ operation.Operation, p *field.Path, digest, _ []byte) field.ErrorList {
+	if len(digest) != 0 && len(digest) != sha256.Size {
+		return field.ErrorList{field.Invalid(p, len(digest), "must be a 32-byte SHA-256 digest")}
+	}
+	return nil
+}
+
+func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapi.MintActorCertificateRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapi.MintWorkerActorCertificateRequest) field.ErrorList {

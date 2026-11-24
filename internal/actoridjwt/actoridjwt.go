@@ -15,6 +15,7 @@
 package actoridjwt
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,8 @@ type Claims struct {
 	IssuedAt   time.Time
 	JTI        string
 
+	ClientCertificateSHA256 []byte
+
 	// Claims from ADK's session model
 	Substrate SubstrateClaims
 }
@@ -102,10 +105,16 @@ type WireClaims struct {
 	IssuedAt   float64         `json:"iat,omitempty"`
 	JTI        string          `json:"jti,omitempty"`
 
+	Confirmation *WireConfirmation `json:"cnf,omitempty"`
+
 	// Substrate claims, under the claim name for the token's kind. Exactly
 	// one is set.
 	Actor          *WireSubstrateClaims `json:"actor.ate.dev,omitempty"`
 	WorkerForActor *WireSubstrateClaims `json:"worker-for-actor.ate.dev,omitempty"`
+}
+
+type WireConfirmation struct {
+	CertificateThumbprint string `json:"x5t#S256"`
 }
 
 // Substrate returns the token's kind and its Substrate claims, or ok false if
@@ -141,6 +150,11 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		NotBefore:  float64(claims.NotBefore.Unix()),
 		IssuedAt:   float64(claims.IssuedAt.Unix()),
 		JTI:        claims.JTI,
+	}
+	if len(claims.ClientCertificateSHA256) != 0 {
+		wire.Confirmation = &WireConfirmation{
+			CertificateThumbprint: base64.RawURLEncoding.EncodeToString(claims.ClientCertificateSHA256),
+		}
 	}
 	substrate := &WireSubstrateClaims{
 		Atespace:  claims.Substrate.Atespace,

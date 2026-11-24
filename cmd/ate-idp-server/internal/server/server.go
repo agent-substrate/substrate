@@ -97,7 +97,7 @@ func (s *Server) build() (discovery, jwks []byte, err error) {
 		ResponseTypesSupported:           []string{"id_token"},
 		SubjectTypesSupported:            []string{"public"},
 		IDTokenSigningAlgValuesSupported: slices.Compact(algorithms),
-		ClaimsSupported:                  []string{"iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "worker-for-actor.ate.dev"},
+		ClaimsSupported:                  []string{"iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "worker-for-actor.ate.dev", "cnf"},
 	})
 	if err != nil {
 		return nil, nil, err

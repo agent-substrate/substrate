@@ -15,6 +15,7 @@
 package functionaltest
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -6424,14 +6425,15 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	mintResp, err := tc.client.MintActorJwt(t.Context(), &ateapi.MintActorJwtRequest{
+	req := &ateapi.MintActorJwtRequest{
 		Actor: &ateapi.ObjectRef{
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
 		Audiences:         []string{"foo"},
 		ExpirationSeconds: 1800,
-	})
+	}
+	mintResp, err := tc.client.MintActorJwt(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Error while calling MintActorJwt: %v", err)
 	}
@@ -6463,6 +6465,28 @@ func TestMintActorJWT_Success(t *testing.T) {
 		t.Errorf("actor.ate.dev.actorUID = %q, want the stored actor's %q", substrate.ActorUID, want)
 	}
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
+	if claims.Confirmation != nil {
+		t.Fatal("JWT without a certificate digest contains cnf")
+	}
+
+	req.ClientCertificateSha256 = []byte{1}
+	_, err = tc.client.MintActorJwt(t.Context(), req)
+	assertGrpcErrorRegex(t, err, codes.InvalidArgument, `client_certificate_sha256:.*32-byte SHA-256 digest`)
+
+	req.ClientCertificateSha256 = bytes.Repeat([]byte{0xff}, 32)
+	mintResp, err = tc.client.MintActorJwt(t.Context(), req)
+	if err != nil {
+		t.Fatalf("minting certificate-bound actor JWT: %v", err)
+	}
+	var bound map[string]json.RawMessage
+	decodeJWTSegment(t, strings.Split(mintResp.GetActorJwt(), ".")[1], &bound)
+	var confirmation map[string]string
+	if err := json.Unmarshal(bound["cnf"], &confirmation); err != nil {
+		t.Fatalf("decoding cnf: %v", err)
+	}
+	if want := base64.RawURLEncoding.EncodeToString(req.ClientCertificateSha256); confirmation["x5t#S256"] != want {
+		t.Fatalf("cnf = %v, want x5t#S256 %q", confirmation, want)
+	}
 }
 
 // assertActorJWTLifetime checks that expire_time matches the exp claim and that

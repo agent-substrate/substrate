@@ -90,6 +90,17 @@ service Control {
     option (method).resource = "Actor";
   }
 
+  // Create a Substrate-issued SPIFFE client certificate asserting the actor
+  // identity.
+  //
+  // SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
+  //
+  // * Called by the egress gateway when actor client certificate injection is
+  // configured for outbound requests.
+  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {
+    option (method).resource = "Actor";
+  }
+
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
   // cannot collect it. When the Actor's latest snapshot is not uploaded yet,
@@ -742,7 +753,40 @@ message HttpsRule {
   //
   // +k8s:optional
   HttpRuleEffects effects = 3;
+
+  // TLS settings for the gateway-to-destination connection.
+  //
+  // +k8s:optional
+  UpstreamTls upstream_tls = 4;
 }
+
+// UpstreamTls configures TLS originated by the egress gateway.
+message UpstreamTls {
+  // Selects the client certificate the gateway presents when it originates TLS
+  // to the request's destination.
+  //
+  // +k8s:optional
+  ClientCertificateSource client_certificate = 1;
+}
+
+message ClientCertificateSource {
+  // Dynamically mint a client certificate for the actor.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ActorClientCertificateSource actor_certificate = 1;
+
+  // `ate-secret://` URI for a single PEM bundle containing the certificate
+  // chain (leaf first) and exactly one matching, unencrypted private key.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:customValidation # format
+  optional string credential_provider = 2;
+}
+
+// ActorClientCertificateSource has ateapi sign a gateway-generated CSR.
+message ActorClientCertificateSource {}
 
 // TlsPassthroughRule allows TLS that the gateway forwards without decryption.
 // It is evaluated once per connection at the ClientHello, on the SNI and
@@ -1998,6 +2042,14 @@ message MintActorJwtRequest {
   // +k8s:minimum=300
   // +k8s:maximum=3600
   int64 expiration_seconds = 3;
+
+  // SHA-256 digest of the DER-encoded upstream leaf client certificate.
+  // When set, the JWT is bound to this certificate through `cnf.x5t#S256`.
+  //
+  // +k8s:optional
+  // +k8s:maxBytes=32
+  // +k8s:customValidation # exact digest length
+  bytes client_certificate_sha256 = 4;
 }
 
 // Response message for MintActorJwt.
@@ -2016,6 +2068,7 @@ message MintActorJwtResponse {
   // * jti: A random token ID.
   // * `actor.ate.dev`: A JSON object with the actor's `atespace`,
   //   `actorName`, and `actorUID`.
+  // * `cnf.x5t#S256`: The unpadded base64url certificate digest, if requested.
   //
   // The subject and claim name say the token speaks for the actor itself.
   // A token minted for a Substrate component acting on the actor's behalf
@@ -2025,6 +2078,37 @@ message MintActorJwtResponse {
 
   // expire_time is when actor_jwt expires. Equal to its exp claim.
   google.protobuf.Timestamp expire_time = 2;
+}
+
+// Request message for MintActorCertificate.
+message MintActorCertificateRequest {
+  // The actor for which the certificate should be issued.
+  //
+  // Must be a valid actor that currently exists according to the actor store.
+  //
+  // +k8s:required
+  ObjectRef actor = 1;
+
+  // The UID of the actor --- used to guard against deletion and recreation of
+  // an actor with the same name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 2;
+
+  // Request contains DER encoded bytes of an X.509 certificate signing
+  // request. The signer verifies its signature and uses only its public key.
+  //
+  // +k8s:required
+  // +k8s:maxBytes=16384
+  bytes certificate_signing_request = 3;
+}
+
+// Response message for MintActorCertificate.
+message MintActorCertificateResponse {
+  // Response contains DER encoded certificates. The first entry is the leaf,
+  // followed by any intermediates in leaf-to-root order.
+  repeated bytes actor_certificates = 1;
 }
 
 message ListTagsRequest {

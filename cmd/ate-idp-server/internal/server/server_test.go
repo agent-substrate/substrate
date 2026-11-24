@@ -105,7 +105,7 @@ func TestServesDocuments(t *testing.T) {
 				`"response_types_supported":["id_token"],` +
 				`"subject_types_supported":["public"],` +
 				`"id_token_signing_alg_values_supported":["ES256"],` +
-				`"claims_supported":["iss","sub","aud","exp","nbf","iat","jti","actor.ate.dev","worker-for-actor.ate.dev"]}`,
+				`"claims_supported":["iss","sub","aud","exp","nbf","iat","jti","actor.ate.dev","worker-for-actor.ate.dev","cnf"]}`,
 		},
 		{target: "/openid/v1/jwks", want: keySet(t, keys)},
 	}
