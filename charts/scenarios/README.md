@@ -13,7 +13,7 @@ Each directory here is one supported configuration of the charts. A new configur
 | `kind-agentgateway` | A kind cluster from `hack/create-kind-cluster.sh`, with the agentgateway data plane and the bundled PostgreSQL and RustFS |
 | `microvm` | The `kind-envoy` scenario with microVM sandboxes next to gVisor. `ate-setup` cannot install it in the comparison test, because it uploads the microVM assets |
 
-`hack/install-charts-kind.sh` installs a scenario on a kind cluster. The `helm-install` workflow installs `kind-envoy` and `kind-agentgateway` with the values in `hack/e2e-chart-values` on top, which the e2e suites in `internal/e2e` need, and runs the suites against them.
+`hack/install-charts-kind.sh` installs a scenario on a kind cluster. The `helm-e2e` workflow installs `kind-envoy` and `kind-agentgateway` with the values in `hack/e2e-chart-values` on top, which the e2e suites in `internal/e2e` need, and runs the suites against them. Its microVM jobs add the microVM settings of the `microvm` scenario to either data plane, and upload the assets with `ate-setup`.
 
 After you change a template, a value or a scenario, run `hack/update/chart-golden.sh` to update the `rendered.yaml` files. `hack/verify/chart-golden.sh` fails when they are out of date.
 

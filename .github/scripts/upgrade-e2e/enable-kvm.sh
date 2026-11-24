@@ -17,7 +17,7 @@
 # Grants the runner access to /dev/kvm, so hack/create-kind-cluster.sh mounts
 # it into the kind node for microVM workers.
 #
-# Used by .github/workflows/upgrade-e2e.yaml.
+# Used by .github/workflows/upgrade-e2e.yaml and helm-e2e.yaml.
 
 set -o errexit -o nounset -o pipefail
 

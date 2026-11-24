@@ -14,22 +14,14 @@
 
 # Installs the charts on kind and runs the e2e suites against the install: a
 # smoke subset on the older supported Kubernetes versions, and every suite on
-# the newest, each with both data planes. As in the e2e job of
-# pr-workflow, the full suites run once with the preview gates off and once
-# with all of them on. Each job installs the kind scenario of its data plane,
-# with the e2e values in hack/e2e-chart-values on top.
-name: helm-install
+# the newest. Each job installs the kind scenario of its data plane, with the
+# e2e values in hack/e2e-chart-values on top. As in the e2e job of
+# pr-workflow, the full suites run with the preview gates off and on, on
+# gVisor and on microVM, here with both data planes.
+name: helm-e2e
 on:
   pull_request:
-    paths:
-    - charts/**
-    - hack/create-kind-cluster.sh
-    - hack/install-charts-kind.sh
-    - hack/install-postgres.sh
-    - hack/install-rustfs.sh
-    - hack/e2e-chart-values/**
-    - manifests/ate-install/**
-    - .github/workflows/helm-install.yaml
+  merge_group:
   push:
     branches: [main]
   schedule:
@@ -41,8 +33,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  helm-install:
-    name: helm-install (${{ matrix.kubernetes }}, ${{ matrix.dataplane }}, ${{ matrix.suites }}${{ matrix.preview == 'on' && ', preview' || '' }})
+  helm-e2e:
+    name: helm-e2e (${{ matrix.kubernetes }}, ${{ matrix.dataplane }}, ${{ matrix.sandbox }}, ${{ matrix.suites }}${{ matrix.preview == 'on' && ', preview' || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -51,10 +43,13 @@ jobs:
         kubernetes: ['1.36', '1.37']
         dataplane: [envoy, agentgateway]
         preview: ['off', 'on']
+        sandbox: [gvisor, microvm]
         exclude:
-        # The smoke tests use no preview features.
+        # The smoke tests use no preview features, and run on gVisor.
         - kubernetes: '1.36'
           preview: 'on'
+        - kubernetes: '1.36'
+          sandbox: microvm
         include:
         - kubernetes: '1.36'
           node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
@@ -66,6 +61,12 @@ jobs:
           scenario: kind-envoy
         - dataplane: agentgateway
           scenario: kind-agentgateway
+        # The settings of the microvm scenario, on top of either data plane.
+        - sandbox: microvm
+          substrate-flags: >-
+            --set sandboxConfigs.microvm.enabled=true
+            --set sandboxConfigs.microvm.assetBucket=s3://ate-snapshots
+          demo-suffix: -microvm
     env:
       KIND_NODE_IMAGE: ${{ matrix.node-image }}
       IMAGE_TAG: ci
@@ -110,13 +111,31 @@ jobs:
           for (const [key, value] of Object.entries(process.env)) {
             if (key.startsWith('ACTIONS_')) core.exportVariable(key, value);
           }
+    - name: Restore microVM assets
+      if: matrix.sandbox == 'microvm'
+      # pr-workflow saves this cache on main. ate-setup skips assembling the
+      # assets when they are present.
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: bin/microvm-assets
+        key: microvm-assets-${{ hashFiles('manifests/ate-install/sandboxconfig-microvm.yaml.tmpl') }}
+    - name: Enable KVM
+      if: matrix.sandbox == 'microvm'
+      run: .github/scripts/upgrade-e2e/enable-kvm.sh
     - name: Create cluster (Kubernetes ${{ matrix.kubernetes }})
       run: hack/create-kind-cluster.sh
     - name: Deploy the OpenTelemetry collector
       # The metrics suite reads it. hack/e2e-chart-values points the charts at it.
       run: kubectl --context kind-kind apply -f manifests/ate-install/kind/otel-collector.yaml
-    - name: Install the charts (${{ matrix.scenario }})
-      run: hack/install-charts-kind.sh "${{ matrix.scenario }}"
+    - name: Install the charts (${{ matrix.scenario }}, ${{ matrix.sandbox }})
+      env:
+        SCENARIO: ${{ matrix.scenario }}
+        SUBSTRATE_FLAGS: ${{ matrix.substrate-flags }}
+      run: hack/install-charts-kind.sh "${SCENARIO}" ${SUBSTRATE_FLAGS}
+    - name: Upload the microVM assets
+      # As "microVM sandboxes" in the substrate chart README describes.
+      if: matrix.sandbox == 'microvm'
+      run: go run ./cmd/ate-setup --kind deploy sandboxconfig --sandbox-classes=microvm
     - name: Enable NFS
       if: matrix.suites == 'all'
       run: |
@@ -125,11 +144,14 @@ jobs:
     - name: Install CSI NFS driver
       if: matrix.suites == 'all'
       run: go run ./cmd/ate-setup --kind setup csi nfs
-    - name: Deploy the demos
-      # The suites build actors from the demo ActorTemplates.
+    - name: Deploy the demos (${{ matrix.sandbox }})
+      # The suites build actors from the demo ActorTemplates of the sandbox
+      # class under test.
+      env:
+        DEMO_SUFFIX: ${{ matrix.demo-suffix }}
       run: |
-        go run ./cmd/ate-setup --kind deploy demo counter
-        go run ./cmd/ate-setup --kind deploy demo egress
+        go run ./cmd/ate-setup --kind deploy demo "counter${DEMO_SUFFIX}"
+        go run ./cmd/ate-setup --kind deploy demo "egress${DEMO_SUFFIX}"
     - name: Trust local TLS origins in egress gateway
       run: hack/setup-e2e-egress-tls-kind.sh
     - name: Run the smoke tests
@@ -146,6 +168,8 @@ jobs:
     - name: Run the e2e suites
       if: matrix.suites == 'all'
       env:
+        # Points every fixture at its microVM variant. Empty selects gVisor.
+        E2E_SANDBOX_CLASS: ${{ matrix.sandbox == 'microvm' && 'microvm' || '' }}
         E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-e2e.xml
       run: hack/run-e2e-kind.sh -args --no-color --preview="${ATE_PREVIEW}"
@@ -159,7 +183,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-helm-${{ matrix.kubernetes }}-${{ matrix.dataplane }}${{ matrix.preview == 'on' && '-preview' || '' }}
+        name: test-results-helm-${{ matrix.kubernetes }}-${{ matrix.dataplane }}-${{ matrix.sandbox }}${{ matrix.preview == 'on' && '-preview' || '' }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: Dump diagnostics on failure
@@ -171,3 +195,13 @@ jobs:
           echo "=== logs: ${p} ==="
           kubectl --context kind-kind logs -n ate-system "${p}" --all-containers --tail=300 || true
         done
+  # The check to require, so the branch rules don't list each job. Passes only
+  # when every job passed.
+  helm-e2e-test:
+    needs: helm-e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Require every helm-e2e job to pass
+      run: test "${{ needs.helm-e2e.result }}" = success
