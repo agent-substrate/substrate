@@ -71,8 +71,8 @@ var realKnownGates = []Gate{
 // immutable, so one value may be shared freely.
 type Gates struct {
 	known    []Gate
-	enabled  map[string]bool // gate-name -> enabled?
-	disabled map[string]bool // gate-name -> false (all disabled)
+	enabled  map[string]bool // all gate-names -> enabled?
+	disabled map[string]bool // all gate-names -> false
 }
 
 // New returns the preview gates set by the --preview flag values, and logs
