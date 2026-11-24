@@ -3695,6 +3695,8 @@ spec:
     spec:
       serviceAccountName: k8s-credential-provider
       securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
         runAsNonRoot: true
       containers:
       - name: k8s-credential-provider

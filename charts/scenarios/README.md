@@ -18,7 +18,7 @@ Each directory here is one supported configuration of the charts. A new configur
 
 After you change a template, a value or a scenario, run `hack/update/chart-golden.sh` to update the `rendered.yaml` files. `hack/verify/chart-golden.sh` fails when they are out of date.
 
-The test in `cmd/ate-setup/internal/chartcompare` installs each scenario that has `ate-setup-flags` twice, each time on its own envtest API server: once with `ate-setup deploy ate-system`, and once from `rendered.yaml`. It fails when the installs differ in a way that `differences.yaml` does not list. It leaves out the objects that `ate-setup` creates in code, the bundled PostgreSQL and RustFS, and the test fixtures of the kind overlay. To rewrite `differences.yaml` after a change, run:
+The test in `cmd/ate-setup/internal/chartcompare` installs each scenario that has `ate-setup-flags` twice, each time on its own envtest API server: once with `ate-setup deploy ate-system`, and once from `rendered.yaml`. It fails when the installs differ in a way that `differences.yaml` does not list. It leaves out the objects that `ate-setup` creates in code and the charts do not render, the bundled PostgreSQL and RustFS, and the test fixtures of the kind overlay. To rewrite `differences.yaml` after a change, run:
 
 ```sh
 go test ./cmd/ate-setup/internal/chartcompare -args -update-differences

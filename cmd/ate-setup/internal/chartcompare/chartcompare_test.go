@@ -27,6 +27,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/prototext"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -43,6 +45,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 	"go.ate.dev/substrate/internal/testenv"
+	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
 )
 
 const deployAteSystem = "deploy ate-system"
@@ -50,8 +53,9 @@ const deployAteSystem = "deploy ate-system"
 var updateDifferences = flag.Bool("update-differences", false, "write the differences that each scenario has to its differences.yaml")
 
 // excluded reports whether the comparison leaves an object out. These are the
-// objects that ate-setup creates in code, which the charts get in phase 2, the
-// bundled PostgreSQL and RustFS, and the test fixtures of the kind overlay.
+// objects that ate-setup creates in code and the charts do not render, which
+// the charts get in phase 2, the bundled PostgreSQL and RustFS, and the test
+// fixtures of the kind overlay. Both installs have the postgres NetworkPolicy.
 func excluded(kind, namespace, name string) bool {
 	switch kind + "/" + namespace + "/" + name {
 	case "Secret/ate-system/actor-id-ca-certs",
@@ -62,10 +66,7 @@ func excluded(kind, namespace, name string) bool {
 		"Secret/podcertificate-controller-system/pod-identity-ca-pool",
 		"Secret/podcertificate-controller-system/postgres-ca-pool",
 		"Secret/podcertificate-controller-system/service-dns-ca-pool",
-		"ConfigMap/ate-system/ate-api-config",
 		"ConfigMap/ate-system/ate-api-authentication",
-		"ConfigMap/ate-system/ate-api-server-envvars",
-		"ConfigMap/ate-system/k8s-credential-provider-namespace-policy",
 		"ClusterRole//ate-prometheus",
 		"RoleBinding/ate-system/ate-prometheus":
 		return true
@@ -76,7 +77,9 @@ func excluded(kind, namespace, name string) bool {
 		return true
 	case namespace == "otel-system", kind == "Namespace" && name == "otel-system":
 		return true
-	case namespace == "ate-system" && (name == "postgres" || strings.HasPrefix(name, "postgres-") || strings.HasPrefix(name, "rustfs")):
+	case namespace == "ate-system" && strings.HasPrefix(name, "rustfs"):
+		return true
+	case namespace == "ate-system" && kind != "NetworkPolicy" && (name == "postgres" || strings.HasPrefix(name, "postgres-")):
 		return true
 	}
 	return false
@@ -314,7 +317,7 @@ func normalize(obj *unstructured.Unstructured) map[string]any {
 		}
 	}
 	if obj.GetKind() == "ConfigMap" {
-		parseYAMLData(obj.Object)
+		parseConfigData(obj.Object)
 	}
 	sortFlags(obj.Object)
 	obj.SetLabels(withoutHelmKeys(obj.GetLabels()))
@@ -322,18 +325,34 @@ func normalize(obj *unstructured.Unstructured) map[string]any {
 	return withoutDigests(obj.Object).(map[string]any)
 }
 
-// parseYAMLData replaces each ConfigMap value under a .yaml or .yml key with
-// the data it holds, so that comments, anchors and layout do not count as
-// differences.
-func parseYAMLData(obj map[string]any) {
+// parseConfigData replaces each ConfigMap value under a .yaml or .yml key, and
+// the API server config under apiconfig.textproto, with the data it holds, so
+// that comments, anchors and layout do not count as differences. prototext
+// varies its spacing on purpose, so the text form cannot be compared.
+func parseConfigData(obj map[string]any) {
 	data, _ := obj["data"].(map[string]any)
 	for k, v := range data {
 		s, ok := v.(string)
-		if !ok || !(strings.HasSuffix(k, ".yaml") || strings.HasSuffix(k, ".yml")) {
+		if !ok {
+			continue
+		}
+		raw := []byte(s)
+		switch {
+		case k == "apiconfig.textproto":
+			var cfg ateconfigpb.APIConfig
+			if err := prototext.Unmarshal(raw, &cfg); err != nil {
+				continue
+			}
+			var err error
+			if raw, err = protojson.Marshal(&cfg); err != nil {
+				continue
+			}
+		case strings.HasSuffix(k, ".yaml"), strings.HasSuffix(k, ".yml"):
+		default:
 			continue
 		}
 		var parsed any
-		if err := yaml.Unmarshal([]byte(s), &parsed); err == nil {
+		if err := yaml.Unmarshal(raw, &parsed); err == nil {
 			data[k] = parsed
 		}
 	}

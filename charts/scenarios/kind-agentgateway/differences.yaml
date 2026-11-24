@@ -17,6 +17,16 @@
 # scenario, by object and field path, with the value from each install.
 # cmd/ate-setup/internal/chartcompare fails when the installs differ in any
 # other way. Run it with -update-differences to rewrite this file.
+ConfigMap/ate-system/ate-api-server-envvars:
+  data.ATE_API_POSTGRES_OWNER_ROLE:
+    ate-setup: substrate_owner
+    charts: null
+  data.ATE_API_POSTGRES_READ_WRITE_ROLE:
+    ate-setup: substrate_readwrite
+    charts: null
+  data.ATE_API_POSTGRES_SCHEMA:
+    ate-setup: null
+    charts: substrate
 ConfigMap/ate-system/ate-otel-config: only ate-setup
 ConfigMap/ate-system/atenet-egress: only ate-setup
 ConfigMap/ate-system/atenet-egress-agentgateway-substrate-config:
@@ -491,12 +501,6 @@ Deployment/ate-system/k8s-credential-provider:
     charts:
       cpu: 10m
       memory: 64Mi
-  spec.template.spec.securityContext.runAsGroup:
-    ate-setup: 65532
-    charts: null
-  spec.template.spec.securityContext.runAsUser:
-    ate-setup: 65532
-    charts: null
 Deployment/podcertificate-controller-system/podcertificate-controller:
   spec.template.spec.containers[controller].args:
     ate-setup:

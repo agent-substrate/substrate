@@ -82,7 +82,7 @@ tests:
       content:
         name: statusz
         containerPort: 4040
-- it: runs the credential provider as its image's non-root user
+- it: runs the credential provider as the non-root user of its image
   template: k8s-credential-provider.yaml
   documentSelector:
     path: kind
@@ -91,6 +91,8 @@ tests:
   - equal:
       path: spec.template.spec.securityContext
       value:
+        runAsUser: 65532
+        runAsGroup: 65532
         runAsNonRoot: true
 - it: admits the egress gateway pods to the credential provider
   template: k8s-credential-provider.yaml
