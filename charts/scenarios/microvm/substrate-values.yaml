@@ -15,7 +15,8 @@
 
 # substrate values for microVM sandboxes on a kind cluster that
 # hack/create-kind-cluster.sh creates on a host with /dev/kvm. The other
-# settings match the kind scenario.
+# settings match the kind-envoy scenario. The microVM settings do not depend
+# on the data plane.
 #
 # Before the install, run hack/install-postgres.sh --kind and
 # hack/install-rustfs.sh. The microVM assets must be in the RustFS bucket: see

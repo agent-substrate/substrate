@@ -60,7 +60,7 @@ jobs:
           node-image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
           suites: all
         - dataplane: envoy
-          scenario: kind
+          scenario: kind-envoy
         - dataplane: agentgateway
           scenario: kind-agentgateway
     env:

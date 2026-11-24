@@ -14,7 +14,7 @@
 
 
 # substrate-atelet values for the e2e suites in internal/e2e. Apply them after
-# the values of the kind or kind-agentgateway scenario in charts/scenarios, as
+# the values of the kind-envoy or kind-agentgateway scenario in charts/scenarios, as
 # hack/install-charts-kind.sh does with VALUES_OVERLAY.
 
 atelet:

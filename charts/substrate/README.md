@@ -39,14 +39,14 @@ go run ./cmd/ate-setup create api-authentication-config
 helm upgrade --install substrate ./charts/substrate \
   --namespace ate-system \
   -f object-store.yaml \
-  --set atenetDataPlane=envoy \
+  --set atenetDataPlane=<envoy|agentgateway> \
   --set ateApi.snapshotLocation=gs://<bucket>/ \
   --set postgres.readWriteConnectionStringSecretRef.name=substrate-postgres-readwrite \
   --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner
 ```
 
-On a kind cluster, pass the values files in `charts/scenarios/kind`, or in
-`charts/scenarios/kind-agentgateway` for the agentgateway data plane, to the
+On a kind cluster, pass the values files in `charts/scenarios/kind-envoy` or
+`charts/scenarios/kind-agentgateway`, for the data plane you want, to the
 matching releases: `substrate-atelet-values.yaml` and `substrate-values.yaml`.
 Run `hack/install-postgres.sh --kind` and `hack/install-rustfs.sh` before the
 releases.

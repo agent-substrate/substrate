@@ -13,7 +13,12 @@
 # limitations under the License.
 
 
-# The chart defaults, with the values that have no default.
-atenetDataPlane: envoy
-ateApi:
-  snapshotLocation: gs://ate-snapshots/
+# The ate-setup flags that install this scenario. The comparison test in
+# cmd/ate-setup/internal/chartcompare reads one flag from each line.
+--kind
+--atenet-dataplane=envoy
+--sandbox-classes=gvisor
+--credential-provider={"name":"k8s.io"}
+--image-repo=ghcr.io/agent-substrate/substrate
+# A tag with a digest keeps ate-setup from looking the images up.
+--image-tag=0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000

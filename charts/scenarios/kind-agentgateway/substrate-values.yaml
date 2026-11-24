@@ -14,7 +14,7 @@
 
 
 # substrate values for a kind cluster that hack/create-kind-cluster.sh creates.
-# The settings match the kind overlay in manifests/ate-install/kind.
+# The settings match the kind-agentgateway overlay in manifests/ate-install.
 #
 # Before the install, run hack/install-postgres.sh --kind and
 # hack/install-rustfs.sh.
