@@ -5069,8 +5069,9 @@ type UpdateActorRequest struct {
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:customValidation # descend into metadata
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+	// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6158,8 +6159,9 @@ type UpdateTagRequest struct {
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:customValidation # descend into metadata
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+	// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
 	Tag           *Tag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6715,8 +6717,9 @@ type UpdateWorkerRequest struct {
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:customValidation # descend into metadata
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
+	// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -1811,8 +1811,9 @@ message UpdateActorRequest {
   //
   // +k8s:required
   // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:customValidation # descend into metadata
   // +k8s:subfield(metadata)=+k8s:required
-  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+  // +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
   Actor actor = 1;
 }
 
@@ -2078,8 +2079,9 @@ message UpdateTagRequest {
   //
   // +k8s:required
   // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:customValidation # descend into metadata
   // +k8s:subfield(metadata)=+k8s:required
-  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+  // +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
   Tag tag = 1;
 }
 
@@ -2199,8 +2201,9 @@ message UpdateWorkerRequest {
   //
   // +k8s:required
   // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:customValidation # descend into metadata
   // +k8s:subfield(metadata)=+k8s:required
-  // +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
+  // +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:forbidden
   Worker worker = 1;
 }
 

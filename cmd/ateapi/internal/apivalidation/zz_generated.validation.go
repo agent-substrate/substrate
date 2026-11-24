@@ -9440,6 +9440,24 @@ func Validate_UpdateActorRequest(
 					return // do not proceed
 				}
 			}()
+			func() { // cohort = "metadata.atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Actor) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -9625,6 +9643,24 @@ func Validate_UpdateTagRequest(
 					return // do not proceed
 				}
 			}()
+			func() { // cohort = "metadata.atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Tag) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -9675,6 +9711,32 @@ func Validate_UpdateWorkerRequest(
 						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
 					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "metadata.atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Worker) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+								return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Worker) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue)
+					}).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {

@@ -158,7 +158,7 @@ func ValidateCustom_Worker_WorkerSpiffeId(_ context.Context, _ operation.Operati
 	return validateSPIFFEID(fldPath, *value)
 }
 
-// This exists only because nested subfield tags are not supported yet.
+// This exists to do partial validation of the target resource in an update.
 func ValidateCustom_UpdateWorkerRequest_Worker(ctx context.Context, op operation.Operation, fldPath *field.Path, worker, _ *ateapi.Worker) field.ErrorList {
 	if worker == nil || worker.Metadata == nil {
 		return nil // handled by DV
@@ -166,11 +166,7 @@ func ValidateCustom_UpdateWorkerRequest_Worker(ctx context.Context, op operation
 
 	// Updates are validated in 2 steps: first the update request and then the
 	// resource itself. DV for the request doesn't descend into the resource
-	// metadata.  Once DV supports nested subfield tags, this can be changed to
-	// something like:
-	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:forbidden
-	// Workers are global-scoped, so metadata.atespace must be empty.
-	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), worker.Metadata, nil)
-	errs = append(errs, validate.ForbiddenValue(ctx, op, fldPath.Child("metadata", "atespace"), &worker.Metadata.Atespace, nil)...)
-	return errs
+	// metadata. What we need is something like:
+	//   +k8s:subfield(metadata)=+k8s:validateType
+	return Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), worker.Metadata, nil)
 }

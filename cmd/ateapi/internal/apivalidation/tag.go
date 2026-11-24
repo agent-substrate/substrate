@@ -20,7 +20,6 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -73,7 +72,7 @@ func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p
 	return nil
 }
 
-// This exists only because nested subfield tags are not supported yet.
+// This exists to do partial validation of the target resource in an update.
 func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapi.Tag) field.ErrorList {
 	if tag == nil || tag.Metadata == nil {
 		return nil // handled by DV
@@ -81,12 +80,9 @@ func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Opera
 
 	// Updates are validated in 2 steps: first the update request and then the
 	// resource itself. DV for the request doesn't descend into the resource
-	// metadata.  Once DV supports nested subfield tags, this can be changed to
-	// something like:
-	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
-	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), tag.Metadata, nil)
-	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &tag.Metadata.Atespace, nil)...)
-	return errs
+	// metadata. What we need is something like:
+	//   +k8s:subfield(metadata)=+k8s:validateType
+	return Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), tag.Metadata, nil)
 }
 
 // ValidateCustom_TagStatus_Snapshot allows an update to record status.snapshot
