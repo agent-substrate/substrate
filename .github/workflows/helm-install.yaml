@@ -14,7 +14,7 @@
 
 # Installs the charts on kind and runs the e2e suites against the install: a
 # smoke subset on the older supported Kubernetes versions, and every suite on
-# the newest, each with both data planes. As in the e2e-test job of
+# the newest, each with both data planes. As in the e2e job of
 # pr-workflow, the full suites run once with the preview gates off and once
 # with all of them on. Each job installs the kind scenario of its data plane,
 # with the e2e values in hack/e2e-chart-values on top.
@@ -45,7 +45,6 @@ jobs:
     name: helm-install (${{ matrix.kubernetes }}, ${{ matrix.dataplane }}, ${{ matrix.suites }}${{ matrix.preview == 'on' && ', preview' || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    continue-on-error: ${{ matrix.dataplane == 'agentgateway' }} # As the agentgateway e2e-test job in pr-workflow.
     strategy:
       fail-fast: false
       matrix:
