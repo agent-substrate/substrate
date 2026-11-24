@@ -17,6 +17,9 @@ and if the collector can accept it. To make a measurement, read
 [telemetry/README.md](../../benchmarking/telemetry/README.md). For the prerequisites and the
 scenario ladder, read [observability.md](observability.md).
 
+To measure actors with external volumes, read
+[benchmarking/storage/README.md](../../benchmarking/storage/README.md).
+
 ## Deploy benchmarks
 
 > [!IMPORTANT]
