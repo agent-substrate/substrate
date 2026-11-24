@@ -93,7 +93,8 @@ type workerOTelSettings struct {
 	MetricsExporter string
 }
 
-// workerPoolLabel names the WorkerPool on each of its worker pods.
+// workerPoolLabel names the WorkerPool on its Deployment, worker pods and
+// NetworkPolicy. CacheOptions caches only Deployments that carry it.
 const workerPoolLabel = "ate.dev/worker-pool"
 
 const (
