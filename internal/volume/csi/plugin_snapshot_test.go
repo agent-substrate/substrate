@@ -129,19 +129,33 @@ func TestPlugin_CreateSnapshot(t *testing.T) {
 		name string
 		caps controllerCapsFunc
 		// driverID is the snapshot ID the driver returns.
-		driverID  string
-		driverErr error
-		wantErr   bool
-		wantCalls int
+		driverID string
+		// driverSize is the size_bytes the driver returns, and wantSize the
+		// SizeBytes CreateSnapshot reports.
+		driverSize int64
+		wantSize   int64
+		driverErr  error
+		wantErr    bool
+		wantCalls  int
 		// wantCap is whether CreateDeleteSnapshot is reported afterwards.
 		wantCap bool
 	}{
 		{
-			name:      "creates",
-			caps:      reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
-			driverID:  "snap-s",
-			wantCalls: 1,
-			wantCap:   true,
+			name:       "creates",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			driverID:   "snap-s",
+			driverSize: 2048,
+			wantSize:   2048,
+			wantCalls:  1,
+			wantCap:    true,
+		},
+		{
+			name:       "negative size is unknown",
+			caps:       reportCaps(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT),
+			driverID:   "snap-s",
+			driverSize: -1,
+			wantCalls:  1,
+			wantCap:    true,
 		},
 		{
 			name:    "refused without the capability",
@@ -177,6 +191,7 @@ func TestPlugin_CreateSnapshot(t *testing.T) {
 						SnapshotId:     tt.driverID,
 						SourceVolumeId: req.GetSourceVolumeId(),
 						ReadyToUse:     true,
+						SizeBytes:      tt.driverSize,
 					}}, nil
 				},
 			})
@@ -186,7 +201,7 @@ func TestPlugin_CreateSnapshot(t *testing.T) {
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Fatalf("CreateSnapshot error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if want := (volume.Snapshot{SnapshotID: "snap-s", SourceVolumeID: "v", ReadyToUse: true}); !tt.wantErr && snap != want {
+			if want := (volume.Snapshot{SnapshotID: "snap-s", SourceVolumeID: "v", ReadyToUse: true, SizeBytes: tt.wantSize}); !tt.wantErr && snap != want {
 				t.Errorf("CreateSnapshot = %+v, want %+v", snap, want)
 			}
 			if calls != tt.wantCalls {

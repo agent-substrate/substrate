@@ -66,6 +66,10 @@ type fakeSnapshotPlugin struct {
 	// noHandle makes CreateSnapshot succeed without a handle, standing in for
 	// a buggy driver.
 	noHandle bool
+	// badHandleOfVolume is the source volume ID whose snapshot handle gets
+	// badHandleSuffix, which the store rejects.
+	badHandleOfVolume string
+	badHandleSuffix   string
 	// readyToUse is what CreateSnapshot reports. A driver that finishes the
 	// copy in the background returns false here.
 	readyToUse bool
@@ -139,6 +143,9 @@ func (f *fakeSnapshotPlugin) CreateSnapshot(ctx context.Context, req volume.Crea
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := "snap-" + req.Name
+	if req.SourceVolumeID == f.badHandleOfVolume {
+		id += f.badHandleSuffix
+	}
 	f.created = append(f.created, id)
 	return volume.Snapshot{
 		SnapshotID:     id,
@@ -649,6 +656,58 @@ func TestTagActorSnapshot_PartialVolumeFailureLeavesPendingTag(t *testing.T) {
 
 	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), &ateapi.ExternalVolumeSelection{}); err != nil {
 		t.Fatalf("TagActorSnapshot retry: %v", err)
+	}
+}
+
+// TestTagActorSnapshot_UnrecordableHandleFailsItsVolume verifies that a handle
+// the store would reject fails only its own volume: the other handles are
+// still recorded, and deleting the tag releases both snapshots.
+func TestTagActorSnapshot_UnrecordableHandleFailsItsVolume(t *testing.T) {
+	tests := []struct {
+		name   string
+		suffix string
+	}{
+		{name: "too long", suffix: strings.Repeat("x", 256)},
+		{name: "control character", suffix: "\x00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+			plugin := newFakeSnapshotPlugin()
+			plugin.badHandleOfVolume = "vol-cache"
+			plugin.badHandleSuffix = tt.suffix
+			w, objects := newVolumeTagWorkflow(persistence, plugin)
+
+			actor := seedTagSourceWithVolumes(t, ctx, persistence, objects, template, "actor-1", "data", "cache")
+			tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
+
+			_, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), &ateapi.ExternalVolumeSelection{})
+			if apierror.Code(err) != codes.Internal {
+				t.Fatalf("TagActorSnapshot error = %v, want Internal", err)
+			}
+			stored, err := persistence.GetTag(ctx, tagRef)
+			if err != nil {
+				t.Fatalf("GetTag: %v", err)
+			}
+			uid := stored.GetMetadata().GetUid()
+			want := map[string]*ateapi.ExternalVolumeSnapshotStatus{
+				"data":  {SnapshotId: "snap-" + tagVolumeSnapshotID(uid, "data"), ReadyToUse: true, RestoreSizeBytes: 1024},
+				"cache": {ErrorMessage: errorRecorded},
+			}
+			if diff := cmp.Diff(want, tagVolumeStatuses(t, ctx, persistence, stored), protocmp.Transform()); diff != "" {
+				t.Errorf("recorded volume snapshots mismatch (-want +got):\n%s", diff)
+			}
+
+			if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteTag: %v", err)
+			}
+			wantDeleted := []string{want["data"].GetSnapshotId(), "snap-" + tagVolumeSnapshotID(uid, "cache") + tt.suffix}
+			if diff := cmp.Diff(wantDeleted, plugin.snapshotsDeleted(), sortStrings); diff != "" {
+				t.Errorf("released snapshots mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

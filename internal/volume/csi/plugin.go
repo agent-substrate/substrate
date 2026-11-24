@@ -388,7 +388,9 @@ func snapshotFromCSI(snap *csi.Snapshot) volume.Snapshot {
 		SnapshotID:     snap.GetSnapshotId(),
 		SourceVolumeID: snap.GetSourceVolumeId(),
 		ReadyToUse:     snap.GetReadyToUse(),
-		SizeBytes:      snap.GetSizeBytes(),
+		// CSI reports 0 for an unknown size. A negative size is out of spec,
+		// so it is treated as unknown.
+		SizeBytes: max(snap.GetSizeBytes(), 0),
 	}
 }
 

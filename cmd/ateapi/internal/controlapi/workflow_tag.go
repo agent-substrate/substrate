@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/preview"
@@ -137,6 +138,9 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, e
 //
 // All volumes means every entry in status.external_volumes, including volumes
 // no container mounts. Leaving those out would produce a tag missing a volume.
+//
+// TODO: Once ExternalVolumeSource.ref lands, skip ref volumes when sel names
+// none, and fail with FailedPrecondition when sel names a ref or RWX volume.
 func selectTagVolumes(actor *ateapi.Actor, sel *ateapi.ExternalVolumeSelection) ([]*ateapi.ExternalVolumeStatus, error) {
 	if sel == nil {
 		return nil, nil
@@ -782,6 +786,13 @@ func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *at
 		})
 	}
 	wg.Wait()
+	// One rejected status would fail the whole batch write below, so it is
+	// recorded as that volume's failure instead.
+	for i, vol := range volumes {
+		if snapErrs[i] == nil {
+			snapErrs[i] = checkTagVolumeSnapshot(ctx, tag, vol, snaps[i])
+		}
+	}
 
 	index := make(map[string]int, len(volumes))
 	for i, vol := range volumes {
@@ -837,6 +848,18 @@ func tagVolumeSnapshotTaken(snap volume.Snapshot) *ateapi.ExternalVolumeSnapshot
 		ReadyToUse:       snap.ReadyToUse,
 		RestoreSizeBytes: snap.SizeBytes,
 	}
+}
+
+// checkTagVolumeSnapshot fails if the store would reject the snapshot the
+// driver returned for vol, such as a handle longer than snapshot_id allows.
+// DeleteTag recovers the handle from the driver and deletes the snapshot.
+func checkTagVolumeSnapshot(ctx context.Context, tag *ateapi.Tag, vol *ateapi.ExternalVolumeStatus, snap volume.Snapshot) error {
+	recorded := newTagVolumeSnapshot(tag, vol)
+	recorded.Status = tagVolumeSnapshotTaken(snap)
+	if errs := apivalidation.ValidateExternalVolumeSnapshot(ctx, recorded); len(errs) > 0 {
+		return fmt.Errorf("driver %q returned a snapshot of volume %q that cannot be recorded: %w", vol.GetVolumeType(), vol.GetName(), errs.ToAggregate())
+	}
+	return nil
 }
 
 // maxVolumeSnapshotErrorMessageLen is ExternalVolumeSnapshotStatus.error_message's
