@@ -598,7 +598,7 @@ message EgressPolicy {
   //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
-  // +k8s:customValidation # name must be "default"
+  // +k8s:subfield(name)=+k8s:format=ate-singleton-name
   ResourceMetadata metadata = 1;
 
   // Rules are an unordered set of allows. Traffic is denied when no rule
@@ -1908,8 +1908,7 @@ message GetActorEgressPolicyRequest {
   // Name of the singleton egress policy. Must be "default".
   //
   // +k8s:required
-  // +k8s:format=k8s-short-name
-  // +k8s:customValidation # must be "default"
+  // +k8s:format=ate-singleton-name
   string name = 2;
 }
 
@@ -1958,8 +1957,7 @@ message DeleteActorEgressPolicyRequest {
   // Name of the singleton egress policy. Must be "default".
   //
   // +k8s:required
-  // +k8s:format=k8s-short-name
-  // +k8s:customValidation # must be "default"
+  // +k8s:format=ate-singleton-name
   string name = 2;
 
   // Optional per-delete preconditions.
@@ -3119,7 +3117,8 @@ message AccessPolicy {
   // create_time, and update_time are server-managed.
   //
   // +k8s:required
-  // +k8s:customValidation # name must be "default"
+  // +k8s:subfield(atespace)=+k8s:forbidden
+  // +k8s:subfield(name)=+k8s:format=ate-singleton-name
   ResourceMetadata metadata = 1;
 
   // Role bindings granting permissions on the parent resource.
@@ -3156,8 +3155,7 @@ message GetGlobalAccessPolicyRequest {
   // Name of the singleton access policy. Must be "default".
   //
   // +k8s:required
-  // +k8s:format=k8s-short-name
-  // +k8s:customValidation # must be "default"
+  // +k8s:format=ate-singleton-name
   string name = 1;
 }
 
@@ -3190,8 +3188,7 @@ message GetAtespaceAccessPolicyRequest {
   // Name of the singleton access policy. Must be "default".
   //
   // +k8s:required
-  // +k8s:format=k8s-short-name
-  // +k8s:customValidation # must be "default"
+  // +k8s:format=ate-singleton-name
   string name = 2;
 }
 
@@ -3236,8 +3233,7 @@ message DeleteAtespaceAccessPolicyRequest {
   // Name of the singleton access policy. Must be "default".
   //
   // +k8s:required
-  // +k8s:format=k8s-short-name
-  // +k8s:customValidation # must be "default"
+  // +k8s:format=ate-singleton-name
   string name = 2;
 
   // Optional per-delete preconditions.

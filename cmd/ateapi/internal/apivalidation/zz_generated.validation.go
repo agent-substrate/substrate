@@ -21,6 +21,7 @@ package apivalidation
 
 import (
 	context "context"
+	regexp "regexp"
 
 	v1 "go.ate.dev/substrate/api/ateapi/v1"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -29,6 +30,8 @@ import (
 	validate "k8s.io/apimachinery/pkg/api/validate"
 	field "k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+var formatPattern_ate_singleton_name = regexp.MustCompile("(^$|^default$)")
 
 // Validate_AccessPolicy validates an instance of AccessPolicy according
 // to declarative validation rules in the API schema.
@@ -56,10 +59,33 @@ func Validate_AccessPolicy(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_AccessPolicy_Metadata(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "name"
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *v1.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name")
+					}); len(e) != 0 {
+					errs = append(errs, e...)
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceMetadata(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -2783,11 +2809,7 @@ func Validate_DeleteActorEgressPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_DeleteActorEgressPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -3075,11 +3097,7 @@ func Validate_DeleteAtespaceAccessPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_DeleteAtespaceAccessPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -3539,10 +3557,6 @@ func Validate_EgressPolicy(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_EgressPolicy_Metadata(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -3555,6 +3569,15 @@ func Validate_EgressPolicy(
 				}
 				if earlyReturn {
 					return // do not proceed
+				}
+			}()
+			func() { // cohort = "name"
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *v1.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name")
+					}); len(e) != 0 {
+					errs = append(errs, e...)
 				}
 			}()
 			// call the type's validation function
@@ -4277,11 +4300,7 @@ func Validate_GetActorEgressPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_GetActorEgressPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -4479,11 +4498,7 @@ func Validate_GetAtespaceAccessPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_GetAtespaceAccessPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -4582,11 +4597,7 @@ func Validate_GetGlobalAccessPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_GetGlobalAccessPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

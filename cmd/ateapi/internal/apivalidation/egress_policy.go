@@ -77,18 +77,6 @@ func validateEgressPolicyParentAtespace(actor *ateapi.ObjectRef, policy *ateapi.
 	return nil
 }
 
-func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapi.ResourceMetadata) field.ErrorList {
-	return validateSingletonName(root.Child("name"), meta.GetName())
-}
-
-func ValidateCustom_GetActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
-}
-
-func ValidateCustom_DeleteActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
-}
-
 // ValidateCustom_EgressPolicy_Rules rejects two rules that tie on a pattern
 // and a port, whatever their protocols: the gateway would have no way to pick
 // one. Defaults are applied before validation, so an http rule left on 80

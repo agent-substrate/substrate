@@ -1313,7 +1313,7 @@ type EgressPolicy struct {
 	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
-	// +k8s:customValidation # name must be "default"
+	// +k8s:subfield(name)=+k8s:format=ate-singleton-name
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Rules are an unordered set of allows. Traffic is denied when no rule
 	// matches.
@@ -5526,8 +5526,7 @@ type GetActorEgressPolicyRequest struct {
 	// Name of the singleton egress policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5714,8 +5713,7 @@ type DeleteActorEgressPolicyRequest struct {
 	// Name of the singleton egress policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional per-delete preconditions.
 	//
@@ -9348,7 +9346,8 @@ type AccessPolicy struct {
 	// create_time, and update_time are server-managed.
 	//
 	// +k8s:required
-	// +k8s:customValidation # name must be "default"
+	// +k8s:subfield(atespace)=+k8s:forbidden
+	// +k8s:subfield(name)=+k8s:format=ate-singleton-name
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Role bindings granting permissions on the parent resource.
 	//
@@ -9477,8 +9476,7 @@ type GetGlobalAccessPolicyRequest struct {
 	// Name of the singleton access policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9630,8 +9628,7 @@ type GetAtespaceAccessPolicyRequest struct {
 	// Name of the singleton access policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9814,8 +9811,7 @@ type DeleteAtespaceAccessPolicyRequest struct {
 	// Name of the singleton access policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional per-delete preconditions.
 	//

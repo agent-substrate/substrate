@@ -169,7 +169,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("egress_policy", "metadata", "name"), "other", `must be "default"`).WithOrigin("custom=default"),
+			field.Invalid(field.NewPath("egress_policy", "metadata", "name"), "other", `must be "default"`).WithOrigin("format=ate-singleton-name"),
 		},
 	}, {
 		name: "mismatched policy atespace",
@@ -267,7 +267,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default"),
+			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name"),
 		},
 	}}
 	for _, tc := range tests {
@@ -417,7 +417,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default"),
+			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name"),
 		},
 	}}
 	for _, tc := range tests {
