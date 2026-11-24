@@ -303,17 +303,18 @@ type Image struct {
 	// first. Each contains the unpacked tree under "fs/". Empty for an image
 	// the image provider plugin prepared.
 	LayerDirs []string
-	// ProviderDirs are the overlayfs lowerdirs the image provider plugin
-	// returned, bottom-most first. Empty for a Store image.
-	ProviderDirs []string
-	// LeaseID is the image provider plugin's lease on ProviderDirs.
-	LeaseID string
+	// ProviderRootfs is the read-only rootfs directory the image provider
+	// plugin returned. Empty for a Store image.
+	ProviderRootfs string
 }
 
 // LowerDirs returns the image's overlayfs lowerdirs, bottom-most first.
 func (img *Image) LowerDirs() []string {
 	if len(img.LayerDirs) == 0 {
-		return slices.Clone(img.ProviderDirs)
+		if img.ProviderRootfs == "" {
+			return nil
+		}
+		return []string{img.ProviderRootfs}
 	}
 	return storeLowerDirs(img.LayerDirs)
 }
