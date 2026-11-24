@@ -207,7 +207,7 @@ spec:
     - key: app
       operator: NotIn
       values:
-      - k8s-credential-provider
+      - {{ include "substrate.fullname" (list "k8s-credential-provider" .) }}
   policyTypes:
   - Ingress
   ingress:

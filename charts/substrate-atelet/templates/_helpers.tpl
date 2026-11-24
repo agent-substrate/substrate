@@ -80,8 +80,21 @@ substrate release references.
 {{- define "substrate.componentImage" -}}
 {{- $name := index . 0 -}}
 {{- $ctx := index . 1 -}}
-{{- $registry := default $ctx.Values.image.registry (($ctx.Values.global).imageRegistry) -}}
-{{- printf "%s/%s/%s:%s" $registry $ctx.Values.image.repository $name ($ctx.Values.image.tag | default $ctx.Chart.AppVersion) -}}
+{{/* image.registry is the registry host only, joined onto image.repository,
+     so one global.imageRegistry value redirects every image. A path in
+     registry would render a doubled prefix that fails only at pod start, so
+     it fails the render here instead and names the split. A ko:// registry is
+     an importpath prefix for `ko resolve`, so the guard lets it through. */}}
+{{- if and (contains "/" $ctx.Values.image.registry) (not (contains "://" $ctx.Values.image.registry)) -}}
+{{- fail (printf "image.registry (%q) carries a path. It is now the registry host only: keep the path in image.repository, e.g. registry: ghcr.io, repository: agent-substrate/substrate." $ctx.Values.image.registry) -}}
+{{- end -}}
+{{- $registry := printf "%s/%s" (default $ctx.Values.image.registry (($ctx.Values.global).imageRegistry)) $ctx.Values.image.repository -}}
+{{- $tag := $ctx.Values.image.tag | default $ctx.Chart.AppVersion -}}
+{{- if ne $tag "<none>" -}}
+{{- printf "%s/%s:%s" $registry $name $tag -}}
+{{- else -}}
+{{- printf "%s/%s" $registry $name -}}
+{{- end -}}
 {{- end -}}
 
 {{/* A full image reference moved onto global.imageRegistry. Copied from the substrate chart. */}}

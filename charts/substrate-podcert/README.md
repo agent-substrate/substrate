@@ -31,7 +31,8 @@ release names prefix this name (for example, `team-ate-api-server`).
 
 Use `postgresClients` to authorize additional service accounts to request fixed
 PostgreSQL login identities. Entries use
-`namespace/service-account=username[,username]` form.
+`namespace/service-account=username[,username]` form. The controller refuses
+the administrator login `postgres`.
 
 Configure the controller image through `image.registry`, `image.repository`,
 and `image.tag`. `global.imageRegistry` overrides the registry, and

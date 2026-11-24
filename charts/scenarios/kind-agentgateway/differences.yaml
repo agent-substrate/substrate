@@ -84,7 +84,9 @@ DaemonSet/ate-system/atelet:
   spec.template.spec.containers[atelet].args:
     ate-setup: []
     charts:
+    - --ateapi-address=k8s:///api.ate-system.svc:443
     - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+    - --ateapi-server-name=api.ate-system.svc
     - --herder-allowed-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-api-server
     - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
   spec.template.spec.containers[atelet].env[OTEL_LOGS_EXPORTER]:

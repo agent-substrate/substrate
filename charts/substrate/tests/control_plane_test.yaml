@@ -92,6 +92,21 @@ tests:
       path: spec.template.spec.securityContext
       value:
         runAsNonRoot: true
+- it: admits the egress gateway pods to the credential provider
+  template: k8s-credential-provider.yaml
+  documentSelector:
+    path: kind
+    value: NetworkPolicy
+  asserts:
+  - equal:
+      path: spec.podSelector.matchLabels.app
+      value: custom-k8s-credential-provider
+  - contains:
+      path: spec.ingress[0].from
+      content:
+        podSelector:
+          matchLabels:
+            app: atenet-egress
 - it: stops OTLP push without an endpoint but keeps the scraped metrics
   template: ate-controller.yaml
   documentSelector:
@@ -188,7 +203,7 @@ tests:
       content:
         key: app
         operator: NotIn
-        values: [k8s-credential-provider]
+        values: [custom-k8s-credential-provider]
   - notContains:
       path: spec.ingress[0].ports
       content:

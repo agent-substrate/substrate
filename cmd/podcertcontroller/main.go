@@ -101,7 +101,7 @@ var (
 	postgresClients = pflag.StringArray(
 		"postgres-client",
 		nil,
-		"Additional PostgreSQL certificate client in namespace/service-account=username[,username] form. May be repeated.",
+		"Additional PostgreSQL certificate client in namespace/service-account=username[,username] form, for any login but postgres. May be repeated.",
 	)
 
 	workersPerSigner = pflag.Int(

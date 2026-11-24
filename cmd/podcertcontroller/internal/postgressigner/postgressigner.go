@@ -72,6 +72,10 @@ func ParseClient(value string) (Client, error) {
 		if username == "" {
 			return Client{}, fmt.Errorf("contains an empty username")
 		}
+		// The signer never issues the administrator login.
+		if username == "postgres" {
+			return Client{}, fmt.Errorf("names the administrator login postgres")
+		}
 		client.Usernames = append(client.Usernames, username)
 	}
 	return client, nil

@@ -448,6 +448,8 @@ spec:
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         - '--herder-allowed-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-api-server'
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        - '--ateapi-address=k8s:///api.ate-system.svc:443'
+        - '--ateapi-server-name=api.ate-system.svc'
         - --localhost-registry-replacement=kind-registry:5000
         - --log-level=debug
         securityContext:

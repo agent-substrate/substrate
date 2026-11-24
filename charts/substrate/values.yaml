@@ -275,7 +275,7 @@ global:
   imageRegistry: ""
   # -- Pull secrets merged (union) into each pod's own imagePullSecrets list.
   imagePullSecrets: []
-  # -- Fallback imagePullPolicy where a container does not set one.
+  # -- imagePullPolicy of the credential provider. Empty uses IfNotPresent.
   imagePullPolicy: ""
 
 # Pull secrets for every pod this chart renders. Merged with global.imagePullSecrets.
@@ -295,4 +295,3 @@ image:
 
 images:
   agentgateway: cr.agentgateway.dev/agentgateway:v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
-  busybox: busybox:1.36

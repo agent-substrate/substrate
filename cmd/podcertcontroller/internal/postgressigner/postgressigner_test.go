@@ -233,7 +233,7 @@ func TestParseClient(t *testing.T) {
 	if client.Namespace != "application" || client.ServiceAccount != "controller" || !slices.Equal(client.Usernames, []string{"owner_user", "runtime_user"}) {
 		t.Fatalf("unexpected client: %+v", client)
 	}
-	for _, value := range []string{"", "application", "application/controller", "/controller=user", "application/=user", "application/controller="} {
+	for _, value := range []string{"", "application", "application/controller", "/controller=user", "application/=user", "application/controller=", "application/controller=user,postgres"} {
 		if _, err := ParseClient(value); err == nil {
 			t.Errorf("ParseClient(%q) succeeded", value)
 		}

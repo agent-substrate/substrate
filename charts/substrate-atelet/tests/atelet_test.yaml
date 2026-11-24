@@ -80,6 +80,12 @@ tests:
       path: spec.template.spec.containers[0].args
       content: --herder-allowed-spiffe-id=spiffe://cluster.local/ns/custom-system/sa/custom-ate-api-server
   - contains:
+      path: spec.template.spec.containers[0].args
+      content: --ateapi-address=k8s:///custom-api.custom-system.svc:443
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --ateapi-server-name=custom-api.custom-system.svc
+  - contains:
       path: spec.template.spec.tolerations
       content:
         key: cloud.google.com/compute-class

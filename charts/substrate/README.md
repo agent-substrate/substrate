@@ -56,8 +56,10 @@ Install substrate-atelet before substrate, and upgrade them in that order. The
 atelet before ate-api-server.
 
 By default, component images are pulled from `ghcr.io/agent-substrate/substrate`
-using the chart `appVersion` as the tag. Override `image.registry` and
-`image.tag` to install from a different image repository or tag.
+using the chart `appVersion` as the tag. The charts have `appVersion` 0.1.0,
+which names no image, so set `image.tag` to a release tag. Override
+`image.registry` and `image.tag` to install from a different image repository
+or tag.
 
 ## Data plane
 
@@ -271,4 +273,6 @@ Create both group roles and all grants before installation, then set
 `postgres.readWriteRole` and `postgres.ownerRole` to those names. Use distinct
 roles and table schemas for separate installs sharing one database. Give each
 install separate logins and grant each login membership only in its install's
-roles.
+roles. With `postgres.clientCertificates.enabled`, the logins are always
+`substrate_owner_user` and `substrate_readwrite_user`, so installs that share a
+database also share the logins.
