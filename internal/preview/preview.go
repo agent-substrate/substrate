@@ -24,6 +24,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"k8s.io/apimachinery/pkg/api/operation"
 )
 
 // Gate identifies a gate-controlled preview feature.  Preview gates are
@@ -183,18 +185,38 @@ func IsEnabled(gate Gate) bool {
 	return globalStateMap[string(gate)]
 }
 
-// AsMap returns the map of known gate names to their enabled state.
-// The returned map MUST NOT be modified.
-//
-// TODO: Fix this to use an interface when DV supports it.
-func AsMap() map[string]bool {
-	return globalStateMap
+// implement operation.OptionGetter
+type optionGetter struct {
+	gates map[string]bool
 }
 
-// DisabledMap returns the map of known gate names, all disabled.
-// The returned map MUST NOT be modified.
-//
-// TODO: Fix this to use an interface when DV supports it.
-func DisabledMap() map[string]bool {
-	return globalDisabledMap
+func (o optionGetter) Get(gate string) (enabled, defined bool) {
+	enabled, defined = o.gates[gate]
+	return enabled, defined
+}
+
+var _ *operation.OptionGetter = nil
+
+// NewOptionGetter returns an operation.OptionGetter that can be used to query
+// the enabled state of preview gates.
+func NewOptionGetter() operation.OptionGetter {
+	return optionGetter{globalStateMap}
+}
+
+// NewDisabledOptionGetter returns an operation.OptionGetter that can be used to
+// report all preview gates as disabled.
+func NewDisabledOptionGetter() operation.OptionGetter {
+	return optionGetter{globalDisabledMap}
+}
+
+// EnabledGates returns the list of enabled preview gates, sorted.
+func EnabledGates() []Gate {
+	ret := make([]Gate, 0, len(globalStateMap))
+	for k, v := range globalStateMap {
+		if v {
+			ret = append(ret, Gate(k))
+		}
+	}
+	slices.Sort(ret)
+	return ret
 }

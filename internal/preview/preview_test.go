@@ -75,7 +75,7 @@ func TestInit(t *testing.T) {
 				}
 				return
 			}
-			if diff := cmp.Diff(tc.want, AsMap()); diff != "" {
+			if diff := cmp.Diff(tc.want, globalStateMap); diff != "" {
 				t.Errorf("AsMap() mismatch (-want +got):\n%s", diff)
 			}
 		})
