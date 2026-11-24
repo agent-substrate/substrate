@@ -389,7 +389,7 @@ jobs:
       # internal/e2e/sandbox.go). Empty selects gVisor.
       env:
         E2E_SANDBOX_CLASS: ${{ matrix.sandbox == 'microvm' && 'microvm' || '' }}
-        E2E_PARALLELISM: 8
+        E2E_PARALLELISM: ${{ matrix.sandbox == 'microvm' && matrix.ip_family == 'ipv6' && 4 || 8 }}
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/${{ env.LANE }}.xml
       run: hack/run-e2e-kind.sh -args --no-color --preview="${ATE_PREVIEW}"
     # The lane must have reported tests; a `-run` filter that stops matching
