@@ -1462,7 +1462,7 @@ func TestValidateVolume(t *testing.T) {
 		}, {
 			name: "external: storage_volume_id with a control character",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "vol\x01" }),
-			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "")},
+			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "").WithOrigin("format=ate-volume-storage-id")},
 		}, {
 			name: "external: storage_volume_id too long",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = strings.Repeat("x", 257) }),
@@ -1473,7 +1473,7 @@ func TestValidateVolume(t *testing.T) {
 		}, {
 			name: "external: invalid volume_type: uppercase",
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
-			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
+			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "").WithOrigin("format=ate-volume-type-name")},
 		}, {
 			name: "external: volume_context with one long value, as a CSI driver may return",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {
@@ -1735,7 +1735,7 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "env: name with equals sign",
 			obj:  env(func(e *ateletpb.EnvVar) { e.Name = "A=B" }),
-			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
+			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "").WithOrigin("format=ate-env-var-name")},
 		}, {
 			name: "env: name too long",
 			obj:  env(func(e *ateletpb.EnvVar) { e.Name = strings.Repeat("N", 257) }),
@@ -1799,7 +1799,7 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "probe: path without a leading slash",
 			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "healthz" }),
-			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
+			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 		}, {
 			name: "probe: missing port",
 			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Port = 0 }),

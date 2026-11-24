@@ -512,56 +512,12 @@ func TestValidateMountPath(t *testing.T) {
 	})
 }
 
-func TestValidateHTTPGetPath(t *testing.T) {
-	runStringRule(t, ValidateHTTPGetPath, []stringRuleCase{
-		{"empty is left to tags", "", false},
-		{"simple", "/healthz", false},
-		{"percent escape", "/a%20b", false},
-		{"no leading slash", "healthz", true},
-		{"query", "/healthz?x=1", true},
-		{"fragment", "/healthz#x", true},
-		{"bad percent escape", "/a%2", true},
-	})
-}
-
-func TestValidateEnvVarName(t *testing.T) {
-	runStringRule(t, ValidateEnvVarName, []stringRuleCase{
-		{"empty is left to tags", "", false},
-		{"conventional", "HOME_DIR", false},
-		{"printable punctuation", "a.b-c", false},
-		{"equals sign", "A=B", true},
-		{"control character", "A\tB", true},
-		{"non-ASCII", "é", true},
-	})
-}
-
 func TestValidateProjectedPath(t *testing.T) {
 	runStringRule(t, ValidateProjectedPath, []stringRuleCase{
 		{"empty is left to tags", "", false},
 		{"relative file", "identity/name", false},
 		{"absolute", "/etc/name", true},
 		{"escape", "../name", true},
-	})
-}
-
-func TestValidateStorageVolumeID(t *testing.T) {
-	runStringRule(t, ValidateStorageVolumeID, []stringRuleCase{
-		{"empty", "", false},
-		{"plain", "projects/p/disks/d-1", false},
-		{"newline is allowed", "a\nb", false},
-		{"NUL", "a\x00b", true},
-		{"DEL", "a\x7fb", true},
-		{"C1 control", "a\u0085b", true},
-	})
-}
-
-func TestValidateVolumeType(t *testing.T) {
-	runStringRule(t, ValidateVolumeType, []stringRuleCase{
-		{"empty", "", false},
-		{"dns subdomain", "pd.csi.storage.gke.io", false},
-		{"substrate prefix", "substrate.io/gcs", false},
-		{"uppercase", "PD", true},
-		{"other prefix", "example.io/gcs", true},
 	})
 }
 

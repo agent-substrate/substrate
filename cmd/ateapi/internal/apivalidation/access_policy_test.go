@@ -101,7 +101,7 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		req: &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
 			p.Metadata.Name = "other"
 		})},
-		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("custom=default")},
+		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("format=ate-singleton-name")},
 	}, {
 		// editor is an atespace-only role.
 		name: "editor role",
@@ -186,7 +186,7 @@ func TestValidateGetGlobalAccessPolicyRequest(t *testing.T) {
 	}, {
 		name:      "wrong name",
 		req:       &ateapi.GetGlobalAccessPolicyRequest{Name: "other"},
-		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestValidateCreateAtespaceAccessPolicyRequest(t *testing.T) {
 		req: &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
 			p.Metadata.Name = "other"
 		})},
-		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("custom=default")},
+		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("format=ate-singleton-name")},
 	}, {
 		name: "unknown role",
 		req: &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
@@ -332,7 +332,7 @@ func TestValidateGetAtespaceAccessPolicyRequest(t *testing.T) {
 	}, {
 		name:      "wrong name",
 		req:       &ateapi.GetAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, Name: "other"},
-		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -414,7 +414,7 @@ func TestValidateDeleteAtespaceAccessPolicyRequest(t *testing.T) {
 	}, {
 		name:      "wrong name",
 		req:       &ateapi.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, Name: "other"},
-		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -907,7 +907,7 @@ func TestValidateExternalVolume(t *testing.T) {
 	}, {
 		name: "invalid storage volume id with null U+0000",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "vol\x00id" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "").WithOrigin("format=ate-volume-storage-id")},
 	}, {
 		name: "storage volume id too long",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = strings.Repeat("x", 257) }),
@@ -919,17 +919,14 @@ func TestValidateExternalVolume(t *testing.T) {
 	}, {
 		name: "invalid volume type with uppercase",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeType = "MockPlugin" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "").WithOrigin("format=ate-volume-type-name")},
 	}, {
 		name: "valid volume type with 253 characters",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeType = strings.Repeat("a", 253) }),
 	}, {
 		name: "invalid volume type exceeding 253 characters",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeType = strings.Repeat("a", 254) }),
-		want: field.ErrorList{
-			field.Invalid(field.NewPath("volume_type"), nil, ""),
-			field.TooLong(field.NewPath("volume_type"), nil, 253).WithOrigin("maxLength"),
-		},
+		want: field.ErrorList{field.TooLong(field.NewPath("volume_type"), nil, 253).WithOrigin("maxLength")},
 	}, {
 		name: "valid volume with substrate.io prefixed volume type",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeType = "substrate.io/mock" }),

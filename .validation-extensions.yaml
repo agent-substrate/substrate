@@ -1,0 +1,64 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Custom validation rules for Agent Substrate.  Each new format needs an
+# exhaustive test in internal/apivalidationtest/doc.go
+formats:
+  # Names of singleton resources
+  - name: ate-singleton-name
+    docs: This field must be "default"
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^default$)
+    message: must be "default"
+
+  # HTTP probe paths
+  - name: ate-http-probe-path
+    docs: This field must be a valid HTTP path with valid escapes and no query or fragment components
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^/([A-Za-z0-9\-._~!$&'\(\)*+,;=:@/]|%[0-9A-Fa-f]{2})*$)
+    message: must be a valid HTTP path (RFC 3986)
+
+  # Environment variable names
+  - name: ate-env-var-name
+    docs: This field must be a valid environment variable name
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^[ -<>-~]+$)
+    message: may contain any printable ASCII character except '='
+
+  # Volume plugin or CSI driver names
+  - name: ate-volume-type-name
+    docs: This field must be a DNS subdomain, optionally prefixed with "substrate.io/"
+    # allow optional/required to cover "" for subfields
+    # TODO: this prefix is not a domain we own!
+    pattern: (^$|^(substrate\.io/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$)
+    message: must be a DNS subdomain, optionally prefixed with "substrate.io/"
+
+  # External volume storage IDs
+  - name: ate-volume-storage-id
+    docs: This field must not contain control characters other than tab, newline and carriage return
+    pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]*$'
+    message: must not contain control characters
+
+  # HTTP header names
+  - name: ate-http-header-name
+    docs: This field must be a valid HTTP header name (RFC 9110 token)
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^[-A-Za-z0-9!#$%&'*+.^_`|~]+$)
+    message: must be an HTTP header name
+
+  # HTTP header values
+  - name: ate-http-header-value
+    docs: This field must be a valid HTTP field value (no control characters other than tab)
+    pattern: '^[^\x00-\x08\x0A-\x1F\x7F]*$'
+    message: must be a valid HTTP field value

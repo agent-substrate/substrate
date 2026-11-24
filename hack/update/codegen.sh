@@ -98,6 +98,7 @@ function codegen::validation() {
             --readonly-pkg=google.golang.org/protobuf/types/known/timestamppb \
             --readonly-pkg=google.golang.org/protobuf/types/known/fieldmaskpb \
             --readonly-pkg=google.golang.org/protobuf/types/known/emptypb \
+            --validation-extensions-file=./.validation-extensions.yaml \
             "./${dir}"
     done
 }

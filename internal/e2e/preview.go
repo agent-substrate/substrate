@@ -65,10 +65,8 @@ func initPreview() error {
 // previewDialOptions returns the options for the ATE API client to opt in to
 // preview features, if the install under test enabled any.
 func previewDialOptions() []grpc.DialOption {
-	for _, enabled := range preview.AsMap() {
-		if enabled {
-			return preview.DialOptionsWithOptIn()
-		}
+	if len(preview.EnabledGates()) > 0 {
+		return preview.DialOptionsWithOptIn()
 	}
 	return nil
 }

@@ -21,6 +21,7 @@ package apivalidation
 
 import (
 	context "context"
+	regexp "regexp"
 
 	v1 "go.ate.dev/substrate/api/ateapi/v1"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -29,6 +30,8 @@ import (
 	validate "k8s.io/apimachinery/pkg/api/validate"
 	field "k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+var formatPattern_ate_singleton_name = regexp.MustCompile("(^$|^default$)")
 
 // Validate_AccessPolicy validates an instance of AccessPolicy according
 // to declarative validation rules in the API schema.
@@ -56,10 +59,33 @@ func Validate_AccessPolicy(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_AccessPolicy_Metadata(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "name"
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *v1.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name")
+					}); len(e) != 0 {
+					errs = append(errs, e...)
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceMetadata(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -1359,10 +1385,56 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_ActorTemplate_Resources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
+			func() { // cohort = "limits"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Limits }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "limits.cpu_millicores"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Limits }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "cpu_millicores",
+							func(o *v1.Resources) *int64 { return &o.CpuMillicores }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *int64) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "limits.memory_bytes"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Limits }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "memory_bytes",
+							func(o *v1.Resources) *int64 { return &o.MemoryBytes }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *int64) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -2558,6 +2630,8 @@ func Validate_CreateWorkerRequest(
 }
 
 var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_CredentialHeader_ = validate.NewUnionMembership(validate.NewUnionMember("credential_uri"), validate.NewUnionMember("actor_jwt"))
+var formatPattern_ate_http_header_name = regexp.MustCompile("(^$|^[-A-Za-z0-9!#$%&'*+.^_`|~]+$)")
+var formatPattern_ate_http_header_value = regexp.MustCompile("^[^\\x00-\\x08\\x0A-\\x1F\\x7F]*$")
 
 // Validate_CredentialHeader validates an instance of CredentialHeader according
 // to declarative validation rules in the API schema.
@@ -2602,8 +2676,7 @@ func Validate_CredentialHeader(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_CredentialHeader_Header(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_http_header_name, "must be an HTTP header name", "format=ate-http-header-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -2634,8 +2707,7 @@ func Validate_CredentialHeader(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_CredentialHeader_Prefix(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_http_header_value, "must be a valid HTTP field value", "format=ate-http-header-value"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -2783,11 +2855,7 @@ func Validate_DeleteActorEgressPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_DeleteActorEgressPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -3075,11 +3143,7 @@ func Validate_DeleteAtespaceAccessPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_DeleteAtespaceAccessPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -3539,10 +3603,6 @@ func Validate_EgressPolicy(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_EgressPolicy_Metadata(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -3555,6 +3615,15 @@ func Validate_EgressPolicy(
 				}
 				if earlyReturn {
 					return // do not proceed
+				}
+			}()
+			func() { // cohort = "name"
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *v1.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name")
+					}); len(e) != 0 {
+					errs = append(errs, e...)
 				}
 			}()
 			// call the type's validation function
@@ -3792,6 +3861,8 @@ func Validate_EgressRule(
 	return errs
 }
 
+var formatPattern_ate_env_var_name = regexp.MustCompile("(^$|^[ -<>-~]+$)")
+
 // Validate_EnvVar validates an instance of EnvVar according
 // to declarative validation rules in the API schema.
 func Validate_EnvVar(
@@ -3818,8 +3889,7 @@ func Validate_EnvVar(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_EnvVar_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_env_var_name, "may contain any printable ASCII character except '='", "format=ate-env-var-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
@@ -3919,6 +3989,9 @@ func Validate_ExternalVolumeSource(
 	return errs
 }
 
+var formatPattern_ate_volume_storage_id = regexp.MustCompile("^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]*$")
+var formatPattern_ate_volume_type_name = regexp.MustCompile("(^$|^(substrate\\.io/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$)")
+
 // Validate_ExternalVolumeStatus validates an instance of ExternalVolumeStatus according
 // to declarative validation rules in the API schema.
 func Validate_ExternalVolumeStatus(
@@ -3986,8 +4059,7 @@ func Validate_ExternalVolumeStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_ExternalVolumeStatus_StorageVolumeId(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_volume_storage_id, "must not contain control characters", "format=ate-volume-storage-id"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
@@ -4027,8 +4099,7 @@ func Validate_ExternalVolumeStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_ExternalVolumeStatus_VolumeType(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_volume_type_name, "must be a DNS subdomain, optionally prefixed with \"substrate.io/\"", "format=ate-volume-type-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
@@ -4277,11 +4348,7 @@ func Validate_GetActorEgressPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_GetActorEgressPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -4479,11 +4546,7 @@ func Validate_GetAtespaceAccessPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_GetAtespaceAccessPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -4582,11 +4645,7 @@ func Validate_GetGlobalAccessPolicyRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_GetGlobalAccessPolicyRequest_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_singleton_name, "must be \"default\"", "format=ate-singleton-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -4869,6 +4928,8 @@ func Validate_GoldenSnapshotStatus(
 	return errs
 }
 
+var formatPattern_ate_http_probe_path = regexp.MustCompile("(^$|^/([A-Za-z0-9\\-._~!$&'\\(\\)*+,;=:@/]|%[0-9A-Fa-f]{2})*$)")
+
 // Validate_HttpGetAction validates an instance of HttpGetAction according
 // to declarative validation rules in the API schema.
 func Validate_HttpGetAction(
@@ -4895,8 +4956,7 @@ func Validate_HttpGetAction(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_HttpGetAction_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_http_probe_path, "must be a valid HTTP path (RFC 3986)", "format=ate-http-probe-path"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
@@ -9380,6 +9440,24 @@ func Validate_UpdateActorRequest(
 					return // do not proceed
 				}
 			}()
+			func() { // cohort = "metadata.atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Actor) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -9565,6 +9643,24 @@ func Validate_UpdateTagRequest(
 					return // do not proceed
 				}
 			}()
+			func() { // cohort = "metadata.atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Tag) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+								return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -9615,6 +9711,32 @@ func Validate_UpdateWorkerRequest(
 						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
 					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			func() { // cohort = "metadata.atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Worker) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+							func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+								return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+							})
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.Worker) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+							func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue)
+					}).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {

@@ -20,7 +20,6 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
-	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -91,28 +90,6 @@ func ValidateAtespaceAccessPolicyUpdate(ctx context.Context, fldPath *field.Path
 func ValidateDeleteAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.DeleteAtespaceAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
-}
-
-// ValidateCustom_AccessPolicy_Metadata requires an access policy to be the
-// unatespaced singleton named "default".
-func ValidateCustom_AccessPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapi.ResourceMetadata) field.ErrorList {
-	var errs field.ErrorList
-	if meta.GetAtespace() != "" {
-		errs = append(errs, field.Forbidden(root.Child("atespace"), "must not be set"))
-	}
-	return append(errs, validateSingletonName(root.Child("name"), meta.GetName())...)
-}
-
-func ValidateCustom_GetGlobalAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
-}
-
-func ValidateCustom_GetAtespaceAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
-}
-
-func ValidateCustom_DeleteAtespaceAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
 }
 
 // validateBindings checks that each binding names an allowed role at most once,

@@ -77,18 +77,6 @@ func validateEgressPolicyParentAtespace(actor *ateapi.ObjectRef, policy *ateapi.
 	return nil
 }
 
-func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapi.ResourceMetadata) field.ErrorList {
-	return validateSingletonName(root.Child("name"), meta.GetName())
-}
-
-func ValidateCustom_GetActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
-}
-
-func ValidateCustom_DeleteActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
-	return validateSingletonName(p, *name)
-}
-
 // ValidateCustom_EgressPolicy_Rules rejects two rules that tie on a pattern
 // and a port, whatever their protocols: the gateway would have no way to pick
 // one. Defaults are applied before validation, so an http rule left on 80
@@ -227,24 +215,6 @@ func validateHostnamePattern(raw string, p *field.Path) field.ErrorList {
 	return nil
 }
 
-func ValidateCustom_CredentialHeader_Header(_ context.Context, _ operation.Operation, p *field.Path, header, _ *string) field.ErrorList {
-	if !validHeaderName(*header) {
-		return field.ErrorList{
-			field.Invalid(p, *header, "must be an HTTP header name"),
-		}
-	}
-	return nil
-}
-
-func ValidateCustom_CredentialHeader_Prefix(_ context.Context, _ operation.Operation, p *field.Path, prefix, _ *string) field.ErrorList {
-	if !validHeaderValue(*prefix) {
-		return field.ErrorList{
-			field.Invalid(p, *prefix, "must be a valid HTTP field value prefix"),
-		}
-	}
-	return nil
-}
-
 func ValidateCustom_CredentialHeader_CredentialUri(_ context.Context, _ operation.Operation, p *field.Path, uri, _ *string) field.ErrorList {
 	if !validCredentialURI(*uri) {
 		return field.ErrorList{
@@ -273,27 +243,6 @@ func validCredentialURI(raw string) bool {
 	}
 	for _, part := range parts {
 		if part == "" {
-			return false
-		}
-	}
-	return true
-}
-
-func validHeaderName(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, c := range []byte(value) {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
-			return false
-		}
-	}
-	return true
-}
-
-func validHeaderValue(value string) bool {
-	for _, c := range []byte(value) {
-		if c != '\t' && (c < ' ' || c == 0x7f) {
 			return false
 		}
 	}

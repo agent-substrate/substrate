@@ -15,7 +15,6 @@
 package controllers
 
 import (
-	"slices"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -154,18 +153,12 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 	)
 
 	// worker gets preview features when the controller has them.
-	enabledGates := func() []string {
-		ret := []string{}
-		for k, v := range preview.AsMap() {
-			if v {
-				ret = append(ret, k)
-			}
-		}
-		// Map order is random; a stable arg avoids needless rollouts.
-		slices.Sort(ret)
-		return ret
+	gates := preview.EnabledGates()
+	enabledGates := make([]string, len(gates))
+	for i, g := range gates {
+		enabledGates[i] = string(g)
 	}
-	previewArg := "--preview=" + strings.Join(enabledGates(), ",")
+	previewArg := "--preview=" + strings.Join(enabledGates, ",")
 	args = append(args, previewArg)
 
 	containerAC := corev1ac.Container().

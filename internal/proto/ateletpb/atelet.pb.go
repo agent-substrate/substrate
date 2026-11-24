@@ -2359,11 +2359,11 @@ type ExternalVolumeSource struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
-	// +k8s:customValidation # no control characters
+	// +k8s:format=ate-volume-storage-id
 	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// +k8s:optional
 	// +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
-	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
+	// +k8s:format=ate-volume-type-name
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the
 	// driver's own, so the map is only bounded, not validated.
@@ -3187,7 +3187,7 @@ type EnvVar struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=256 # guardrail
-	// +k8s:customValidation # printable ASCII except '='
+	// +k8s:format=ate-env-var-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// +k8s:optional
 	// +k8s:maxLength=32768 # guardrail
@@ -3307,7 +3307,7 @@ type HttpGetAction struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=1024 # matches the template probe path's bound
-	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
+	// +k8s:format=ate-http-probe-path
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// TCP port to connect to (1..65535).
 	//

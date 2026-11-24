@@ -169,7 +169,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("egress_policy", "metadata", "name"), "other", `must be "default"`).WithOrigin("custom=default"),
+			field.Invalid(field.NewPath("egress_policy", "metadata", "name"), "other", `must be "default"`).WithOrigin("format=ate-singleton-name"),
 		},
 	}, {
 		name: "mismatched policy atespace",
@@ -267,7 +267,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default"),
+			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name"),
 		},
 	}}
 	for _, tc := range tests {
@@ -417,7 +417,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default"),
+			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=ate-singleton-name"),
 		},
 	}}
 	for _, tc := range tests {
@@ -799,7 +799,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Header = "bad header"
 		},
 		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name"),
+			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name").WithOrigin("format=ate-http-header-name"),
 		},
 	}, {
 		name: "duplicate header",
@@ -852,7 +852,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Prefix = "Bearer\r"
 		},
 		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
+			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value").WithOrigin("format=ate-http-header-value"),
 		},
 	}, {
 		name: "no credential source",
@@ -1026,32 +1026,6 @@ func TestCredentialURIValidation(t *testing.T) {
 	} {
 		if validCredentialURI(uri) {
 			t.Errorf("validCredentialURI(%q) = true", uri)
-		}
-	}
-}
-
-func TestHeaderValueValidation(t *testing.T) {
-	for _, value := range []string{"Bearer token", "value\tvalue", "\u0080\u0081"} {
-		if !validHeaderValue(value) {
-			t.Errorf("validHeaderValue(%q) = false", value)
-		}
-	}
-	for _, value := range []string{"a\rb", "a\nb", "a\x00b", "a\x1fb", "a\x7fb"} {
-		if validHeaderValue(value) {
-			t.Errorf("validHeaderValue(%q) = true", value)
-		}
-	}
-}
-
-func TestHeaderNameValidation(t *testing.T) {
-	for _, value := range []string{"Authorization", "x-custom_header", "!#$%&'*+-.^_`|~"} {
-		if !validHeaderName(value) {
-			t.Errorf("validHeaderName(%q) = false", value)
-		}
-	}
-	for _, value := range []string{"", "bad header", "bad:header", "héader"} {
-		if validHeaderName(value) {
-			t.Errorf("validHeaderName(%q) = true", value)
 		}
 	}
 }

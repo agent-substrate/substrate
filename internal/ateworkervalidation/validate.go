@@ -78,12 +78,6 @@ func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operati
 	return resources.ValidateHostPort(fldPath, *value)
 }
 
-// ValidateCustom_HttpGetAction_Path holds a wakeup probe's path to the RFC
-// 3986 path shape atelet already enforces, shared through internal/resources.
-func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateHTTPGetPath(fldPath, *value)
-}
-
 // ValidateCustom_VolumeMount_MountPath holds a mount path to the clean
 // absolute Unix path shape atelet already enforces, shared through
 // internal/resources.

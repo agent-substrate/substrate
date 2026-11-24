@@ -238,6 +238,14 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			tmpl.Resources = &ateapi.ResourceRequirements{}
 		})},
 		field.ErrorList{
+			field.Required(field.NewPath("actor_template", "resources", "limits"), ""),
+		},
+	}, {
+		"empty resources.limits",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{}}
+		})},
+		field.ErrorList{
 			field.Required(field.NewPath("actor_template", "resources", "limits", "cpu_millicores"), ""),
 			field.Required(field.NewPath("actor_template", "resources", "limits", "memory_bytes"), ""),
 		},
@@ -687,7 +695,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].Env = []*ateapi.EnvVar{{Name: "FOO=BAR"}}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "").WithOrigin("format=ate-env-var-name")},
 	}, {
 		name: "env missing name",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
@@ -821,7 +829,7 @@ func TestValidateActorTemplate(t *testing.T) {
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 	}, {
 		name: "wakeup probe path not starting with slash",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
@@ -830,7 +838,7 @@ func TestValidateActorTemplate(t *testing.T) {
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 	}, {
 		name: "valid volume_mount",
 		mutate: func(tmpl *ateapi.ActorTemplate) {

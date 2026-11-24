@@ -40,7 +40,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -544,37 +543,6 @@ func ValidateNestedMountPathsAt(paths []string, at func(i int) *field.Path) fiel
 	return errs
 }
 
-// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
-// characters only, with well-formed percent-escapes, and no query string
-// or fragment.
-var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
-
-// ValidateHTTPGetPath checks a wakeup probe's HTTP path.
-func ValidateHTTPGetPath(fldPath *field.Path, p string) field.ErrorList {
-	if p == "" {
-		return nil
-	}
-	if !httpGetPathRE.MatchString(p) {
-		return field.ErrorList{field.Invalid(fldPath, p, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
-	}
-	return nil
-}
-
-// envVarNameRE constrains env var names to any printable ASCII character
-// except '='.
-var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
-
-// ValidateEnvVarName checks an environment variable name.
-func ValidateEnvVarName(fldPath *field.Path, name string) field.ErrorList {
-	if name == "" {
-		return nil
-	}
-	if !envVarNameRE.MatchString(name) {
-		return field.ErrorList{field.Invalid(fldPath, name, "may contain any printable ASCII character except '='")}
-	}
-	return nil
-}
-
 // ValidateProjectedPath applies volumepath.ValidateProjected to a file path
 // projected into a system-info volume. atelet re-checks it before writing to
 // the host.
@@ -586,34 +554,6 @@ func ValidateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
 		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
 	}
 	return nil
-}
-
-// ValidateStorageVolumeID rejects control characters (U+0000-U+0008, U+000B,
-// U+000C, U+000E-U+001F, U+007F-U+009F) in an external volume's storage ID.
-func ValidateStorageVolumeID(fldPath *field.Path, id string) field.ErrorList {
-	for _, r := range id {
-		if (r >= 0x0000 && r <= 0x0008) ||
-			r == 0x000B ||
-			r == 0x000C ||
-			(r >= 0x000E && r <= 0x001F) ||
-			(r >= 0x007F && r <= 0x009F) {
-			return field.ErrorList{field.Invalid(fldPath, id, "must not contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F)")}
-		}
-	}
-	return nil
-}
-
-// ValidateVolumeType allows an optional "substrate.io/" prefix, followed by a
-// valid DNS-1123 subdomain.
-func ValidateVolumeType(fldPath *field.Path, volumeType string) field.ErrorList {
-	if volumeType == "" {
-		return nil
-	}
-	var errs field.ErrorList
-	for _, msg := range validation.IsDNS1123Subdomain(strings.TrimPrefix(volumeType, "substrate.io/")) {
-		errs = append(errs, field.Invalid(fldPath, volumeType, msg))
-	}
-	return errs
 }
 
 // csiMapMaxBytes bounds a map a CSI driver produced. The CSI spec caps

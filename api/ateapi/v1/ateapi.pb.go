@@ -1115,7 +1115,7 @@ type ExternalVolumeStatus struct {
 	// +k8s:maxLength=256
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset
-	// +k8s:customValidation # no control characters
+	// +k8s:format=ate-volume-storage-id
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// Internal volume plugin name or CSI driver name, from the StorageClass
 	// provisioner. Must be a DNS subdomain, optionally prefixed with
@@ -1125,7 +1125,7 @@ type ExternalVolumeStatus struct {
 	// +k8s:maxLength=253
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset # set-once, like name above
-	// +k8s:customValidation
+	// +k8s:format=ate-volume-type-name
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume
 	// provisioning, needed by the node plugin for mounting (e.g. attachment
@@ -1313,7 +1313,7 @@ type EgressPolicy struct {
 	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
-	// +k8s:customValidation # name must be "default"
+	// +k8s:subfield(name)=+k8s:format=ate-singleton-name
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Rules are an unordered set of allows. Traffic is denied when no rule
 	// matches.
@@ -1949,13 +1949,13 @@ type CredentialHeader struct {
 	// The case-insensitive HTTP request header to replace when present.
 	//
 	// +k8s:required
-	// +k8s:customValidation # format
+	// +k8s:format=ate-http-header-name
 	Header string `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
 	// Prepended verbatim to the credential value. Include any desired separator;
 	// for example, use "Bearer " (including the space) for Authorization.
 	//
 	// +k8s:optional
-	// +k8s:customValidation # format
+	// +k8s:format=ate-http-header-value
 	Prefix string `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	// Source-agnostic reference interpreted by a registered credential provider:
 	// `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`
@@ -2820,7 +2820,9 @@ type ActorTemplate struct {
 	// micro-VM is booted at that size.
 	//
 	// +k8s:required
-	// +k8s:customValidation # cpu and memory limits are both set
+	// +k8s:subfield(limits)=+k8s:required
+	// +k8s:subfield(limits)=+k8s:subfield(cpu_millicores)=+k8s:required
+	// +k8s:subfield(limits)=+k8s:subfield(memory_bytes)=+k8s:required
 	Resources *ResourceRequirements `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
 	// Egress policy for the golden Actor during initialization. The template
 	// controller creates a policy with these rules through CreateActorEgressPolicy
@@ -3583,7 +3585,7 @@ type EnvVar struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=256 # guardrail;
-	// +k8s:customValidation # printable ASCII except '='
+	// +k8s:format=ate-env-var-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// value is the literal value.
 	//
@@ -3712,7 +3714,7 @@ type HttpGetAction struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=1024
-	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
+	// +k8s:format=ate-http-probe-path
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// port is the container port to connect to.
 	//
@@ -5067,8 +5069,9 @@ type UpdateActorRequest struct {
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:customValidation # descend into metadata
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+	// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5526,8 +5529,7 @@ type GetActorEgressPolicyRequest struct {
 	// Name of the singleton egress policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5714,8 +5716,7 @@ type DeleteActorEgressPolicyRequest struct {
 	// Name of the singleton egress policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional per-delete preconditions.
 	//
@@ -6158,8 +6159,9 @@ type UpdateTagRequest struct {
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:customValidation # descend into metadata
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+	// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
 	Tag           *Tag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6715,8 +6717,9 @@ type UpdateWorkerRequest struct {
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:customValidation # descend into metadata
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
+	// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9348,7 +9351,8 @@ type AccessPolicy struct {
 	// create_time, and update_time are server-managed.
 	//
 	// +k8s:required
-	// +k8s:customValidation # name must be "default"
+	// +k8s:subfield(atespace)=+k8s:forbidden
+	// +k8s:subfield(name)=+k8s:format=ate-singleton-name
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Role bindings granting permissions on the parent resource.
 	//
@@ -9477,8 +9481,7 @@ type GetGlobalAccessPolicyRequest struct {
 	// Name of the singleton access policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9630,8 +9633,7 @@ type GetAtespaceAccessPolicyRequest struct {
 	// Name of the singleton access policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9814,8 +9816,7 @@ type DeleteAtespaceAccessPolicyRequest struct {
 	// Name of the singleton access policy. Must be "default".
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # must be "default"
+	// +k8s:format=ate-singleton-name
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional per-delete preconditions.
 	//

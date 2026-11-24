@@ -16,7 +16,6 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -34,36 +33,26 @@ func ateDeepEqual[T any](a, b T) bool {
 	return resources.DeepEqual(a, b)
 }
 
-// validateSingletonName requires the name of a singleton subresource to be
-// resources.SingletonName. An empty name is left to the required tag.
-func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
-	if name == "" || name == resources.SingletonName {
-		return nil
-	}
-	return field.ErrorList{field.Invalid(fldPath, name, fmt.Sprintf("must be %q", resources.SingletonName)).WithOrigin("custom=default")}
-}
-
 // MakeCreateOp returns an operation.Operation for a create operation. If ctx
 // has opted-out of preview features, the returned operation will have all
 // preview gates disabled (see preview.Header).
 func MakeCreateOp(ctx context.Context) operation.Operation {
-	return operation.Operation{Type: operation.Create, Options: optionsFor(ctx)}
+	return operation.Operation{Type: operation.Create, OptionGetter: optionsFor(ctx)}
 }
 
 // MakeUpdateOp returns an operation.Operation for an update operation. If ctx
 // has opted-out of preview features, the returned operation will have all
 // preview gates disabled (see preview.Header).
 func MakeUpdateOp(ctx context.Context) operation.Operation {
-	return operation.Operation{Type: operation.Update, Options: optionsFor(ctx)}
+	return operation.Operation{Type: operation.Update, OptionGetter: optionsFor(ctx)}
 }
 
-// optionsFor returns the preview gates enabled for ctx.
-// The returned map MUST NOT be modified.
-func optionsFor(ctx context.Context) map[string]bool {
+// optionsFor returns a getter for the preview gates enabled for ctx.
+func optionsFor(ctx context.Context) operation.OptionGetter {
 	if preview.IsOptedOut(ctx) {
-		return preview.DisabledMap()
+		return preview.NewDisabledOptionGetter()
 	}
-	return preview.AsMap()
+	return preview.NewOptionGetter()
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
