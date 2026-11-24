@@ -191,6 +191,10 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atenet-router
+      # Only the atenet-router container calls the Kubernetes API, so only it
+      # mounts the token (kube-api-access below). Envoy parses untrusted
+      # ingress traffic and must not hold it.
+      automountServiceAccountToken: false
       # Budget for the full shutdown sequence: --drain-delay (13s, readiness
       # propagation) + the Envoy drain window (~15s) + the derived
       # --drain-timeout (park budget + the drain route budget + margin, ~20s at
@@ -315,6 +319,9 @@ spec:
         # releasing Envoy's preStop poll.
         - name: "drain-signal"
           mountPath: "/var/run/atenet"
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
       - name: envoy
         # ENVOY_DATAPLANE_IMAGE is substituted for the image URI by ate-setup
         image: ${ENVOY_DATAPLANE_IMAGE}
@@ -410,6 +417,23 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
+      # What automount would add, mounted only into the router container,
+      # since automount can't target one container.
+      - name: kube-api-access
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - downwardAPI:
+              items:
+              - path: namespace
+                fieldRef:
+                  fieldPath: metadata.namespace
 ---
 apiVersion: v1
 kind: Service
