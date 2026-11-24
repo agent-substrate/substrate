@@ -173,7 +173,7 @@ See `values.yaml` for the full set; the important keys:
 | `postgres.ownerConnectionStringSecretRef` | `substrate-postgres-owner` | Read the owner connection from a pre-created Secret |
 | `postgres.readWriteRole` | `substrate_readwrite` | Role assumed by read/write connections |
 | `postgres.ownerRole` | `substrate_owner` | Role assumed by owner connections |
-| `preview` | `[]` | Preview gates for the API server, controller and workers; set the same gates in the substrate-atelet release. Set `[ExternalVolumes]` to enable external volume APIs and mounts |
+| `preview` | `[]` | Preview gates for every substrate component in the release; set the same gates in the substrate-atelet release. `[ALL]` enables every gate. Set `[ExternalVolumes]` to enable external volume APIs and mounts |
 | `postgres.schema` | `substrate` | Store the Substrate tables in this PostgreSQL schema |
 | `postgres.clientCertificates.enabled` | `false` | Project separate owner and runtime login certificates into the API server |
 | `<component>.resources` | see `values.yaml` | Requests and limits for each container, e.g. `ateApi.resources` and `atenetRouter.agentgateway.resources` |

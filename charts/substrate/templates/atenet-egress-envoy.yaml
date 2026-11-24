@@ -70,6 +70,7 @@ spec:
         restartPolicy: Always
         args:
         - "sdsmint"
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - "--uds-path=/var/run/sdsmint/sdsmint.sock"
         - "--ca-pool-path=/run/ca-state/mitm-pool.json"
         - "--leaf-cert-ttl=15m"
@@ -155,6 +156,7 @@ spec:
         args:
         - router
         - --mode=egress
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - "--namespace={{ .Release.Namespace }}"
         - --port-extproc=50051
         - --extproc-address=127.0.0.1

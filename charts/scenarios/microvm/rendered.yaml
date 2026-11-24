@@ -380,6 +380,7 @@ spec:
         restartPolicy: Always
         args:
         - node
+        - "--preview="
         - --socket=/run/objectstore-plugin/node.sock
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
@@ -2792,6 +2793,7 @@ spec:
         restartPolicy: Always
         args:
         - control
+        - "--preview="
         - --socket=/run/objectstore-plugin/control.sock
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
@@ -3164,6 +3166,7 @@ spec:
         resources:
           {}
         args:
+        - "--preview="
         - "--issuer=https://idp.ate-system.svc"
         - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
         - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
@@ -3253,6 +3256,7 @@ spec:
         restartPolicy: Always
         args:
         - "sdsmint"
+        - "--preview="
         - "--uds-path=/var/run/sdsmint/sdsmint.sock"
         - "--ca-pool-path=/run/ca-state/mitm-pool.json"
         - "--leaf-cert-ttl=15m"
@@ -3352,6 +3356,7 @@ spec:
         args:
         - router
         - --mode=egress
+        - "--preview="
         - "--namespace=ate-system"
         - --port-extproc=50051
         - --extproc-address=127.0.0.1
@@ -3505,6 +3510,7 @@ spec:
         args:
         - "router"
         - "--mode=ingress"
+        - "--preview="
         - "--namespace=ate-system"
         - "--port-xds=18000"
         - "--port-extproc=50051"
@@ -3697,6 +3703,7 @@ spec:
             memory: 64Mi
         imagePullPolicy: IfNotPresent
         args:
+        - "--preview="
         - "--listen-address=:50051"
         - "--metrics-address=:9090"
         - "--health-address=:9091"

@@ -102,6 +102,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- else }}
         - control
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - --socket=/run/objectstore-plugin/control.sock
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)

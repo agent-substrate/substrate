@@ -183,6 +183,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- else }}
         - node
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - --socket=/run/objectstore-plugin/node.sock
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging

@@ -380,6 +380,7 @@ spec:
         restartPolicy: Always
         args:
         - node
+        - "--preview="
         - --socket=/run/objectstore-plugin/node.sock
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
@@ -1652,6 +1653,7 @@ spec:
         restartPolicy: Always
         args:
         - control
+        - "--preview="
         - --socket=/run/objectstore-plugin/control.sock
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
@@ -2024,6 +2026,7 @@ spec:
         resources:
           {}
         args:
+        - "--preview="
         - "--issuer=https://idp.ate-system.svc"
         - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
         - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
@@ -2333,6 +2336,7 @@ spec:
             memory: 64Mi
         imagePullPolicy: IfNotPresent
         args:
+        - "--preview="
         - "--listen-address=:50051"
         - "--metrics-address=:9090"
         - "--health-address=:9091"

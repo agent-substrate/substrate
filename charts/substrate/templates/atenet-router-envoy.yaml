@@ -97,6 +97,7 @@ spec:
         args:
         - "router"
         - "--mode=ingress"
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - "--namespace={{ .Release.Namespace }}"
         - "--port-xds=18000"
         - "--port-extproc=50051"

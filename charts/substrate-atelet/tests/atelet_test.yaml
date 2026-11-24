@@ -249,3 +249,17 @@ tests:
   - equal:
       path: spec.template.spec.initContainers[0].image
       value: mirror.example.com/azure-blob-plugin:v1
+- it: passes the preview gates to atelet and the object-store plugin
+  template: atelet.yaml
+  documentSelector:
+    path: kind
+    value: DaemonSet
+  set:
+    preview: [ExternalVolumes]
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --preview=ExternalVolumes
+  - contains:
+      path: spec.template.spec.initContainers[0].args
+      content: --preview=ExternalVolumes

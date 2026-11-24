@@ -340,15 +340,13 @@ func parseYAMLData(obj map[string]any) {
 }
 
 // sortFlags sorts the flags in each args list, after any leading subcommand,
-// and each list whose items all have a name. It drops --preview=, because an
-// empty value is the default.
+// and each list whose items all have a name.
 func sortFlags(v any) {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, item := range v {
 			if args, ok := item.([]any); ok && k == "args" {
 				if head, flags, ok := splitFlags(args); ok {
-					flags = slices.DeleteFunc(flags, func(a any) bool { return a == "--preview=" })
 					slices.SortFunc(flags, func(a, b any) int { return strings.Compare(a.(string), b.(string)) })
 					item = append(head, flags...)
 					v[k] = item

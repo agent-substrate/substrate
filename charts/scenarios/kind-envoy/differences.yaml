@@ -394,7 +394,8 @@ Deployment/ate-system/k8s-credential-provider:
     charts: null
 Deployment/podcertificate-controller-system/podcertificate-controller:
   spec.template.spec.containers[controller].args:
-    ate-setup: []
+    ate-setup:
+    - --preview=
     charts:
     - --postgres-client-service-account=ate-api-server
   spec.template.spec.containers[controller].resources.limits:

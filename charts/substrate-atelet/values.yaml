@@ -21,7 +21,8 @@
 # atelet keeps the names the substrate release references.
 substrateReleaseName: substrate
 
-# Preview gates for atelet. Match the substrate release's preview gates.
+# Preview gates for atelet and the object-store plugin. Match the substrate
+# release's preview gates.
 preview: []
 
 # atelet daemonset overrides.

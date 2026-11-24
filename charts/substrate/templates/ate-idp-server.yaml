@@ -48,6 +48,7 @@ spec:
         resources:
 {{ toYaml .Values.ateIdpServer.resources | indent 10 }}
         args:
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
         - {{ printf "--issuer=%s" (include "substrate.actorJWTIssuer" .) | quote }}
         - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
         - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem

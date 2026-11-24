@@ -23,8 +23,9 @@
 # helm template and kubectl apply.
 createNamespace: false
 
-# Preview gates for the API server and the controller (including its workers).
-# Set the same gates in the substrate-atelet release.
+# Preview gates for every substrate component in this release, such as the API
+# server, the controller and the atenet router. Set the same gates in the
+# substrate-atelet release. ALL enables every gate.
 # ExternalVolumes is required for external volume APIs and mounts.
 preview: []
 
