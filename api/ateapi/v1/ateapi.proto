@@ -1489,7 +1489,7 @@ message HttpGetAction {
   //
   // +k8s:required
   // +k8s:maxLength=1024
-  // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
+  // +k8s:format=ate-http-probe-path
   string path = 1;
 
   // port is the container port to connect to.

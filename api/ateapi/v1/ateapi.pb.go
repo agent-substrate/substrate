@@ -3712,7 +3712,7 @@ type HttpGetAction struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=1024
-	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
+	// +k8s:format=ate-http-probe-path
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// port is the container port to connect to.
 	//

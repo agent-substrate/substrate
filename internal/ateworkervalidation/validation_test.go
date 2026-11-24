@@ -228,13 +228,13 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 	}, {
 		name: "http_get path without leading slash",
 		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe.HttpGet.Path = "healthz" }),
-		want: field.ErrorList{field.Invalid(probe.Child("http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(probe.Child("http_get", "path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 	}, {
 		name: "http_get path with query",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
 			r.Spec.Containers[0].WakeupProbe.HttpGet.Path = "/healthz?x=1"
 		}),
-		want: field.ErrorList{field.Invalid(probe.Child("http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(probe.Child("http_get", "path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 	}, {
 		name: "http_get path too long",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {

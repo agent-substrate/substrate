@@ -94,10 +94,6 @@ func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Opera
 	return errs
 }
 
-func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateHTTPGetPath(fldPath, *value)
-}
-
 func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateMountPath(fldPath, *value)
 }

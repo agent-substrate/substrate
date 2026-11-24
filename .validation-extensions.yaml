@@ -17,5 +17,13 @@ formats:
   # Names of singleton resources
   - name: ate-singleton-name
     docs: This field must be "default"
-    pattern: '(^$|^default$)' # allow optional/required to cover "" for subfields
+    # allow optional/required to cover "" for subfields
+    pattern: '(^$|^default$)'
     message: must be "default"
+
+  # HTTP probe paths
+  - name: ate-http-probe-path
+    docs: This field must be a valid HTTP path with valid escapes and no query or fragment components
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^/([A-Za-z0-9\-._~!$&'\(\)*+,;=:@/]|%[0-9A-Fa-f]{2})*$)
+    message: must be a valid HTTP path (RFC 3986)

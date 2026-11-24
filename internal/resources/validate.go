@@ -544,22 +544,6 @@ func ValidateNestedMountPathsAt(paths []string, at func(i int) *field.Path) fiel
 	return errs
 }
 
-// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
-// characters only, with well-formed percent-escapes, and no query string
-// or fragment.
-var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
-
-// ValidateHTTPGetPath checks a wakeup probe's HTTP path.
-func ValidateHTTPGetPath(fldPath *field.Path, p string) field.ErrorList {
-	if p == "" {
-		return nil
-	}
-	if !httpGetPathRE.MatchString(p) {
-		return field.ErrorList{field.Invalid(fldPath, p, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
-	}
-	return nil
-}
-
 // envVarNameRE constrains env var names to any printable ASCII character
 // except '='.
 var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)

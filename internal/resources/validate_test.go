@@ -512,18 +512,6 @@ func TestValidateMountPath(t *testing.T) {
 	})
 }
 
-func TestValidateHTTPGetPath(t *testing.T) {
-	runStringRule(t, ValidateHTTPGetPath, []stringRuleCase{
-		{"empty is left to tags", "", false},
-		{"simple", "/healthz", false},
-		{"percent escape", "/a%20b", false},
-		{"no leading slash", "healthz", true},
-		{"query", "/healthz?x=1", true},
-		{"fragment", "/healthz#x", true},
-		{"bad percent escape", "/a%2", true},
-	})
-}
-
 func TestValidateEnvVarName(t *testing.T) {
 	runStringRule(t, ValidateEnvVarName, []stringRuleCase{
 		{"empty is left to tags", "", false},

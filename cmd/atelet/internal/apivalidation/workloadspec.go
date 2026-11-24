@@ -85,10 +85,6 @@ func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, 
 	return resources.ValidateDropCapabilities(fldPath, value)
 }
 
-func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateHTTPGetPath(fldPath, *value)
-}
-
 func ValidateCustom_ExternalVolumeSource_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateStorageVolumeID(fldPath, *value)
 }

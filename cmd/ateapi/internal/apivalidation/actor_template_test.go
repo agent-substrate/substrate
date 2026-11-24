@@ -821,7 +821,7 @@ func TestValidateActorTemplate(t *testing.T) {
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 	}, {
 		name: "wakeup probe path not starting with slash",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
@@ -830,7 +830,7 @@ func TestValidateActorTemplate(t *testing.T) {
 				TimeoutSeconds: 60,
 			}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 	}, {
 		name: "valid volume_mount",
 		mutate: func(tmpl *ateapi.ActorTemplate) {

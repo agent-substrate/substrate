@@ -21,6 +21,7 @@ package ateworkervalidation
 
 import (
 	context "context"
+	regexp "regexp"
 
 	ateworkerpb "go.ate.dev/substrate/internal/proto/ateworkerpb"
 	operation "k8s.io/apimachinery/pkg/api/operation"
@@ -1013,6 +1014,8 @@ func Validate_GetWorkloadStatsRequest(
 	return errs
 }
 
+var formatPattern_ate_http_probe_path = regexp.MustCompile("(^$|^/([A-Za-z0-9\\-._~!$&'\\(\\)*+,;=:@/]|%[0-9A-Fa-f]{2})*$)")
+
 // Validate_HttpGetAction validates an instance of HttpGetAction according
 // to declarative validation rules in the API schema.
 func Validate_HttpGetAction(
@@ -1039,8 +1042,7 @@ func Validate_HttpGetAction(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_HttpGetAction_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_http_probe_path, "must be a valid HTTP path (RFC 3986)", "format=ate-http-probe-path"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {

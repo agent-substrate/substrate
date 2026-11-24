@@ -1799,7 +1799,7 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "probe: path without a leading slash",
 			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Path = "healthz" }),
-			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "")},
+			want: field.ErrorList{field.Invalid(httpGetPath.Child("path"), nil, "").WithOrigin("format=ate-http-probe-path")},
 		}, {
 			name: "probe: missing port",
 			obj:  probe(func(p *ateletpb.WakeupProbe) { p.HttpGet.Port = 0 }),
