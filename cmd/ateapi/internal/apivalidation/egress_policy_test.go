@@ -799,7 +799,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Header = "bad header"
 		},
 		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name"),
+			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name").WithOrigin("format=ate-http-header-name"),
 		},
 	}, {
 		name: "duplicate header",
@@ -1039,19 +1039,6 @@ func TestHeaderValueValidation(t *testing.T) {
 	for _, value := range []string{"a\rb", "a\nb", "a\x00b", "a\x1fb", "a\x7fb"} {
 		if validHeaderValue(value) {
 			t.Errorf("validHeaderValue(%q) = true", value)
-		}
-	}
-}
-
-func TestHeaderNameValidation(t *testing.T) {
-	for _, value := range []string{"Authorization", "x-custom_header", "!#$%&'*+-.^_`|~"} {
-		if !validHeaderName(value) {
-			t.Errorf("validHeaderName(%q) = false", value)
-		}
-	}
-	for _, value := range []string{"", "bad header", "bad:header", "héader"} {
-		if validHeaderName(value) {
-			t.Errorf("validHeaderName(%q) = true", value)
 		}
 	}
 }

@@ -1949,7 +1949,7 @@ type CredentialHeader struct {
 	// The case-insensitive HTTP request header to replace when present.
 	//
 	// +k8s:required
-	// +k8s:customValidation # format
+	// +k8s:format=ate-http-header-name
 	Header string `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
 	// Prepended verbatim to the credential value. Include any desired separator;
 	// for example, use "Bearer " (including the space) for Authorization.

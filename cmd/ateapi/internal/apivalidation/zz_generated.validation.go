@@ -2630,6 +2630,7 @@ func Validate_CreateWorkerRequest(
 }
 
 var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_CredentialHeader_ = validate.NewUnionMembership(validate.NewUnionMember("credential_uri"), validate.NewUnionMember("actor_jwt"))
+var formatPattern_ate_http_header_name = regexp.MustCompile("(^$|^[-A-Za-z0-9!#$%&'*+.^_`|~]+$)")
 
 // Validate_CredentialHeader validates an instance of CredentialHeader according
 // to declarative validation rules in the API schema.
@@ -2674,8 +2675,7 @@ func Validate_CredentialHeader(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_CredentialHeader_Header(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_http_header_name, "must be an HTTP header name", "format=ate-http-header-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

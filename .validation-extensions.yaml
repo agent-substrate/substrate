@@ -48,3 +48,10 @@ formats:
     docs: This field must not contain control characters other than tab, newline and carriage return
     pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]*$'
     message: must not contain control characters
+
+  # HTTP header names
+  - name: ate-http-header-name
+    docs: This field must be a valid HTTP header name (RFC 9110 token)
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^[-A-Za-z0-9!#$%&'*+.^_`|~]+$)
+    message: must be an HTTP header name
