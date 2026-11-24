@@ -1618,7 +1618,7 @@ message ExternalVolumeTemplate {
   //
   // +k8s:optional
   // +k8s:unionMember
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef external_volume_class = 3;
 }
 
@@ -1634,7 +1634,7 @@ message ExternalVolumeClass {
   // Common resource metadata: name, uid, version, timestamps.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ResourceMetadata metadata = 1;
 
   // driver_name is the CSI driver that provisions the volumes, e.g.
@@ -1643,7 +1643,7 @@ message ExternalVolumeClass {
   //
   // +k8s:required
   // +k8s:maxLength=63
-  // +k8s:customValidation # optional "substrate.io/" prefix + DNS-1123 subdomain
+  // +k8s:format=ate-volume-type-name
   string driver_name = 2;
 
   // parameters are passed unchanged to the driver's CreateVolume call. The
@@ -1840,7 +1840,7 @@ message GetExternalVolumeClassRequest {
   // The class to get. atespace must be empty.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef external_volume_class = 1;
 }
 
@@ -1866,7 +1866,7 @@ message DeleteExternalVolumeClassRequest {
   // The class to delete. atespace must be empty.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef external_volume_class = 1;
 
   // Optional per-delete preconditions.

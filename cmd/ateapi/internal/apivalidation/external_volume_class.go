@@ -18,8 +18,6 @@ import (
 	"context"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/internal/resources"
-	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -37,8 +35,4 @@ func ValidateListExternalVolumeClassesRequest(ctx context.Context, req *ateapi.L
 
 func ValidateDeleteExternalVolumeClassRequest(ctx context.Context, req *ateapi.DeleteExternalVolumeClassRequest) field.ErrorList {
 	return Validate_DeleteExternalVolumeClassRequest(ctx, MakeCreateOp(ctx), nil, req, nil)
-}
-
-func ValidateCustom_ExternalVolumeClass_DriverName(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateVolumeType(fldPath, *value)
 }

@@ -53,7 +53,7 @@ func TestValidateCreateExternalVolumeClassRequest(t *testing.T) {
 		name:            "invalid driver_name",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.DriverName = "Bad_Driver" },
 		want:            field.ErrorList{field.Forbidden(evc, "")},
-		wantWithPreview: field.ErrorList{field.Invalid(evc.Child("driver_name"), nil, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(evc.Child("driver_name"), nil, "").WithOrigin("format=ate-volume-type-name")},
 	}, {
 		name:            "too-long driver_name",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.DriverName = "nfs.csi." + strings.Repeat("a", 56) },

@@ -4047,7 +4047,7 @@ type ExternalVolumeTemplate struct {
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	ExternalVolumeClass *ObjectRef `protobuf:"bytes,3,opt,name=external_volume_class,json=externalVolumeClass,proto3" json:"external_volume_class,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
@@ -4112,7 +4112,7 @@ type ExternalVolumeClass struct {
 	// Common resource metadata: name, uid, version, timestamps.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// driver_name is the CSI driver that provisions the volumes, e.g.
 	// "nfs.csi.k8s.io". It is a DNS subdomain, optionally prefixed with
@@ -4120,7 +4120,7 @@ type ExternalVolumeClass struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=63
-	// +k8s:customValidation # optional "substrate.io/" prefix + DNS-1123 subdomain
+	// +k8s:format=ate-volume-type-name
 	DriverName string `protobuf:"bytes,2,opt,name=driver_name,json=driverName,proto3" json:"driver_name,omitempty"`
 	// parameters are passed unchanged to the driver's CreateVolume call. The
 	// driver defines their keys and values, so they are only bounded in size.
@@ -4883,7 +4883,7 @@ type GetExternalVolumeClassRequest struct {
 	// The class to get. atespace must be empty.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	ExternalVolumeClass *ObjectRef `protobuf:"bytes,1,opt,name=external_volume_class,json=externalVolumeClass,proto3" json:"external_volume_class,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
@@ -5035,7 +5035,7 @@ type DeleteExternalVolumeClassRequest struct {
 	// The class to delete. atespace must be empty.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	ExternalVolumeClass *ObjectRef `protobuf:"bytes,1,opt,name=external_volume_class,json=externalVolumeClass,proto3" json:"external_volume_class,omitempty"`
 	// Optional per-delete preconditions.
 	//
