@@ -150,6 +150,8 @@ func TestKeySpellings(t *testing.T) {
 		{ActorNameKey, "ate.actor.name"},
 		{ActorUIDKey, "ate.actor.uid"},
 		{ActorContainerNameKey, "ate.actor.container.name"},
+		{ActorExitedContainerNameKey, "ate.actor.exited_container.name"},
+		{ActorExitedContainerExitCodeKey, "ate.actor.exited_container.exit_code"},
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateAtespaceKey, "ate.template.atespace"},
 		{ActorVersionKey, "ate.actor.version"},

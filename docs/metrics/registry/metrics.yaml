@@ -283,6 +283,28 @@ groups:
           hosted actor's sandbox has no process left. A leaf left behind by an
           earlier activation of the same actor carries its count forward.
         examples: [0, 3]
+      - id: ate.actor.exited_container.name
+        stability: development
+        type: string
+        brief: >
+          The name of an actor container that exited while its sandbox stayed
+          up.
+        note: >
+          Logs only. It is only ever recorded beside actor identity, which no
+          metric may carry. ateworker-gvisor sets it on the "Actor container
+          exited" record. The record is not a line that the container wrote, so
+          it does not use ate.actor.container.name.
+        examples: ["counter"]
+      - id: ate.actor.exited_container.exit_code
+        stability: development
+        type: int
+        brief: >
+          The exit code of the container named by
+          ate.actor.exited_container.name.
+        note: >
+          Logs only. A signal shows as 128 plus the signal number, so 137 is a
+          SIGKILL or an exit(137). Absent when the runtime gave no exit code.
+        examples: [0, 1, 137]
 
   - id: registry.ate.snapshot
     type: attribute_group

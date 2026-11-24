@@ -212,7 +212,18 @@ ateworker-gvisor's `Sandbox has no processes left while the actor is hosted` is 
  "ate.sandbox.oom_kills":3}
 ```
 
-The actor still reports `RUNNING` after this record; nothing moves it to `CRASHED` yet ([#2211](https://github.com/agent-substrate/substrate/issues/2211)). It does not fire when an application container exits while the sentry is still up, or during a checkpoint or terminate. The count covers the life of the cgroup leaf, so a leaf left behind by an earlier activation of the same actor carries its count forward.
+The actor still reports `RUNNING` after this record; nothing moves it to `CRASHED` yet ([#2211](https://github.com/agent-substrate/substrate/issues/2211)). It does not fire when an application container exits while the sentry is still up (see `Actor container exited` below), or during a checkpoint or terminate. The count covers the life of the cgroup leaf, so a leaf left behind by an earlier activation of the same actor carries its count forward.
+
+ateworker-gvisor's `Actor container exited` is a WARN written when an application container exits while its sandbox stays up. It is in the actor's log, so `kubectl ate logs` shows it by default and with `--source=lifecycle`:
+
+```json
+{"time":"…","level":"WARN","message":"Actor container exited",
+ "labels":{"ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
+  "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter"},
+ "ate.actor.exited_container.name":"counter","ate.actor.exited_container.exit_code":137}
+```
+
+The record is a WARN for each exit code, also for 0: the template does not say if a container is expected to finish. A signal shows as 128 plus the signal number, so 137 is a SIGKILL or an `exit(137)`. `ate.actor.exited_container.exit_code` is absent if runsc gave none. A sandbox that dies gives no such record: `Sandbox died` covers it. The actor still reports `RUNNING` after this record. ateworker writes no record for a container that closed its own stdout and stderr, for an exit of a process that is not the container's first process, or for an exit during a terminate or a checkpoint that succeeds.
 
 #### The same records over OTLP
 
