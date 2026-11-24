@@ -84,6 +84,24 @@ substrate release references.
 {{- printf "%s/%s/%s:%s" $registry $ctx.Values.image.repository $name ($ctx.Values.image.tag | default $ctx.Chart.AppVersion) -}}
 {{- end -}}
 
+{{/* A full image reference moved onto global.imageRegistry. Copied from the substrate chart. */}}
+{{- define "substrate.thirdPartyImage" -}}
+{{- $ref := index . 0 -}}
+{{- $ctx := index . 1 -}}
+{{- $mirror := (($ctx.Values.global).imageRegistry) -}}
+{{- if not $mirror -}}
+{{- $ref -}}
+{{- else -}}
+{{- $parts := splitList "/" $ref -}}
+{{- $first := first $parts -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first)) -}}
+{{- printf "%s/%s" $mirror (join "/" (rest $parts)) -}}
+{{- else -}}
+{{- printf "%s/%s" $mirror $ref -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* imagePullSecrets for a pod spec. Copied from the substrate chart. */}}
 {{- define "substrate.imagePullSecrets" -}}
 {{- $merged := concat (.Values.imagePullSecrets | default list) (((.Values.global).imagePullSecrets) | default list) | uniq -}}

@@ -63,8 +63,9 @@ atelet:
 # credentialsSecret and extraEnv as the substrate release.
 objectStorePlugin:
   # Image of the plugin, as a full reference. Empty uses the in-tree
-  # objectstore-plugin component image. Another plugin also needs its own
-  # args and startupProbe.
+  # objectstore-plugin component image. global.imageRegistry replaces the
+  # registry of the reference. Another plugin also needs its own args and
+  # startupProbe.
   image: ""
   # Secret whose keys the plugin gets as environment variables, such as
   # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Empty adds none.

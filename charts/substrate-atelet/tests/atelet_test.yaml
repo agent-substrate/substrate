@@ -237,3 +237,15 @@ tests:
       value:
         app: atelet
         azure.workload.identity/use: "true"
+- it: moves another object-store plugin image onto the mirror registry
+  template: atelet.yaml
+  documentSelector:
+    path: kind
+    value: DaemonSet
+  set:
+    global.imageRegistry: mirror.example.com
+    objectStorePlugin.image: example.com/azure-blob-plugin:v1
+  asserts:
+  - equal:
+      path: spec.template.spec.initContainers[0].image
+      value: mirror.example.com/azure-blob-plugin:v1

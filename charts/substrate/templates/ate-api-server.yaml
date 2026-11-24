@@ -95,7 +95,7 @@ spec:
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       initContainers:
       - name: objectstore-plugin
-        image: {{ .Values.objectStorePlugin.image | default (include "substrate.componentImage" (list "objectstore-plugin" .)) }}
+        image: {{ with .Values.objectStorePlugin.image }}{{ include "substrate.thirdPartyImage" (list . $) }}{{ else }}{{ include "substrate.componentImage" (list "objectstore-plugin" .) }}{{ end }}
         restartPolicy: Always
         args:
         {{- with .Values.objectStorePlugin.control.args }}

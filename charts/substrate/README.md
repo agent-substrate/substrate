@@ -193,7 +193,7 @@ See `values.yaml` for the full set; the important keys:
 | `objectStorePlugin.credentialsSecret` | `""` | Secret whose keys the object-store plugin gets as environment variables. Set the same value in the substrate-atelet release |
 | `ateApi.serviceAccount.annotations` | `{}` | Annotations on the ate-api-server ServiceAccount, for workload identity. See "Object store" |
 | `ateApi.podLabels` | `{}` | Labels on the ate-api-server pods, for workload identity. See "Object store" |
-| `objectStorePlugin.image` | `""` | Image of another object-store plugin, as a full reference. Empty uses the in-tree plugin. See "Object store" |
+| `objectStorePlugin.image` | `""` | Image of another object-store plugin, as a full reference. Empty uses the in-tree plugin. `global.imageRegistry` replaces its registry. See "Object store" |
 | `objectStorePlugin.control.args` | `[]` | Arguments of the API server's object-store plugin. Empty uses the in-tree plugin's arguments |
 | `objectStorePlugin.control.startupProbe` | `{}` | Startup probe of the API server's object-store plugin. Empty uses the in-tree plugin's probe |
 | `objectStorePlugin.extraVolumes` | `[]` | Volumes added to the API server pods for the object-store plugin |
