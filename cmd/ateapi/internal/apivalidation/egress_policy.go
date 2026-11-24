@@ -254,7 +254,7 @@ func ValidateCustom_CredentialHeader_CredentialUri(_ context.Context, _ operatio
 	return nil
 }
 
-func ValidateCustom_CredentialClientCertificateSource_CredentialUri(ctx context.Context, op operation.Operation, p *field.Path, uri, oldURI *string) field.ErrorList {
+func ValidateCustom_ClientCertificateSource_CredentialProvider(ctx context.Context, op operation.Operation, p *field.Path, uri, oldURI *string) field.ErrorList {
 	return ValidateCustom_CredentialHeader_CredentialUri(ctx, op, p, uri, oldURI)
 }
 

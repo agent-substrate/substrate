@@ -217,20 +217,14 @@ func TestValidateClientCertificateSource(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "actor certificate", source: &ateapi.ClientCertificateSource{ActorCertificate: &ateapi.ActorClientCertificateSource{}}},
-		{name: "provider certificate", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
-			CredentialUri: "ate-secret://k8s.io/default/ns/cert/client.pem",
-		}}},
+		{name: "provider certificate", source: &ateapi.ClientCertificateSource{CredentialProvider: proto.String("ate-secret://k8s.io/default/ns/cert/client.pem")}},
 		{name: "missing source", source: &ateapi.ClientCertificateSource{}, wantErr: true},
 		{name: "both sources", source: &ateapi.ClientCertificateSource{
-			ActorCertificate: &ateapi.ActorClientCertificateSource{},
-			CredentialProvider: &ateapi.CredentialClientCertificateSource{
-				CredentialUri: "ate-secret://k8s.io/default/ns/cert/client.pem",
-			},
+			ActorCertificate:   &ateapi.ActorClientCertificateSource{},
+			CredentialProvider: proto.String("ate-secret://k8s.io/default/ns/cert/client.pem"),
 		}, wantErr: true},
-		{name: "missing credential URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{}}, wantErr: true},
-		{name: "invalid provider URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
-			CredentialUri: "https://example.com/client.pem",
-		}}, wantErr: true},
+		{name: "empty credential URI", source: &ateapi.ClientCertificateSource{CredentialProvider: proto.String("")}, wantErr: true},
+		{name: "invalid provider URI", source: &ateapi.ClientCertificateSource{CredentialProvider: proto.String("https://example.com/client.pem")}, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			errs := ValidateCreateActorEgressPolicyRequest(context.Background(), req(tt.source))

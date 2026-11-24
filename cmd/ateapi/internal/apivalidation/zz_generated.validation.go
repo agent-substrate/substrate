@@ -1860,11 +1860,11 @@ func Validate_ClientCertificateSource(
 	{ // field v1.ClientCertificateSource.CredentialProvider
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *v1.CredentialClientCertificateSource,
+			obj, oldObj *string,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
 					return nil
 				}
 			}
@@ -1876,12 +1876,14 @@ func Validate_ClientCertificateSource(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// call the type's validation function
-			errs = append(errs, Validate_CredentialClientCertificateSource(ctx, op, fldPath, obj, oldObj)...)
+			// custom validation
+			if e := ValidateCustom_ClientCertificateSource_CredentialProvider(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.ClientCertificateSource) *v1.CredentialClientCertificateSource {
+			func(oldObj *v1.ClientCertificateSource) *string {
 				return oldObj.CredentialProvider
 			})
 		errs = append(errs, fn(fldPath.Child("credential_provider"), obj.CredentialProvider, oldVal, oldObj != nil)...)
@@ -2654,48 +2656,6 @@ func Validate_CreateWorkerRequest(
 				return oldObj.Worker
 			})
 		errs = append(errs, fn(fldPath.Child("worker"), obj.Worker, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_CredentialClientCertificateSource validates an instance of CredentialClientCertificateSource according
-// to declarative validation rules in the API schema.
-func Validate_CredentialClientCertificateSource(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *v1.CredentialClientCertificateSource) (errs field.ErrorList) {
-
-	{ // field v1.CredentialClientCertificateSource.CredentialUri
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_CredentialClientCertificateSource_CredentialUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.CredentialClientCertificateSource) *string {
-				return &oldObj.CredentialUri
-			})
-		errs = append(errs, fn(fldPath.Child("credential_uri"), &obj.CredentialUri, oldVal, oldObj != nil)...)
 	}
 
 	return errs
