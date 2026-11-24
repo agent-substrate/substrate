@@ -15,6 +15,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -35,6 +36,9 @@ const (
 	KindBool
 	KindInt
 	KindDuration
+	// KindJSON is a JSON value. A configuration file may write it as YAML,
+	// which ParseFile converts to JSON.
+	KindJSON
 )
 
 // Setting declares one configurable value. It is the single definition: the
@@ -335,6 +339,13 @@ var Registry = []Setting{
 	},
 
 	{
+		Key: "atelet.tolerations", Env: "ATE_ATELET_TOLERATIONS", Flag: "atelet-tolerations", Kind: KindJSON,
+		Usage: "Tolerations added to the atelet DaemonSet, as a JSON array of Kubernetes tolerations. " +
+			"atelet must run on every node a WorkerPool schedules workers to, so add the tolerations " +
+			"of any taint those nodes carry",
+	},
+
+	{
 		Key: "benchmark.actorMemory", Env: "BENCHMARK_ACTOR_MEMORY", Flag: "benchmark-actor-memory",
 		Kind:  KindString,
 		Usage: "Memory limit for benchmark actors",
@@ -578,6 +589,12 @@ func (s Setting) parse(raw string) (any, error) {
 			return nil, fmt.Errorf("%s must be a duration such as 60s or 5m, got %q", s.Key, raw)
 		}
 		return d, nil
+	case KindJSON:
+		// Empty clears the setting, as it does for a string.
+		if raw != "" && !json.Valid([]byte(raw)) {
+			return nil, fmt.Errorf("%s must be JSON, got %q", s.Key, raw)
+		}
+		return raw, nil
 	default:
 		return raw, nil
 	}

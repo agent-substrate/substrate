@@ -25,7 +25,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
+	corev1 "k8s.io/api/core/v1"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/internal/preview"
@@ -59,6 +61,7 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_READ_WRITE_ROLE",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
+		"ATE_ATELET_TOLERATIONS",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS",
@@ -895,6 +898,74 @@ func TestLoadOtlpEndpoint(t *testing.T) {
 	}
 	if got := scriptEnvMap(t, cfg)["ATE_OTLP_ENDPOINT"]; got != "http://from-flag:4317" {
 		t.Errorf("ScriptEnv()[ATE_OTLP_ENDPOINT] = %q, want the flag's value", got)
+	}
+}
+
+func TestLoadAteletTolerations(t *testing.T) {
+	seconds := int64(300)
+	sessionSize := corev1.Toleration{Key: "session-size", Operator: corev1.TolerationOpEqual, Value: "large", Effect: corev1.TaintEffectNoSchedule}
+	for _, tc := range []struct {
+		name    string
+		env     string
+		file    string
+		want    []corev1.Toleration
+		wantErr string
+	}{
+		{name: "unset"},
+		{name: "blank", env: " ", wantErr: "atelet.tolerations must be JSON"},
+		{
+			name: "environment",
+			env:  `[{"key":"session-size","operator":"Equal","value":"large","effect":"NoSchedule"}]`,
+			want: []corev1.Toleration{sessionSize},
+		},
+		{
+			name: "file",
+			file: `
+atelet:
+  tolerations:
+  - key: session-size
+    operator: Equal
+    value: large
+    effect: NoSchedule
+  - operator: Exists
+    effect: NoExecute
+    tolerationSeconds: 300
+`,
+			want: []corev1.Toleration{sessionSize, {Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute, TolerationSeconds: &seconds}},
+		},
+		{name: "file null", file: "atelet:\n  tolerations:\n"},
+		{name: "not JSON", env: "session-size=large:NoSchedule", wantErr: "atelet.tolerations must be JSON"},
+		{name: "an object", env: `{"key":"session-size"}`, wantErr: "a JSON array of Kubernetes tolerations"},
+		{name: "unknown field", env: `[{"key":"session-size","efect":"NoSchedule"}]`, wantErr: "a JSON array of Kubernetes tolerations"},
+		{name: "file with an unknown field", file: "atelet:\n  tolerations:\n  - key: a\n    efect: NoSchedule\n", wantErr: "a JSON array of Kubernetes tolerations"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != "" {
+				t.Setenv("ATE_ATELET_TOLERATIONS", tc.env)
+			}
+			var o LoadOptions
+			if tc.file != "" {
+				o.ConfigPath = writeConfig(t, validHeader+tc.file)
+			}
+			fs, err := optionsFlagSet(Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFlags(fs, o)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadFlags() error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, cfg.AteletTolerations); diff != "" {
+				t.Errorf("AteletTolerations (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

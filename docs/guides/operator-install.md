@@ -297,6 +297,7 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `ateapi.postgres.schema`                     | `ATE_API_POSTGRES_SCHEMA`                       | `--ateapi-postgres-schema`                         | —                     | (global)                                 |
 | `ateapi.postgres.serverCAFile`               | `ATE_API_POSTGRES_SERVER_CA_FILE`               | `--ateapi-postgres-server-ca-file`                 | —                     | (global)                                 |
 | `ateapi.postgres.storageClass`               | `ATE_API_POSTGRES_STORAGE_CLASS`                | `--ateapi-postgres-storage-class`                  | —                     | (global)                                 |
+| `atelet.tolerations`                         | `ATE_ATELET_TOLERATIONS`                        | `--atelet-tolerations`                             | —                     | (global)                                 |
 | `atenet.dataplane`                           | `ATE_ATENET_DATAPLANE`                          | `--atenet-dataplane`                               | `envoy`               | (global)                                 |
 | `atenet.egress.additionalExtprocService`     | `ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE`         | `--experimental-additional-egress-extproc-service` | —                     | (global)                                 |
 | `atenet.egress.credentialProvider`           | `ATE_CREDENTIAL_PROVIDER`                       | `--credential-provider`                            | —                     | (global)                                 |
@@ -402,6 +403,35 @@ List every client that calls atenet-router. If all traffic reaches actors
 through one frontend or gateway, list that gateway's identity. If several
 services call the router, list each of them. Any listed client may reach any
 actor.
+
+## Tainted worker nodes
+
+atelet has to run on every node that hosts workers. Without it, workers on that
+node never become ready. The atelet DaemonSet tolerates `ate.dev/sandboxClass`
+and `cloud.google.com/compute-class` taints with any value. If a WorkerPool
+tolerates any other taint in `spec.template.tolerations`, give atelet the same
+toleration with `atelet.tolerations`. For example, with node pools tainted
+`session-size=<size>:NoSchedule`:
+
+```yaml
+atelet:
+  tolerations:
+  - key: session-size
+    operator: Exists
+    effect: NoSchedule
+```
+
+ate-setup adds these to the built-in tolerations whenever it renders atelet,
+in `deploy ate-system` and in `deploy atelet`. A run without the setting
+removes them, so keep it in the document every run uses. Quote a numeric
+taint value, as in `value: "1"`, or the value is read as a number and
+rejected. Each entry is a Kubernetes
+[toleration](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/).
+In the environment variable or the flag, write the list as JSON:
+
+```bash
+export ATE_ATELET_TOLERATIONS='[{"key":"session-size","operator":"Exists","effect":"NoSchedule"}]'
+```
 
 ## Secrets
 

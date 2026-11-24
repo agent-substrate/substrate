@@ -15,6 +15,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	corev1 "k8s.io/api/core/v1"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/internal/actoridjwt"
@@ -189,6 +191,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 
+	ateletTolerations, err := parseAteletTolerations(r)
+	if err != nil {
+		return nil, err
+	}
+
 	kubeconfig, kubeconfigEnv := splitKubeconfig(r)
 
 	// One configured connection serves both pools; both empty selects the
@@ -278,6 +285,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		APILogLevel:                    r.String("ateapi.logLevel"),
 		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
 		PreviewGates:                   splitList(r.String("preview")),
+		AteletTolerations:              ateletTolerations,
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
 		resolved:                       r,
@@ -287,6 +295,22 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// parseAteletTolerations reads atelet.tolerations, a JSON array. Unknown fields
+// are rejected, so a misspelled field fails here instead of being dropped.
+func parseAteletTolerations(r *Resolved) ([]corev1.Toleration, error) {
+	v, _ := r.Value("atelet.tolerations")
+	if v.Raw == "" {
+		return nil, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(v.Raw))
+	dec.DisallowUnknownFields()
+	var tolerations []corev1.Toleration
+	if err := dec.Decode(&tolerations); err != nil {
+		return nil, &InvalidError{Value: v, Want: fmt.Sprintf("a JSON array of Kubernetes tolerations (%v)", err)}
+	}
+	return tolerations, nil
 }
 
 // splitList splits a comma-separated value, dropping empty items, so an empty

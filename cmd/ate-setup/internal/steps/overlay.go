@@ -98,10 +98,20 @@ func SystemOverlay(cfg *config.Config) string {
 	}
 }
 
-// kustomization directory, before image resolution. It composes path with the
-// selected components (see components), so the same patches reach every
+// render renders a manifest file or kustomization directory, before image
+// resolution. It composes path with the selected components (see components)
+// and adds the configured atelet tolerations, so the same patches reach every
 // control plane workload whichever apply path delivers it.
 func (e *Env) render(path string) ([]byte, error) {
+	manifest, err := e.compose(path)
+	if err != nil {
+		return nil, err
+	}
+	return addAteletTolerations(manifest, e.Cfg.AteletTolerations)
+}
+
+// compose renders path with the selected components.
+func (e *Env) compose(path string) ([]byte, error) {
 	if components := e.components(); len(components) > 0 {
 		return kustomize.Compose(path, components...)
 	}
@@ -122,9 +132,12 @@ func (e *Env) render(path string) ([]byte, error) {
 // renderBytes is render for a manifest already held in memory.
 func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
 	if components := e.components(); len(components) > 0 {
-		return kustomize.ComposeBytes(manifest, components...)
+		var err error
+		if manifest, err = kustomize.ComposeBytes(manifest, components...); err != nil {
+			return nil, err
+		}
 	}
-	return manifest, nil
+	return addAteletTolerations(manifest, e.Cfg.AteletTolerations)
 }
 
 // renderResolve renders path and resolves its image references.
