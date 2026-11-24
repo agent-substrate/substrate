@@ -19,9 +19,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // UsesS3 reports whether ATE_STORAGE_BACKEND selects S3. Any other value
@@ -44,7 +47,47 @@ func NewS3ClientFromEnv(ctx context.Context) (*s3.Client, error) {
 		if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
 			o.UsePathStyle = true
 		}
+		o.APIOptions = append(o.APIOptions, excludeAcceptEncodingFromSigning)
 	}), nil
+}
+
+type acceptEncodingKey struct{}
+
+// excludeAcceptEncodingFromSigning strips Accept-Encoding before SigV4 signing
+// and restores it afterwards. AWS SDK Go v2 sets Accept-Encoding: identity to
+// disable transparent gzip decompression in net/http, and signs it; S3-compatible
+// frontends such as Google Cloud Storage normalize or strip Accept-Encoding
+// before verifying the signature, causing SignatureDoesNotMatch.
+func excludeAcceptEncodingFromSigning(stack *middleware.Stack) error {
+	if err := stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc(
+		"RemoveAcceptEncodingBeforeSigning",
+		func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
+			middleware.FinalizeOutput, middleware.Metadata, error,
+		) {
+			if req, ok := in.Request.(*smithyhttp.Request); ok {
+				if vals := req.Header.Values("Accept-Encoding"); len(vals) > 0 {
+					ctx = middleware.WithStackValue(ctx, acceptEncodingKey{}, slices.Clone(vals))
+					req.Header.Del("Accept-Encoding")
+				}
+			}
+			return next.HandleFinalize(ctx, in)
+		},
+	), "Signing", middleware.Before); err != nil {
+		return err
+	}
+	return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc(
+		"RestoreAcceptEncodingAfterSigning",
+		func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
+			middleware.FinalizeOutput, middleware.Metadata, error,
+		) {
+			if req, ok := in.Request.(*smithyhttp.Request); ok {
+				if vals, ok := middleware.GetStackValue(ctx, acceptEncodingKey{}).([]string); ok {
+					req.Header["Accept-Encoding"] = slices.Clone(vals)
+				}
+			}
+			return next.HandleFinalize(ctx, in)
+		},
+	), "Signing", middleware.After)
 }
 
 // NewFromEnv builds the ObjectStorage for the backend UsesS3 selects.
