@@ -951,6 +951,7 @@ kind: ServiceAccount
 metadata:
   name: atenet-egress
   namespace: ate-system
+automountServiceAccountToken: false
 
 ---
 # Source: substrate/templates/atenet-router-envoy.yaml
@@ -3160,6 +3161,7 @@ spec:
         app: ate-idp-server
     spec:
       serviceAccountName: ate-idp-server
+      automountServiceAccountToken: false
       containers:
       - name: ate-idp-server
         image: ghcr.io/agent-substrate/substrate/ate-idp-server:0.1.0
@@ -3238,6 +3240,7 @@ spec:
         checksum/envoy-config: bc48ff685deb07402a5e3b379b8233f7d4cb3488fef1f0d4e2b971d56012503b
     spec:
       serviceAccountName: atenet-egress
+      automountServiceAccountToken: false
       securityContext:
         runAsUser: 65532
         runAsGroup: 65532

@@ -957,6 +957,7 @@ kind: ServiceAccount
 metadata:
   name: atenet-egress
   namespace: ate-system
+automountServiceAccountToken: false
 
 ---
 # Source: substrate/templates/atenet-router.yaml
@@ -2020,6 +2021,7 @@ spec:
         app: ate-idp-server
     spec:
       serviceAccountName: ate-idp-server
+      automountServiceAccountToken: false
       containers:
       - name: ate-idp-server
         image: ghcr.io/agent-substrate/substrate/ate-idp-server:0.1.0
@@ -2096,6 +2098,7 @@ spec:
         app: atenet-egress
     spec:
       serviceAccountName: atenet-egress
+      automountServiceAccountToken: false
       securityContext:
         sysctls:
         - name: net.ipv4.ip_unprivileged_port_start

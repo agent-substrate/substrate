@@ -42,6 +42,7 @@ spec:
     spec:
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       serviceAccountName: {{ include "substrate.fullname" (list "ate-idp-server" .) }}
+      automountServiceAccountToken: false
       containers:
       - name: ate-idp-server
         image: {{ include "substrate.componentImage" (list "ate-idp-server" .) }}

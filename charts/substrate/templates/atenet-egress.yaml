@@ -20,6 +20,7 @@ kind: ServiceAccount
 metadata:
   name: {{ include "substrate.fullname" (list "atenet-egress" .) }}
   namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: false
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -145,6 +146,7 @@ spec:
         app: atenet-egress
     spec:
       serviceAccountName: {{ include "substrate.fullname" (list "atenet-egress" .) }}
+      automountServiceAccountToken: false
       securityContext:
         sysctls:
         - name: net.ipv4.ip_unprivileged_port_start

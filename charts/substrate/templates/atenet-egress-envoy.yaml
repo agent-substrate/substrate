@@ -20,6 +20,7 @@ kind: ServiceAccount
 metadata:
   name: {{ include "substrate.fullname" (list "atenet-egress" .) }}
   namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: false
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -51,6 +52,7 @@ spec:
         checksum/envoy-config: {{ .Files.Get "files/atenet-egress-envoy-config.yaml" | sha256sum }}
     spec:
       serviceAccountName: {{ include "substrate.fullname" (list "atenet-egress" .) }}
+      automountServiceAccountToken: false
       {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
       securityContext:
         runAsUser: 65532
