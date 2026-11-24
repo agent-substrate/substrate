@@ -249,12 +249,11 @@ const (
 	DNSDecisionDenied  = "denied"
 )
 
-// Values for ImageProviderOutcomeKey. Fallback means the image provider plugin
-// declined the image or failed and the image cache served it. Error means both
-// failed.
+// Values for ImageProviderOutcomeKey. They describe the image provider plugin
+// only: atelet pulls into the image cache after a decline or an error.
 const (
 	ImageProviderOutcomeSuccess  = "success"
-	ImageProviderOutcomeFallback = "fallback"
+	ImageProviderOutcomeDeclined = "declined"
 	ImageProviderOutcomeError    = "error"
 )
 

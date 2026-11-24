@@ -15,6 +15,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,8 +25,11 @@ import (
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	providermock "github.com/ai-on-gke/image-provider-plugin/client/mock"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // writeTestBundle writes spec as the overlay spec of actorUID's container
@@ -95,6 +100,47 @@ func TestReconcileProviderLeasesUnreadableSpec(t *testing.T) {
 	}
 	if len(provider.ReconcileCalls) != 0 {
 		t.Errorf("ReconcileImages calls = %v, want none", provider.ReconcileCalls)
+	}
+}
+
+// A reconcile sends the lease a bundle is taking without waiting for the
+// pull, the spec's lease once the bundle records it, and nothing once the
+// bundle releases it, even if the release fails.
+func TestReconcileProviderLeasesWithBundles(t *testing.T) {
+	preview.InitForTest(t, string(preview.GateImageProviderPlugin))
+	useTempNodeDirs(t)
+	const ref = "registry.example/app:1"
+	provider := providermock.New("nydus")
+	s := &Atelet{imageProvider: provider, imageCache: newImageVolumeStore(t)}
+	rootfs := streamedRootfs(t)
+	provider.PrepareImageFunc = func(ctx context.Context, _ *providerclient.PrepareRequest) (*providerclient.PrepareResult, error) {
+		if err := s.reconcileProviderLeases(ctx, nodepath.ActorsDir); err != nil {
+			return nil, err
+		}
+		return streamedResult(rootfs), nil
+	}
+	provider.ReleaseImageFunc = func(context.Context, *providerclient.ReleaseRequest) error {
+		return errors.New("plugin unavailable")
+	}
+
+	if _, _, err := prepareOCIDirectory(t.Context(), s.imageSource(), "actor-1", "app", ref, nil, nil); err != nil {
+		t.Fatalf("prepareOCIDirectory: %v", err)
+	}
+	if err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
+		t.Fatalf("reconcileProviderLeases: %v", err)
+	}
+	s.releaseProviderLeases(t.Context(), "actor-1")
+	if err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
+		t.Fatalf("reconcileProviderLeases: %v", err)
+	}
+
+	want := [][]*providerclient.ActiveLease{
+		{{LeaseID: "actor-1/app", ImageRef: ref}},
+		{{LeaseID: "actor-1/app", ImageRef: ref, ImageDigest: testStreamedDigest}},
+		nil,
+	}
+	if diff := cmp.Diff(want, provider.ReconcileCalls, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
 	}
 }
 

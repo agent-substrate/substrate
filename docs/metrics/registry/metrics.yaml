@@ -592,28 +592,30 @@ groups:
     attributes:
       - id: ate.imageprovider.outcome
         stability: development
-        brief: The result of one request to prepare an image's layers.
+        brief: >
+          The plugin's answer to one request to prepare an image. atelet pulls
+          into the image cache after declined or error.
         type:
           members:
             - id: success
               stability: development
               value: success
-              brief: The image provider plugin prepared the layers.
-            - id: fallback
+              brief: The image provider plugin prepared the image.
+            - id: declined
               stability: development
-              value: fallback
-              brief: >
-                The plugin declined the image or failed. atelet used the image
-                cache instead.
+              value: declined
+              brief: The plugin does not serve the image.
             - id: error
               stability: development
               value: error
-              brief: The plugin and the image cache both failed.
+              brief: The plugin failed, or atelet rejected its answer.
       - id: ate.imageprovider.provider
         stability: development
-        brief: The name of the image provider plugin.
+        brief: >
+          The name the image provider plugin reports. It is unknown until the
+          plugin first answers.
         type: string
-        examples: [nydus, riptide]
+        examples: [nydus, riptide, unknown]
 
   - id: registry.ate.filecache
     type: attribute_group
@@ -833,7 +835,7 @@ groups:
           for the failures. At an RPC boundary this key holds the gRPC status
           code. On ate.imagecache.requests it holds the HTTP status of the
           registry.
-        examples: ["ResourceExhausted", "404", "_OTHER"]
+        examples: ["ResourceExhausted", "404", "invalid_result", "_OTHER"]
       - id: file.name
         stability: stable
         type: string
@@ -1440,6 +1442,8 @@ groups:
       A miss causes a pull and an unpack. Thus the hit ratio of a node is an
       early sign of the resume time. Calculate the ratio as hit / (hit + miss).
       Do not put the failures or the stopped lookups in the denominator.
+      A CachedImage miss is not counted, because the caller then either pulls
+      through EnsureImage, which counts it, or gets the image elsewhere.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1464,8 +1468,12 @@ groups:
     stability: development
     brief: The number of requests to the image provider plugin on the node, by provider and outcome.
     note: >
-      A high fallback count means the images have no artifacts the plugin can
-      serve, or the plugin is unavailable.
+      A high declined count means the images have no artifacts the plugin can
+      serve. Errors mean the plugin is unavailable or misbehaving, and
+      error.type says how. atelet pulls into the image cache after either, which
+      ate.imagecache.requests counts. An image the plugin serves is not counted
+      in ate.imagecache.requests. A node without a plugin socket records
+      nothing.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1477,6 +1485,12 @@ groups:
         requirement_level: required
       - ref: ate.imageprovider.outcome
         requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: &imageprovider_error_type >
+            The outcome is error. The key holds the gRPC status code of the
+            failed call, or invalid_result when atelet rejects the plugin's
+            answer.
 
   - id: metric.ate.imageprovider.duration
     type: metric
@@ -1484,7 +1498,9 @@ groups:
     instrument: histogram
     unit: s
     stability: development
-    brief: The time the image provider plugin takes to prepare an image's layers on the node.
+    brief: >
+      The time the image provider plugin on the node takes to answer for one
+      image, CanProvide and PrepareImage, without a pull into the image cache.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1496,6 +1512,9 @@ groups:
         requirement_level: required
       - ref: ate.imageprovider.outcome
         requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: *imageprovider_error_type
 
   - id: metric.ate.imageprovider.auth_refresh.failures
     type: metric
