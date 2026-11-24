@@ -333,33 +333,38 @@ def microvm_versions(substrate_dir: str = ".") -> dict[str, str]:
 def worker_cpu_platforms() -> str | None:
     """The CPU platforms of the GCE instances that run worker pods, comma
     joined, or None when no worker node is a GCE instance. The Kubernetes API
-    has no CPU model, so this asks Compute Engine; a failed lookup is logged
-    and leaves the node out."""
-    pods = run(
+    has no CPU model, so this asks Compute Engine, with one call per project.
+    A failed gcloud call is logged and leaves its nodes out; a failed kubectl
+    call fails the test, as the cluster is then unusable anyway."""
+    nodes = set(run(
         ["kubectl", "get", "pods", "-n", "benchmark-workloads", "-l", "ate.dev/worker-pool",
          "-o", "jsonpath={.items[*].spec.nodeName}"],
         stdout=subprocess.PIPE, text=True,
-    ).stdout.split()
+    ).stdout.split())
+    provider_ids = run(
+        ["kubectl", "get", "nodes", "-o",
+         "jsonpath={range .items[*]}{.metadata.name} {.spec.providerID}{\"\\n\"}{end}"],
+        stdout=subprocess.PIPE, text=True,
+    ).stdout.splitlines()
+    # gce://<project>/<zone>/<instance>, by project.
+    instances: dict[str, list[str]] = {}
+    for line in provider_ids:
+        name, _, provider_id = line.partition(" ")
+        m = re.fullmatch(r"gce://([^/]+)/[^/]+/([^/]+)", provider_id)
+        if name in nodes and m:
+            instances.setdefault(m.group(1), []).append(m.group(2))
     platforms = set()
-    for node in sorted(set(pods)):
-        provider_id = run(
-            ["kubectl", "get", "node", node, "-o", "jsonpath={.spec.providerID}"],
-            stdout=subprocess.PIPE, text=True,
-        ).stdout.strip()
-        # gce://<project>/<zone>/<instance>
-        m = re.fullmatch(r"gce://([^/]+)/([^/]+)/([^/]+)", provider_id)
-        if not m:
-            continue
-        project, zone, instance = m.groups()
+    for project, names in sorted(instances.items()):
         r = run_no_check(
-            ["gcloud", "compute", "instances", "describe", instance, "--zone", zone,
-             "--project", project, "--format", "value(cpuPlatform)"],
+            ["gcloud", "compute", "instances", "list", "--project", project,
+             "--filter", f"name:({' '.join(sorted(names))})",
+             "--format", "value(cpuPlatform)"],
             stdout=subprocess.PIPE, text=True,
         )
-        if r.returncode != 0 or not r.stdout.strip():
-            print(f"Warning: no CPU platform for node {node}", flush=True)
+        if r.returncode != 0:
+            print(f"Warning: no CPU platform for the nodes in project {project}", flush=True)
             continue
-        platforms.add(r.stdout.strip())
+        platforms.update(line for line in r.stdout.split("\n") if line.strip())
     return ",".join(sorted(platforms)) or None
 
 

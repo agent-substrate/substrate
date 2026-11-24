@@ -30,10 +30,10 @@ You need a cluster that meets the
 [test cluster prerequisites](../README.md#test-cluster-prerequisites), with KVM
 nodes for microVM workers and
 [`benchmarking/monitoring.yaml`](../../monitoring.yaml) applied. Without
-Prometheus the system stats and snapshot numbers are `null`. One node is enough.
-With two, the runner Job and the system components can stay off the worker's
-node: add `--cordon-system-infra-components` to each test's `ateArgs` and give
-the second node the taints that flag expects.
+Prometheus the system stats and snapshot numbers are `null`. One node is enough,
+and the runner Job and the system components then share it with the worker. To
+keep them off the worker's node on a second node, a new baseline version can add
+`--cordon-system-infra-components` to each test's `ateArgs`.
 
 Every test deletes and reinstalls Substrate on the cluster, so do not use a
 shared cluster. See [Running from a workstation](../README.md#running-from-a-workstation)
@@ -77,8 +77,16 @@ files row by row.
 | Storage | `server_summary` | `node_disk_<device>_read_*`, `node_disk_<device>_write_*`, `psi_io_stall_*` |
 | Memory | `server_summary` | `working_set_*`, `psi_mem_stall_*` |
 
-Locust rows hold client latencies in milliseconds, with `median_response_time`,
-`average_response_time` and percentiles `p50` … `p100`. glutton's
+Locust rows hold latencies in milliseconds, with `median_response_time`,
+`average_response_time` and percentiles `p50` … `p100`. glutton records the
+client wall clock for each RPC. sweperf records the server's elapsed time from
+the response trailer, and the client wall clock in a `<name>_rtt` row, so
+compare a Python row with a Go or Node.js row through its `_rtt` row.
+
+`warmup_s` runs to the end of the golden actor's warmup. A template without a
+wakeup probe, such as sweperf's, waits a fixed 20s there. `golden_snapshot_s`
+also includes deleting the golden actor, which comes before the tag is saved.
+glutton's
 `ResumeActorFirstResume` row is the first resume from the golden snapshot. Each
 field is described in the
 [benchmarking guide](../../../docs/guides/benchmarking.md#benchmark-output-files).

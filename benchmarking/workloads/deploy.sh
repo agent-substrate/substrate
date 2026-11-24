@@ -109,6 +109,9 @@ usage() {
   echo "                              FAKE_ATELET_DELAY=500ms sets --delay, FAKE_ATELET_DELAY_RESTORE=2s sets"
   echo "                              --delay-restore. Repeatable; unset flags keep fake-atelet's defaults"
   echo "  -h, --help                  Show this help message"
+  echo ""
+  echo "Env: WORKLOAD_TEMPLATES picks the templates. The glutton-node template uses"
+  echo "GLUTTON_NODE_IMAGE, or builds it with docker and pushes it to KO_DOCKER_REPO."
 }
 
 # Read the endpoint from the ate-otel-config ConfigMap, which every control
@@ -281,8 +284,8 @@ tune_fake_atelet() {
   done
 }
 
-# build_glutton_node builds the glutton-node image for the cluster's node
-# architecture, pushes it to KO_DOCKER_REPO tagged by the hash of its
+# build_glutton_node builds the glutton-node image for the architecture of
+# a worker pod's node, pushes it to KO_DOCKER_REPO tagged by the hash of its
 # sources, and sets GLUTTON_NODE_IMAGE to the pushed digest.
 build_glutton_node() {
   local dir="benchmarking/workloads/glutton-node"
@@ -291,13 +294,18 @@ build_glutton_node() {
     exit 1
   fi
   local arch tag image
-  arch="$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')"
+  local node
+  node="$(kubectl get pods --namespace=benchmark-workloads -l ate.dev/worker-pool \
+    -o jsonpath='{.items[0].spec.nodeName}')"
+  arch="$(kubectl get node "${node}" -o jsonpath='{.status.nodeInfo.architecture}')"
   tag="$(cat "${dir}/Dockerfile" "${dir}/server.js" | git hash-object --stdin | cut -c1-12)"
   image="${KO_DOCKER_REPO}/glutton-node:${tag}"
   echo "Building ${image} for linux/${arch}..."
   docker build --platform "linux/${arch}" -t "${image}" "${dir}"
   docker push "${image}"
-  GLUTTON_NODE_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}")"
+  # RepoDigests holds one entry per registry the image was pushed to.
+  GLUTTON_NODE_IMAGE="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${image}" \
+    | grep -m1 "^${KO_DOCKER_REPO}/glutton-node@")"
 }
 
 deploy() {
@@ -327,9 +335,6 @@ deploy() {
   ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
   ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
   ACTOR_MEMORY_MIB=$((ACTOR_MEMORY_BYTES >> 20))
-  if [[ -z "${GLUTTON_NODE_IMAGE}" && " ${TEMPLATES[*]} " == *" glutton-node "* ]]; then
-    build_glutton_node
-  fi
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
@@ -346,6 +351,11 @@ deploy() {
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
     kubectl rollout status deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+  fi
+
+  # After the pool, so the image is built for its nodes.
+  if [[ -z "${GLUTTON_NODE_IMAGE}" && " ${TEMPLATES[*]} " == *" glutton-node "* ]]; then
+    build_glutton_node
   fi
 
   # The store enforces that a template's atespace exists at create time.

@@ -968,7 +968,10 @@ actually did, independent of what the load generator reported.
 * `node_system.cpu_cores`, `net_rx_mb_s`, `net_tx_mb_s`: CPU in use (cores),
   and network throughput (MiB/s), from cAdvisor's root cgroup on the nodes
   hosting a worker pod, with every node's samples pooled and `max` added.
-  A one-minute rate read every 10s.
+  A one-minute rate read every 10s. Network sums every host interface cAdvisor
+  reports, so where pod veths are not named `veth*`, as on GKE, pod traffic
+  counts on the veth and on the NIC. Compare it between runs on the same
+  cluster type.
 * `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
 * `snapshots.size_avg_mb`: mean memory image size.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the

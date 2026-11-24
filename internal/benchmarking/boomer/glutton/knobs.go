@@ -52,8 +52,8 @@ type gluttonKnobs struct {
 	// values below 1 read as 1.
 	MaxPingsPerWake int `json:"max_pings_per_wake"`
 	// Template is the ActorTemplate actors are created from; empty falls
-	// back to templateName. Any template whose actor serves glutton's HTTP
-	// routes works, such as glutton-node.
+	// back to templateName. glutton-node serves /ping, /writeram and
+	// /readram, so it supports every knob but the CPU load.
 	Template string `json:"glutton_template"`
 }
 

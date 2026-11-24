@@ -958,14 +958,17 @@ class DataplaneMetadataTest(unittest.TestCase):
     def test_worker_cpu_platforms(self, run, run_no_check):
         out = lambda s: subprocess.CompletedProcess([], 0, stdout=s)
         run.side_effect = [
-            out("node-a node-b node-a"),
-            out("gce://p/us-central1-a/node-a"),
-            out("kind://docker/kind/node-b"),
+            out("node-a node-b node-c node-a"),
+            out("node-a gce://p/us-central1-a/node-a\n"
+                "node-b kind://docker/kind/node-b\n"
+                "node-c gce://p/us-central1-b/node-c\n"
+                "infra gce://p/us-central1-a/infra\n"),
         ]
-        run_no_check.return_value = out("Intel Sapphire Rapids\n")
+        run_no_check.return_value = out("Intel Sapphire Rapids\nIntel Sapphire Rapids\n")
         self.assertEqual(orchestrator.worker_cpu_platforms(), "Intel Sapphire Rapids")
+        # One call for the project, naming only the GCE worker nodes.
         self.assertEqual(run_no_check.call_count, 1)
-        self.assertIn("node-a", run_no_check.call_args.args[0])
+        self.assertIn("name:(node-a node-c)", run_no_check.call_args.args[0])
 
     @mock.patch("orchestrator.worker_cpu_platforms", return_value=None)
     def test_gvisor_has_no_microvm_versions(self, _):

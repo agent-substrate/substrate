@@ -24,7 +24,7 @@ def add_glutton_arguments(parser: LocustArgumentParser) -> None:
         "--glutton-template",
         type=str,
         default="glutton",
-        help="ActorTemplate the GluttonUser creates actors from. Any template "
-        "whose actor serves glutton's HTTP routes works, such as "
-        "glutton-node (default: glutton).",
+        help="ActorTemplate the GluttonUser creates actors from, such as "
+        "glutton-node, which serves the ping and memory routes but not "
+        "--cpu-cores (default: glutton).",
     )

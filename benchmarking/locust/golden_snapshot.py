@@ -16,8 +16,10 @@
 
 The template controller starts a golden actor, waits for it to warm up,
 suspends it and tags the snapshot. The template's status records the end of
-the warmup as snapshot_time, and the status write that saves the tag is the
-template's last update, so update_time marks the tag. Both are read against
+the warmup as snapshot_time, which for a template without a wakeup probe
+includes a fixed wait. The status write that saves the tag follows deleting
+the golden actor and is the template's last update, so update_time marks the
+tag. Both are read against
 the template's create_time. workloads/deploy.sh creates the templates just
 before the run, so they have no later writes.
 """

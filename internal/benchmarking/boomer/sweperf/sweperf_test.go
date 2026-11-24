@@ -1768,3 +1768,32 @@ func TestShutdownCutsOffInFlightCycle(t *testing.T) {
 		})
 	}
 }
+
+// TestResumeAfterFailedFirstSuspend checks that a resume gets the
+// ResumeActorAfterFirstSuspend row only after cycle 1's suspend succeeded.
+func TestResumeAfterFailedFirstSuspend(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		suspendErr error
+		want       string
+	}{
+		{"suspended", nil, "ResumeActorAfterFirstSuspend"},
+		{"suspend failed", errors.New("suspend failed"), "ResumeActor"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+			fakeCtrl.suspendErr = tt.suspendErr
+			u := &sweperfUser{cfg: cfg, actorName: "test-actor", userClass: sweperfUserClass,
+				chunks: []chunk{{0, 5}, {5, 10}, {10, 15}}, awake: true}
+			u.step(context.Background())
+			fakeCtrl.mu.Lock()
+			fakeCtrl.suspendErr = nil
+			fakeCtrl.mu.Unlock()
+			before := readStats(t)
+			u.step(context.Background())
+			if got := recordedSince(t, before, tt.want, "success"); got.count != 1 {
+				t.Errorf("%s recorded %d samples, want 1", tt.want, got.count)
+			}
+		})
+	}
+}

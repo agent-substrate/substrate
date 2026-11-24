@@ -17,9 +17,10 @@
 // messages are those of internal/proto/glutton/glutton.proto, encoded by hand
 // so the image needs no npm packages.
 //
-// The working set lives on the V8 heap as packed double arrays, so suspend
-// and resume see the memory layout and garbage collector of a Node.js
-// process. glutton (Go) keeps it in []byte instead.
+// The working set lives on the V8 heap as arrays of doubles, so suspend and
+// resume see the memory layout and garbage collector of a Node.js process.
+// glutton (Go) keeps it in []byte instead. The routes glutton-node lacks,
+// such as /usecpu, answer 404.
 
 'use strict';
 
@@ -141,9 +142,11 @@ function encode(fields) {
 // doubles, and cursor is where the next rotate starts.
 const ram = new Map();
 
+// randomChunk builds the chunk with push, so V8 keeps it a packed double
+// array rather than a holey or dictionary one.
 function randomChunk(n) {
-  const chunk = new Array(n);
-  for (let j = 0; j < n; j++) chunk[j] = Math.random();
+  const chunk = [];
+  for (let j = 0; j < n; j++) chunk.push(Math.random());
   return chunk;
 }
 
@@ -244,6 +247,10 @@ const server = http.createServer((request, response) => {
     }
   });
 });
+
+// No idle timeout, like glutton: the ingress proxy pools connections for
+// longer than Node's 5s default and would hit closed ones after a suspend.
+server.keepAliveTimeout = 0;
 
 const port = Number(process.env.PORT || 80);
 server.listen(port, () => console.log(`glutton-node listening on :${port}`));
