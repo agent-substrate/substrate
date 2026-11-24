@@ -223,7 +223,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 
 	var buf bytes.Buffer
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	h := New(&mockClient{
@@ -261,6 +261,26 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		if blob, _ := json.Marshal(q); strings.Contains(string(blob), secret) {
 			t.Errorf("recorder/statusz retained sensitive value: %s", blob)
 		}
+	}
+}
+
+func TestHandleRequestHeadersRoutedRequestLogsNothingAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := New(&mockClient{
+		resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
+		},
+	}, ParkedRequestConfig{}, nil)
+
+	if _, err := h.HandleRequestHeaders(context.Background(), requestMetadata("123e4567-e89b-12d3-a456-426614174000", "team-a")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("routed request logged at info level: %s", buf.String())
 	}
 }
 
