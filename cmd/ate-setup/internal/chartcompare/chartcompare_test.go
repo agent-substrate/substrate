@@ -16,9 +16,11 @@ package chartcompare
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -99,8 +101,9 @@ func enablePodCertificates(env *envtest.Environment) {
 
 // TestChartsMatchAteSetup installs each scenario that has an ate-setup-flags
 // file twice, each time on its own envtest API server: once with
-// `ate-setup deploy ate-system` and those flags, and once from the scenario's
-// rendered.yaml. It then compares the objects that each install created.
+// `ate-setup deploy ate-system` and those flags, and once from the charts
+// rendered with the scenario's values. It then compares the objects that each
+// install created.
 func TestChartsMatchAteSetup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts envtest API servers")
@@ -123,7 +126,7 @@ func TestChartsMatchAteSetup(t *testing.T) {
 		dir := filepath.Dir(flagFile)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			setup := installWithAteSetup(t, flagFile)
-			charts := installCharts(t, filepath.Join(dir, "rendered.yaml"))
+			charts := installCharts(t, renderScenario(t, root, dir))
 			got := differences(t, setup, charts)
 			path := filepath.Join(dir, "differences.yaml")
 			if *updateDifferences {
@@ -160,12 +163,51 @@ func installWithAteSetup(t *testing.T, flagFile string) map[string]map[string]an
 	return installed(t, restCfg, baseline)
 }
 
-func installCharts(t *testing.T, rendered string) map[string]map[string]any {
+// renderScenario renders the charts with the values of the scenario in dir.
+func renderScenario(t *testing.T, root, dir string) []*unstructured.Unstructured {
 	t.Helper()
-	objs, err := kube.LoadPath(rendered)
+	readRenderInputs(t, root)
+	cmd := exec.CommandContext(t.Context(), filepath.Join(root, "hack", "render-chart-scenario.sh"), dir)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rendering %s: %v\n%s", dir, err, stderr.String())
+	}
+	objs, err := kube.DecodeManifestBytes(out)
+	if err != nil {
+		t.Fatalf("decoding the render of %s: %v", dir, err)
+	}
+	return objs
+}
+
+// readRenderInputs reads the files that the render uses. go test caches a
+// result by the files that the test reads, and helm reads the charts in
+// another process, so without this a cached result hides a chart change.
+func readRenderInputs(t *testing.T, root string) {
+	t.Helper()
+	paths := []string{
+		filepath.Join(root, "hack", "render-chart-scenario.sh"),
+		filepath.Join(root, "hack", "tools", "helm", "go.mod"),
+	}
+	err := filepath.WalkDir(filepath.Join(root, "charts"), func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			paths = append(paths, path)
+		}
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, path := range paths {
+		if _, err := os.ReadFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func installCharts(t *testing.T, objs []*unstructured.Unstructured) map[string]map[string]any {
+	t.Helper()
 	restCfg, client, baseline := startAPIServer(t)
 	// helm install --create-namespace creates the release namespaces.
 	var namespaces []string
@@ -180,7 +222,7 @@ func installCharts(t *testing.T, rendered string) map[string]map[string]any {
 		}
 	}
 	if err := client.Apply(t.Context(), objs); err != nil {
-		t.Fatalf("applying %s: %v", rendered, err)
+		t.Fatalf("applying the chart objects: %v", err)
 	}
 	return installed(t, restCfg, baseline)
 }

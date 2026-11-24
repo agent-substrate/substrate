@@ -14,10 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Renders the charts with the values of each scenario in charts/scenarios, and
+# fails when a scenario does not render.
 
 set -o errexit -o nounset -o pipefail
 
-ROOT="$(git rev-parse --show-toplevel)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${ROOT}"
 
-./hack/third_party/kubernetes/verify-generated.sh chart-golden "$@"
+for dir in charts/scenarios/*/; do
+  hack/render-chart-scenario.sh "${dir}" >/dev/null
+done
+echo "Each scenario in charts/scenarios renders."
