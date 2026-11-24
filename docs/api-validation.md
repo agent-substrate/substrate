@@ -88,14 +88,9 @@ learn these rules.
 
 ### Alpha / beta tags
 
-Some tags are designated "alpha" or "beta" in validation-gen.  If we try to use
-such a tag in our APIs, we will get a warning.  To get around this, we must
-acknowledge that we are using an alpha or beta tag by adding a `+k8s:alpha` or
-`+k8s:beta` tag prefix.  Example:
-
-```
-// +k8s:alpha(since: "0.0")=+k8s:theAlphaTagWeWantToUse
-```
+Some tags are designated "alpha" or "beta" in validation-gen; the `--docs`
+output shows the level of each tag.  The semantics of an alpha tag may change
+in a future release, so prefer a stable tag when one fits.
 
 ### Rules for all fields
 
@@ -136,13 +131,13 @@ requiring awkward evolution.  Consider using an enum instead of a boolean.
 
 All string fields must have either a `+k8s:format=<format>` tag or a
 `+k8s:maxLength=<length>` tag.  The format tag is preferred when possible.
-validation-gen supports a number of formats, and can easily be extended to
-support new ones.
+validation-gen supports a number of formats, and we can define our own (see
+"Custom formats" below).
 
-If validation-gen does not support the format you need, you can use a
-combination of `+k8s:maxLength` and `+k8s:customValidation` (see below) tags.
-If a string field does not have an a priori known format, then it must at least
-have a `+k8s:maxLength` tag.
+If no format fits and a regular expression cannot describe the value, you can
+use a combination of `+k8s:maxLength` and `+k8s:customValidation` (see below)
+tags.  If a string field does not have an a priori known format, then it must
+at least have a `+k8s:maxLength` tag.
 
 ### Rules for struct (message) fields
 
@@ -389,8 +384,44 @@ be specified, we can do this:
 ObjectRef worker = 1;
 ```
 
-Subfields may not be nested, but that will come in a future release.  If you
-need deeper subfield validation, you can use `+k8s:customValidation` (see below).
+Subfield tags can be nested to reach deeper fields:
+
+```
+// +k8s:required
+// +k8s:subfield(metadata)=+k8s:required
+// +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
+Tag tag = 1;
+```
+
+A subfield validation is skipped when the message which holds the subfield is
+unset, so tag the intermediate field as required if it must be present.
+
+### Custom formats
+
+When validation-gen has no format for a value which a regular expression can
+describe, we can define one in `.validation-extensions.yaml`.  Example:
+
+```
+formats:
+  - name: ate-singleton-name
+    docs: This field must be "default"
+    pattern: (^$|^default$)
+    message: must be "default"
+```
+
+The new format is used like a built-in one:
+
+```
+// +k8s:required
+// +k8s:format=ate-singleton-name
+string name = 1;
+```
+
+The pattern is only anchored if it says so with `^` and `$`.  A format which is
+applied through `+k8s:subfield` is evaluated even when the subfield is empty,
+so the pattern should accept the empty string and leave emptiness to
+`+k8s:optional` and `+k8s:required`.  Every format needs an exhaustive test in
+`internal/apivalidationtest`.
 
 ### Custom validation
 

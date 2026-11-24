@@ -931,7 +931,7 @@ type ResourceMetadata struct {
 	// for update operations.
 	//
 	// +k8s:optional
-	// +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+	// +k8s:monotonic
 	// +k8s:minimum=1
 	// +k8s:update=NoUnset
 	Version int64 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
@@ -2151,7 +2151,7 @@ type ActorStatus struct {
 	// that have become stale and need to be cleaned up.
 	//
 	// +k8s:optional
-	// +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+	// +k8s:monotonic
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
 	LastAssignedGeneration int32 `protobuf:"varint,7,opt,name=last_assigned_generation,json=lastAssignedGeneration,proto3" json:"last_assigned_generation,omitempty"`
@@ -2318,7 +2318,7 @@ type WorkerAssignment struct {
 	//
 	// Workers are global-scoped, so this carries no atespace.
 	//
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	// +k8s:required
 	// +k8s:update=NoModify
 	Worker *ObjectRef `protobuf:"bytes,6,opt,name=worker,proto3" json:"worker,omitempty"`
@@ -2674,7 +2674,7 @@ type Atespace struct {
 	// Common resource metadata: name, uid, version, timestamps.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Metadata      *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4495,7 +4495,7 @@ func (x *CreateAtespaceRequest) GetAtespace() *Atespace {
 type GetAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4642,7 +4642,7 @@ func (x *ListAtespacesResponse) GetNextPageToken() string {
 type DeleteAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// Optional per-delete preconditions.
 	//
@@ -6396,7 +6396,7 @@ type ListWorkerActorAssignmentsRequest struct {
 	// The Worker under which to list Actors.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// Pagination controls.
 	//
@@ -6611,7 +6611,7 @@ type GetWorkerRequest struct {
 	// The Worker to fetch. atespace is always empty; Workers are global-scoped.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6767,7 +6767,7 @@ type DeleteWorkerRequest struct {
 	// The Worker to deregister.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// Optional per-delete preconditions.
 	//
@@ -6826,7 +6826,7 @@ type DrainWorkerRequest struct {
 	// The Worker to mark as terminating.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6921,7 +6921,7 @@ type MarkWorkerAvailableRequest struct {
 	// The Worker to mark ACTIVE.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -7016,7 +7016,7 @@ type MarkWorkerUnavailableRequest struct {
 	// The Worker to mark UNAVAILABLE.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -7236,7 +7236,7 @@ type Worker struct {
 	// uid and version are echoed back on UpdateWorker as preconditions.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Kubernetes coordinates. Immutable, set at creation.
 	//
@@ -8047,7 +8047,7 @@ type ActorAssignment struct {
 	// that caused an assignment is what addresses it.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// actor is the Actor that is assigned to the Worker.
 	//
@@ -8130,7 +8130,7 @@ type AcquireWorkerEpochRequest struct {
 	// Workers are global-scoped.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -8224,7 +8224,7 @@ type RegisterWorkerRequest struct {
 	// global-scoped.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// The epoch the worker process acquired through AcquireWorkerEpoch.
 	//
@@ -8358,7 +8358,7 @@ type SetWorkerSandboxRuntimesRequest struct {
 	// global-scoped.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// The epoch the worker process registered with.
 	//
@@ -8505,7 +8505,7 @@ type MintWorkerActorCertificateRequest struct {
 	// must be the Worker that the actor is assigned to.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker        *ObjectRef `protobuf:"bytes,4,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -8776,7 +8776,7 @@ type RequestActorSuspendRequest struct {
 	// names the Worker that certificate proves the request came from.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// The Actor to suspend. It must be assigned to worker; a Worker may speak
 	// only for what it hosts.
@@ -8897,7 +8897,7 @@ type ReportActorCrashedRequest struct {
 	// global-scoped. atelet fills this in from its caller's certificate.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// The Actor whose sandbox died. It must be assigned to worker.
 	//
@@ -9628,7 +9628,7 @@ type GetAtespaceAccessPolicyRequest struct {
 	// The parent Atespace of the access policy resource to retrieve.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// Name of the singleton access policy. Must be "default".
 	//
@@ -9689,7 +9689,7 @@ type CreateAtespaceAccessPolicyRequest struct {
 	// Parent Atespace under which to create the policy resource.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// The policy to create. metadata.name must be "default" and
 	// metadata.atespace must be empty.
@@ -9750,7 +9750,7 @@ type UpdateAtespaceAccessPolicyRequest struct {
 	// Parent Atespace under which to update the policy resource.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// Full replacement. Metadata UID and version are required preconditions;
 	// metadata.name must be "default" and metadata.atespace must be empty.
@@ -9811,7 +9811,7 @@ type DeleteAtespaceAccessPolicyRequest struct {
 	// The parent Atespace of the access policy resource to delete.
 	//
 	// +k8s:required
-	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:subfield(atespace)=+k8s:forbidden
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// Name of the singleton access policy. Must be "default".
 	//
