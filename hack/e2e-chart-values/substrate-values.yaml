@@ -17,13 +17,23 @@
 # values of the kind-envoy or kind-agentgateway scenario in charts/scenarios, as
 # hack/install-charts-kind.sh does with VALUES_OVERLAY.
 
-# The e2e suites reach actors through the router as this client.
 atenetRouter:
+  # The e2e suites reach actors through the router as this client.
   ingressAllowedSPIFFEIDs:
   - spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
+  # TestRequestParking/BudgetExhaustion needs the 5s parking budget of the
+  # router flag default. The agentgateway router does not use it otherwise.
+  requestParking:
+    budget: "5s"
 
 # TestActorEgressMultiplexing reads the debug log of the agentgateway egress
 # gateway. The envoy data plane does not use this value.
 atenetEgress:
   agentgateway:
     logLevel: debug
+
+# The metrics suite reads the OpenTelemetry collector that
+# manifests/ate-install/kind/otel-collector.yaml deploys. Apply it before the
+# install.
+otel:
+  endpoint: http://opentelemetry-collector.otel-system.svc:4317

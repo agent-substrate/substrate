@@ -26,3 +26,9 @@ atelet:
   # actors 30s after it, so the e2e suites see both within a run.
   - --snapshot-upload-delay=2s
   - --snapshot-detach-delay=30s
+
+# The metrics suite reads the OpenTelemetry collector that
+# manifests/ate-install/kind/otel-collector.yaml deploys. Apply it before the
+# install.
+otel:
+  endpoint: http://opentelemetry-collector.otel-system.svc:4317

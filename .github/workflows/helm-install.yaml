@@ -102,6 +102,9 @@ jobs:
           }
     - name: Create cluster (Kubernetes ${{ matrix.kubernetes }})
       run: hack/create-kind-cluster.sh
+    - name: Deploy the OpenTelemetry collector
+      # The metrics suite reads it. hack/e2e-chart-values points the charts at it.
+      run: kubectl --context kind-kind apply -f manifests/ate-install/kind/otel-collector.yaml
     - name: Install the charts (${{ matrix.scenario }})
       run: hack/install-charts-kind.sh "${{ matrix.scenario }}"
     - name: Enable NFS
