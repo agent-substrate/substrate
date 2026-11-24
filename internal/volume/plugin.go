@@ -24,7 +24,7 @@ type CreateVolumeRequest struct {
 	Name string
 	// CapacityBytes is the requested size in bytes.
 	CapacityBytes int64
-	// Parameters are the driver-specific parameters from the StorageClass.
+	// Parameters are the driver-specific parameters from the volume's class.
 	Parameters map[string]string
 	// SourceSnapshotID seeds the new volume from an existing snapshot. Empty
 	// provisions an empty volume. The snapshot must belong to the same driver:
@@ -76,6 +76,9 @@ type MountVolumeRequest struct {
 	// PublishContext is the metadata returned when the volume was attached to
 	// this node. It is empty for drivers that do not implement attachment.
 	PublishContext map[string]string
+	// MountOptions are passed to the CSI driver as MountFlags in the
+	// VolumeCapability.
+	MountOptions []string
 }
 
 // CreateSnapshotRequest describes a snapshot to take.
