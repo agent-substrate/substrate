@@ -241,8 +241,8 @@ jobs:
             && '["envoy", "agentgateway"]'
             || '["envoy"]'
           ) }}
-        # "off" enables no preview features; "on" enables all of them. The
-        # IPv6-only lane requires ActorIpv6Networking below.
+        # "off" enables no unrelated preview features; "on" enables all of
+        # them. IPv6 and dual-stack lanes require ActorIpv6Networking below.
         preview: ['off', 'on']
         sandbox: [gvisor, microvm]
         # IPv4 and IPv6-only run presubmit. Dual-stack joins them after merge
@@ -272,7 +272,7 @@ jobs:
       # --preview, so tests see the same gates as the install.
       ATE_PREVIEW: >-
         ${{ matrix.preview == 'on' && 'ALL'
-          || matrix.ip_family == 'ipv6' && 'ActorIpv6Networking'
+          || matrix.ip_family != 'ipv4' && 'ActorIpv6Networking'
           || '' }}
       # The suites' router client (internal/e2e/ingressauth.go). Only e2e
       # installs allowlist it, so the suites can reach actors through the
@@ -355,6 +355,9 @@ jobs:
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: go run ./cmd/ate-setup --kind deploy ate-system
+    - name: Stage gVisor assets for IPv6-only CI
+      if: ${{ matrix.ip_family == 'ipv6' && matrix.sandbox == 'gvisor' }}
+      run: .github/scripts/stage-gvisor-assets-kind.sh
     - name: Save microVM assets
       if: >-
         ${{ github.ref == 'refs/heads/main' && steps.microvm-assets.outputs.cache-hit != 'true'

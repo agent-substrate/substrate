@@ -301,6 +301,10 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
+	var runtimeAttributes sandboxruntimes.Attributes
+	if ipv6ActorNetworking {
+		runtimeAttributes = sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: families.String()}
+	}
 	reportConfig := register.ReportConfig{
 		SocketPath:           nodepath.WorkerSupportSocket,
 		CredentialBundlePath: tunnelConfig.CredentialBundle,
@@ -310,7 +314,7 @@ func do(ctx context.Context) error {
 		PodIPs:               workerPodIPs,
 		MemoryReservedBytes:  memoryReservedBytes,
 		ActorOverhead:        actorOverhead,
-		RuntimeAttributes:    sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: families.String()},
+		RuntimeAttributes:    runtimeAttributes,
 		SandboxClass:         string(atev1.SandboxClassMicroVM),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
