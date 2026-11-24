@@ -445,6 +445,9 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 		return fmt.Errorf("actor %s is not currently running on any worker pod", r.actorRef)
 	}
 
+	filter := r.filter
+	filter.uid = actor.GetMetadata().GetUid()
+
 	opts := &corev1.PodLogOptions{
 		Follow: false,
 	}
@@ -460,7 +463,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, r.filter, r.stdout, r.stderr)
+		filterAndDisplayLogLine(line, filter, r.stdout, r.stderr)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -473,6 +476,8 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 	// lastSeenTime is the kubelet's timestamp on the last line read from
 	// lastWorkerPod, the resume cursor for a reconnect to it.
 	var lastSeenTime time.Time
+	// lastUID is the UID of the actor the last stream was filtered for.
+	var lastUID string
 	var waitingLogged bool
 	var lastWaitingState ateapi.ActorState
 
@@ -516,6 +521,17 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		}
 		waitingLogged = false
 
+		uid := actor.GetMetadata().GetUid()
+		filter := r.filter
+		filter.uid = uid
+		if uid != lastUID {
+			// A new actor took the name. The last stream may have read some
+			// of its lines and skipped them, so read the pod log from the
+			// start.
+			lastSeenTime = time.Time{}
+			lastUID = uid
+		}
+
 		// The actor resumed on another worker.
 		switchedPod := podName != lastWorkerPod
 		if switchedPod {
@@ -550,7 +566,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		}
 
 		var wg sync.WaitGroup
-		r.startMigrationMonitor(streamCtx, streamCancel, &wg, podName)
+		r.startMigrationMonitor(streamCtx, streamCancel, &wg, podName, uid)
 
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
@@ -569,7 +585,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			} else {
 				vlogf(r.stderr, vTrace, "Log line had no kubelet timestamp prefix")
 			}
-			filterAndDisplayLogLine(line, r.filter, r.stdout, r.stderr)
+			filterAndDisplayLogLine(line, filter, r.stdout, r.stderr)
 		}
 		scanErr := scanner.Err()
 		stream.Close()
@@ -597,12 +613,14 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 }
 
 // startMigrationMonitor launches a background goroutine to query the control plane
-// and aborts the stream context if the actor is suspended and then resumed to a different pod.
+// and aborts the stream context if the actor is suspended, resumed to a
+// different pod, or replaced by a new actor with the same name.
 func (r *LogsActorRunner) startMigrationMonitor(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	wg *sync.WaitGroup,
 	currentPod string,
+	currentUID string,
 ) {
 	wg.Add(1)
 	go func() {
@@ -622,10 +640,10 @@ func (r *LogsActorRunner) startMigrationMonitor(
 					continue
 				}
 				act := resp
-				if act.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
-					// Actor suspended or migrated! Cancel stream context to reconnect.
-					vlogf(r.stderr, vBasic, "Actor %s left pod %s (state=%s, pod=%s); closing current log stream",
-						r.actorRef, currentPod, act.GetStatus().GetState(), act.GetStatus().GetWorkerAssignment().GetWorkerPod())
+				if act.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod || act.GetMetadata().GetUid() != currentUID {
+					// Actor suspended, migrated or recreated. Cancel stream context to reconnect.
+					vlogf(r.stderr, vBasic, "Actor %s left pod %s or was recreated (state=%s, pod=%s, uid=%s); closing current log stream",
+						r.actorRef, currentPod, act.GetStatus().GetState(), act.GetStatus().GetWorkerAssignment().GetWorkerPod(), act.GetMetadata().GetUid())
 					cancel()
 					return
 				}
@@ -709,7 +727,11 @@ const (
 // them by default, one class of them when source is set, or only the named
 // container's when container is set.
 type logLineFilter struct {
-	target    resources.ActorRef
+	target resources.ActorRef
+	// uid is the target's UID. The runner sets it once it has fetched the
+	// actor. A worker pod can host a deleted actor and a new one with the
+	// same name, and only the UID tells their lines apart.
+	uid       string
 	source    logSource
 	container string
 }
@@ -729,12 +751,15 @@ func newLogLineFilter(target resources.ActorRef, source, container string) (logL
 	return logLineFilter{target: target, source: logSource(source), container: container}, nil
 }
 
-// matches reports whether a line emitted by emitter from containerName (empty
-// for lifecycle events) should be displayed.
-func (f logLineFilter) matches(emitter resources.ActorRef, containerName string) bool {
+// matches reports whether a line emitted by emitter, whose UID is emitterUID,
+// from containerName (empty for lifecycle events) should be displayed.
+func (f logLineFilter) matches(emitter resources.ActorRef, emitterUID, containerName string) bool {
 	// Actor names are only unique within an atespace, and a worker pod can host
 	// actors from different atespaces over time, so match on both.
 	if emitter != f.target || f.target.Atespace == "" || f.target.Name == "" {
+		return false
+	}
+	if emitterUID != f.uid {
 		return false
 	}
 	switch f.source {
@@ -777,13 +802,14 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w, stderr io.Wri
 	}
 
 	var emitter resources.ActorRef
-	var emitterContainer string
+	var emitterUID, emitterContainer string
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
 				if name, ok := labels[string(ateattr.ActorNameKey)].(string); ok && name != "" {
 					emitter.Name = name
 					emitter.Atespace, _ = labels[string(ateattr.AtespaceKey)].(string)
+					emitterUID, _ = labels[string(ateattr.ActorUIDKey)].(string)
 					emitterContainer, _ = labels[string(ateattr.ActorContainerNameKey)].(string)
 					break
 				}
@@ -791,7 +817,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w, stderr io.Wri
 		}
 	}
 
-	if !filter.matches(emitter, emitterContainer) {
+	if !filter.matches(emitter, emitterUID, emitterContainer) {
 		return false
 	}
 
