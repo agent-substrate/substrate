@@ -111,7 +111,7 @@ func savedActorUIDs() ([]string, error) {
 	}
 	var actorUIDs []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || ateletpath.IsInternalDir(entry.Name()) {
 			continue
 		}
 		if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(entry.Name())); errors.Is(err, os.ErrNotExist) {
@@ -142,7 +142,7 @@ func MigrateSnapshotStateFiles() error {
 		return fmt.Errorf("while listing %s: %w", nodepath.SnapshotsDir, err)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || ateletpath.IsInternalDir(entry.Name()) {
 			continue
 		}
 		if err := migrateSnapshotStateFile(entry.Name()); err != nil {

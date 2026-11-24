@@ -209,7 +209,7 @@ func (t *Tracker) removeSupersededLocalCopyLocked(actorUID string, target Snapsh
 	if t.localInUseLocked(actorUID) {
 		return
 	}
-	if err := removeLocalCheckpoint(t.ctx, actorUID, target.uuid()); err != nil {
+	if err := removeLocalCheckpoint(t.ctx, t.trash, actorUID, target.uuid(), true); err != nil {
 		slog.WarnContext(t.ctx, "Failed to delete a superseded local checkpoint", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 }

@@ -17,7 +17,6 @@ package snapshottracker
 import (
 	"context"
 
-	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
@@ -167,7 +166,7 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		err = ctx.Err()
 	}
 	if err == nil {
-		err = actordirs.RemoveActorFilesExceptState(actorUID)
+		err = t.actorDirs.RemoveActorFilesExceptState(ctx, actorUID)
 	}
 	// Log and record before endOpLocked, which ends ctx.
 	elapsed := t.clock.Since(detachStart)

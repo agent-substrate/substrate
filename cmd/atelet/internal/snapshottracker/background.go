@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"time"
 
-	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
@@ -205,13 +204,13 @@ func (t *Tracker) prunePreRebootLocalLocked(a *actorSnapshots) {
 	// delete every local snapshot except a LatestLocal from this boot.
 	var pruneErr error
 	if localPreReboot && !a.Started {
-		pruneErr = actordirs.RemoveActorFilesExceptState(a.actorUID)
+		pruneErr = t.actorDirs.RemoveActorFilesExceptState(t.ctx, a.actorUID)
 	} else {
 		var keep []string
 		if a.LatestLocal != nil && !localPreReboot {
 			keep = []string{a.LatestLocal.uuid()}
 		}
-		pruneErr = PruneLocalCheckpoints(t.ctx, a.actorUID, keep...)
+		pruneErr = t.PruneLocalCheckpoints(t.ctx, a.actorUID, keep...)
 	}
 	if pruneErr != nil {
 		// Restore and uploads refuse what is left, which the actor's next

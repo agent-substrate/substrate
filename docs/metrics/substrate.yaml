@@ -258,3 +258,10 @@ blind_spots:
       that, as a checkpoint-when-idle agent, can show little or no CPU here.
       Its ate.actor.usage_sampled records keep it. Issue #2362 moves the
       counter to the ateworkers.
+  - area: background trash removal
+    code: cmd/atelet/internal/trash/reaper.go
+    brief: >
+      Background removal of retired actor directories and superseded local
+      snapshots has no metrics yet; failures are logged. A Checkpoint that
+      waits on WaitForActor for an actor's earlier retired directories runs
+      inside total with no phase of its own.
