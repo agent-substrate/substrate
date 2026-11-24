@@ -153,7 +153,8 @@ benchmarking/automation/venv/bin/python -u benchmarking/automation/orchestrator.
 ```
 
 [ateapi-cold-resume.md](ateapi-cold-resume.md) walks through a complete run
-of the cold resume tests this way. For a quicker loop that only rebuilds the
+of the cold resume tests this way. [baselines/](baselines/README.md) runs the dataplane
+baseline this way, to compare a change against its base commit. For a quicker loop that only rebuilds the
 runner against a cluster that already has substrate, see
 [benchmarking/nighthawk-ingress/run-dev.sh](../nighthawk-ingress/run-dev.sh).
 

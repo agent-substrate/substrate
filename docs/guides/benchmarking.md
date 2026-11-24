@@ -224,6 +224,11 @@ ran inside the sandbox, as reported by `replay.py`.
 * `TaskCEL`: CEL summed over one task.
 * `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time and actor
   startup.
+* `ColdStart`: `CreateActor` until the new actor's sandbox answers `/status`.
+* `SuspendActorFirstSuspend` (or `SuspendActorAsyncFirstSuspend`) and
+  `ResumeActorAfterFirstSuspend`: the suspend that ends cycle 1 and the resume that starts
+  cycle 2, the first from the actor's own snapshot. They are left out of the `SuspendActor`
+  and `ResumeActor` rows.
 * `CreateAtespace`, `CreateActor`, `ResumeActor`, `SuspendActor`, `DeleteActor`: Server-side
   elapsed time for each control-plane RPC from the response trailer, or client time without one.
 * `<rpc>_rtt`: Client round trip for the RPC of the same name, recorded only when the trailer is
@@ -237,7 +242,7 @@ runs on a freshly started actor and its resume is a no-op. Its successful `Resum
 `ResumeActor_rtt` and `ResumeToFirstExec` samples are not recorded; failures still are.
 
 The last cycle of a task is not suspended: the actor is deleted straight from running. A
-task of `n` cycles therefore records `n - 1` `SuspendActor` samples, and `TaskWallClock`
+task of `n` cycles therefore records `n - 1` suspend samples, and `TaskWallClock`
 does not include a final suspend. `DeleteActor` therefore times deleting a running actor,
 including its sandbox teardown, so it is not comparable with older runs that suspended the
 actor before deleting it.
