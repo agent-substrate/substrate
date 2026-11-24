@@ -109,16 +109,19 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 
 	// Volume creation is completed asynchronously after the actor is recorded.
 	var initVols []*ateapi.ExternalVolumeStatus
-	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
-		return nil, err
-	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
-		initVols = iv
-	} else if len(iv) > 0 {
-		errs := field.ErrorList{
-			field.Forbidden(field.NewPath("actor", "actor_template"),
-				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
+	if templateHasExternalVolumes(template) {
+		// Check the gate before resolving any ExternalVolumeClass, so a caller
+		// without preview access sees the gate error first.
+		if !preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
+			errs := field.ErrorList{
+				field.Forbidden(field.NewPath("actor", "actor_template"),
+					"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
+			}
+			return nil, resources.ToAPIError(errs)
 		}
-		return nil, resources.ToAPIError(errs)
+		if initVols, err = initialExternalVolumes(ctx, s, template); err != nil {
+			return nil, err
+		}
 	}
 
 	// Verify that the result is properly valid before storing it.

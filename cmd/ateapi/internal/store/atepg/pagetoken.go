@@ -37,6 +37,8 @@ const (
 	kindTag           resourceKind = "tag"
 	kindWorker        resourceKind = "worker"
 	kindWorkerAssign  resourceKind = "worker-assignment"
+
+	kindExternalVolumeClass resourceKind = "external-volume-class"
 )
 
 // pageToken is PostgreSQL's opaque keyset page token. It carries no database

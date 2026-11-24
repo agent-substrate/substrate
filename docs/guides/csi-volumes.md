@@ -40,7 +40,10 @@ To discover and communicate with CSI drivers, Substrate uses dynamic discovery d
 
 ### The `CSIDriverConfig` Resource
 
-`CSIDriverConfig` defines the gRPC connection parameters for a specific CSI driver. It bridges the Kubernetes `StorageClass` (referenced in the `ActorTemplate`) to the network endpoint of the CSI Controller service and the local socket path of the CSI Node plugin.
+`CSIDriverConfig` defines the gRPC connection parameters for a specific CSI driver. It bridges the `ExternalVolumeClass` (referenced in the `ActorTemplate`) to the network endpoint of the CSI Controller service and the local socket path of the CSI Node plugin.
+
+> [!NOTE]
+> The `driverName` on an `ExternalVolumeClass` must match the `CSIDriverConfig` resource's `metadata.name` as well as `spec.driverName`.
 
 ```yaml
 apiVersion: ate.dev/v1
@@ -61,7 +64,7 @@ spec:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `driverName` | `string` | **Required.** The standard CSI driver name (e.g. `nfs.csi.k8s.io`, `hostpath.csi.k8s.io`, `pd.csi.storage.gke.io`). Matches the `provisioner` field on the referenced Kubernetes `StorageClass`. |
+| `driverName` | `string` | **Required.** The standard CSI driver name (e.g. `nfs.csi.k8s.io`, `hostpath.csi.k8s.io`, `pd.csi.storage.gke.io`). Matches the `driverName` field on the referenced `ExternalVolumeClass`. |
 | `controllerEndpoint` | `string` | **Required.** The gRPC endpoint for the CSI Controller service. Must be a valid URI starting with `tcp://`, `dns:///`, or `unix://` (e.g., `tcp://csi-controller.kube-system.svc:50051` or `dns:///csi-svc.default.svc:9000`). |
 | `nodeSocketOverride` | `string` | **Optional.** Override for the CSI Node service Unix domain socket on worker nodes. Must begin with `unix://`. If omitted, Substrate defaults to `unix:///var/lib/kubelet/plugins/<driverName>/csi.sock`. |
 | `tls` | `*CSIDriverTLSConfig` | **Optional.** Configures TLS or mTLS for the gRPC connection to the `controllerEndpoint`. |
@@ -98,12 +101,13 @@ volumes:
   external:
     template:
       capacityBytes: 10737418240 # 10Gi
-      storageClassName: standard-rwx
+      externalVolumeClass:
+        name: csi-nfs
 ```
 
 * `name`: Unique DNS-label-compliant volume name.
 * `external.template.capacityBytes`: The requested volume size in bytes (e.g. `1073741824` for 1Gi).
-* `external.template.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
+* `external.template.externalVolumeClass`: Reference (`{name: <class>}`) to an `ExternalVolumeClass` registered in the Substrate control plane whose `driverName` matches a registered `CSIDriverConfig`.
 
 #### `containers[].volumeMounts[]`
 
@@ -122,21 +126,21 @@ volumeMounts:
 
 The following example demonstrates setting up an NFS CSI driver with Substrate and deploying an `ActorTemplate` that mounts an external NFS volume.
 
-### Step 1: Create the StorageClass
+### Step 1: Create the ExternalVolumeClass
 
-```yaml
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
+Create the `ExternalVolumeClass` through the Substrate API (`ate-setup setup csi nfs` registers `csi-nfs` automatically when the `ExternalVolumes` preview gate is enabled):
+
+```bash
+kubectl ate --preview create external-volume-class -f - <<'EOF'
 metadata:
-  name: csi-nfs-sc
-provisioner: nfs.csi.k8s.io
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
 parameters:
   server: nfs-server.default.svc.cluster.local
   share: /
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
 mountOptions:
-  - nfsvers=4.1
+- nfsvers=4.1
+EOF
 ```
 
 ### Step 2: Register the CSIDriverConfig
@@ -207,5 +211,6 @@ volumes:
   external:
     template:
       capacityBytes: 5368709120 # 5Gi
-      storageClassName: csi-nfs-sc
+      externalVolumeClass:
+        name: csi-nfs
 ```

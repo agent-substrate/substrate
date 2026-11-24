@@ -161,9 +161,10 @@ and state restoration latency when a durable directory is attached to the actor.
   * `glutton-durdir-full`: Attaches a durable data directory and performs a full memory snapshot restore.
   * `glutton-storage`: Attaches an external CSI volume instead of a durable
     directory. `deploy_locust.sh` and `workloads/deploy.sh` deploy it only
-    when `--storage-class-name` names an existing StorageClass. To run it on
-    NFS, install with `go run ./cmd/ate-setup setup csi nfs` and pass
-    `--storage-class-name csi-nfs-sc`, the class the e2e tests also use.
+    when `--external-volume-class` names an existing `ExternalVolumeClass`. To
+    run it on NFS, install with `ATE_PREVIEW=ExternalVolumes go run ./cmd/ate-setup setup csi nfs`
+    and pass `--external-volume-class csi-nfs`, the class the e2e tests also
+    use.
 
 #### DurDir Reported Metrics
 

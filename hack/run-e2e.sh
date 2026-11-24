@@ -49,7 +49,7 @@ Common E2E Flags (passed after -args):
   --no-color       Disable colored output
   --kube-config    Path to kubeconfig file
   --kube-context   Kubernetes context to use
-  --storage-class  StorageClass to use for external volume tests (default: csi-nfs-sc)
+  --external-volume-class  ExternalVolumeClass to use for external volume tests (default: csi-nfs)
   --preview        Preview gates the cluster was installed with ("ALL" for all)
 
 Common Go Test Flags (passed before -args):

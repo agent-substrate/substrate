@@ -699,7 +699,7 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
 			svc := &RPCService{impl: impl}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
@@ -754,7 +754,7 @@ func TestReconcileOne_GoldenEgressPolicyRecovery(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
 			svc := &RPCService{impl: impl}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")

@@ -223,6 +223,22 @@ type Interface interface {
 	// Each precondition guard is optional: an unset one is not checked.
 	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition Precondition) (*ateapi.AccessPolicy, error)
 
+	// Stores a new ExternalVolumeClass and returns the stored resource with
+	// server-assigned metadata (uid, version, timestamps). The input is not
+	// mutated. Returns ErrAlreadyExists if the name is taken.
+	CreateExternalVolumeClass(ctx context.Context, class *ateapi.ExternalVolumeClass) (*ateapi.ExternalVolumeClass, error)
+
+	// Fetches an ExternalVolumeClass by name. Returns ErrNotFound if missing.
+	GetExternalVolumeClass(ctx context.Context, name string) (*ateapi.ExternalVolumeClass, error)
+
+	// Lists ExternalVolumeClasses.
+	ListExternalVolumeClasses(ctx context.Context, opts ListOptions) (ListResponse[*ateapi.ExternalVolumeClass], error)
+
+	// Removes an ExternalVolumeClass and returns the deleted resource. Returns
+	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
+	// precondition does not describe the class the caller observed.
+	DeleteExternalVolumeClass(ctx context.Context, name string, precondition Precondition) (*ateapi.ExternalVolumeClass, error)
+
 	// Stores a new ActorTemplate and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
 	// mutated. Returns ErrAlreadyExists if the (atespace, name) is taken.

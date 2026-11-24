@@ -39,6 +39,14 @@ For how the pieces fit together, see the [Architecture](../concepts/architecture
   substrate gRPC API (e.g. `kubectl ate create actor-template`) and stored in
   the control-plane database; they are not Kubernetes objects.
 
+- **ExternalVolumeClass** (ate API resource): a global-scoped, immutable
+  resource that declares the CSI `driverName`, driver-specific provisioning
+  `parameters`, and optional `mountOptions` used to provision external CSI
+  volumes for actors. Like `ActorTemplate`s, `ExternalVolumeClass`es are
+  managed through the Substrate gRPC API (e.g. `kubectl ate create
+  external-volume-class`) and stored in the control-plane database rather than
+  as Kubernetes `StorageClass` objects.
+
 - **WorkerPool** (Kubernetes CRD): declares warm compute capacity, a fleet of
   pre-started worker pods. It is reconciled into a Kubernetes `Deployment` by
   the [atecontroller](#components).
