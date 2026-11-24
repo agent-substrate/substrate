@@ -32,6 +32,8 @@ usage() {
   echo "  DOCKER_BUILD_FLAGS  Extra docker buildx build flags for envoy-dataplane."
   echo "  VALUES_OVERLAY      Directory of values files applied after the scenario's,"
   echo "                      such as hack/e2e-chart-values (default: none)."
+  echo "  ATE_PREVIEW         Comma-separated preview gates for the substrate and"
+  echo "                      substrate-atelet releases, or ALL (default: none)."
 }
 if [[ $# -lt 1 || "$1" == -h || "$1" == --help ]]; then
   usage >&2
@@ -64,6 +66,8 @@ docker buildx build --platform="${PLATFORM}" --push ${DOCKER_BUILD_FLAGS:-} \
 helm() { hack/run-tool.sh helm --kube-context "${KUBECTL_CONTEXT}" "$@"; }
 ate_setup() { go run ./cmd/ate-setup --context "${KUBECTL_CONTEXT}" "$@"; }
 IMAGE_FLAGS=(--set image.registry="${REPO%/substrate}" --set image.repository=substrate --set image.tag="${TAG}")
+# Both releases get the same preview gates.
+PREVIEW_FLAGS=(${ATE_PREVIEW:+--set "preview={${ATE_PREVIEW}}"})
 # The values files of a chart: the scenario's, then the overlay's.
 values() {
   local dir
@@ -86,7 +90,7 @@ hack/install-rustfs.sh
 
 # shellcheck disable=SC2046
 helm upgrade --install substrate-atelet ./charts/substrate-atelet --namespace ate-system \
-  $(values substrate-atelet) "${IMAGE_FLAGS[@]}"
+  $(values substrate-atelet) "${IMAGE_FLAGS[@]}" ${PREVIEW_FLAGS[@]+"${PREVIEW_FLAGS[@]}"}
 
 ate_setup create actor-id-ca-pool
 ate_setup create actor-id-ca-certs
@@ -96,7 +100,7 @@ ate_setup create api-authentication-config
 
 # shellcheck disable=SC2046
 helm upgrade --install substrate ./charts/substrate --namespace ate-system \
-  $(values substrate) "${IMAGE_FLAGS[@]}" \
+  $(values substrate) "${IMAGE_FLAGS[@]}" ${PREVIEW_FLAGS[@]+"${PREVIEW_FLAGS[@]}"} \
   --set postgres.readWriteConnectionStringSecretRef.name=substrate-postgres-readwrite \
   --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner \
   "$@"

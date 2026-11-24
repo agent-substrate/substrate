@@ -14,8 +14,10 @@
 
 # Installs the charts on kind and runs the e2e suites against the install: a
 # smoke subset on the older supported Kubernetes versions, and every suite on
-# the newest, each with both data planes. Each job installs the kind scenario
-# of its data plane, with the e2e values in hack/e2e-chart-values on top.
+# the newest, each with both data planes. As in the e2e-test job of
+# pr-workflow, the full suites run once with the preview gates off and once
+# with all of them on. Each job installs the kind scenario of its data plane,
+# with the e2e values in hack/e2e-chart-values on top.
 name: helm-install
 on:
   pull_request:
@@ -40,7 +42,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   helm-install:
-    name: helm-install (${{ matrix.kubernetes }}, ${{ matrix.dataplane }}, ${{ matrix.suites }})
+    name: helm-install (${{ matrix.kubernetes }}, ${{ matrix.dataplane }}, ${{ matrix.suites }}${{ matrix.preview == 'on' && ', preview' || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
     continue-on-error: ${{ matrix.dataplane == 'agentgateway' }} # As the agentgateway e2e-test job in pr-workflow.
@@ -49,6 +51,11 @@ jobs:
       matrix:
         kubernetes: ['1.36', '1.37']
         dataplane: [envoy, agentgateway]
+        preview: ['off', 'on']
+        exclude:
+        # The smoke tests use no preview features.
+        - kubernetes: '1.36'
+          preview: 'on'
         include:
         - kubernetes: '1.36'
           node-image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
@@ -65,6 +72,10 @@ jobs:
       IMAGE_TAG: ci
       VALUES_OVERLAY: hack/e2e-chart-values
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      # install-charts-kind.sh sets these preview gates in both releases, and
+      # the test steps pass them to the suites, so tests of a disabled gate
+      # skip themselves.
+      ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
       ARTIFACTS: ${{ github.workspace }}/_artifacts
       # Read the envoy-dataplane build cache that pr-workflow writes on main.
       DOCKER_BUILD_FLAGS: --cache-from type=gha,scope=envoy-dataplane
@@ -132,13 +143,13 @@ jobs:
       run: >-
         hack/run-e2e-kind.sh
         -run '^(TestActorSnapshotLifecycle|TestActorDirectAccess|TestIngressAuthentication|TestActorEgress|TestActorEgressHTTPS)$'
-        -args --no-color --preview=
+        -args --no-color --preview="${ATE_PREVIEW}"
     - name: Run the e2e suites
       if: matrix.suites == 'all'
       env:
         E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/helm-e2e.xml
-      run: hack/run-e2e-kind.sh -args --no-color --preview=
+      run: hack/run-e2e-kind.sh -args --no-color --preview="${ATE_PREVIEW}"
     - name: Require every run to have run tests
       if: always()
       run: go -C tools/junittool run . verify -manifest "${ARTIFACTS}/expected-junit.txt"
@@ -149,7 +160,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-helm-${{ matrix.kubernetes }}-${{ matrix.dataplane }}
+        name: test-results-helm-${{ matrix.kubernetes }}-${{ matrix.dataplane }}${{ matrix.preview == 'on' && '-preview' || '' }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: Dump diagnostics on failure
