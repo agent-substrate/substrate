@@ -69,7 +69,7 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 	// Restore: onto a directory holding a stale previous activation's contents,
 	// which must not leak into the restored overlay state.
 	dst := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
-	if err := untarRootfsUpper(dst, checkpointDir, containers); err != nil {
+	if err := untarRootfsUpper(dst, checkpointDir, containers, true); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	for rel, want := range files {
@@ -162,7 +162,7 @@ func TestUntarRootfsUpperCannotPlantLayout(t *testing.T) {
 	}
 
 	dst := t.TempDir()
-	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}); err != nil {
+	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}, false); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	if fi, err := os.Lstat(filepath.Join(dst, "app")); err != nil || !fi.IsDir() {
@@ -185,7 +185,7 @@ func TestUntarRootfsUpperModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "upper")
-	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}); err != nil {
+	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}, false); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	for rel, want := range map[string]os.FileMode{".": 0o700, "app": 0o700, "app/fs": 0o755, "app/work": 0o700} {
@@ -202,7 +202,7 @@ func TestRootfsUpperTarFileRejectsBadNames(t *testing.T) {
 			t.Errorf("rootfsUpperTarFile(%q) = nil error, want one", cid)
 		}
 	}
-	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"../x"}); err == nil {
+	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"../x"}, false); err == nil {
 		t.Error("untarRootfsUpper with container ../x = nil error, want one")
 	}
 }
@@ -210,7 +210,7 @@ func TestRootfsUpperTarFileRejectsBadNames(t *testing.T) {
 // A container in the request without a tar in the snapshot fails the restore
 // rather than starting it on a silently empty rootfs upper.
 func TestUntarRootfsUpperMissingTar(t *testing.T) {
-	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"app"}); err == nil {
+	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"app"}, false); err == nil {
 		t.Error("untarRootfsUpper with no tar = nil error, want one")
 	}
 }
