@@ -1735,9 +1735,8 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	directLocal := false
 
 	var registration *registeredActor
-	// Undo the Register if the restore fails. Every return below joins the
-	// errgroup before this defer can read registration, so the handoff is
-	// synchronized.
+	// Undo the Register if the restore fails. The errgroup join below happens
+	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
 		if err != nil && registration != nil {
 			s.systemInfoVolumes.DeregisterOwned(registration)
@@ -1779,8 +1778,9 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		}
 		return nil
 	})
-	// stopPrep cancels the prep leg after a manifest failure and waits for it,
-	// so its phases are reported as cut short.
+	// stopPrep cancels the prep leg after a manifest failure and waits for the
+	// leg to return, so its phases are reported as cut short. The asset
+	// fetches and image pulls it started run on detached.
 	stopPrep := func() {
 		cancelPrep()
 		if gErr := g.Wait(); gErr != nil {
