@@ -398,6 +398,11 @@ func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want
 	for {
 		var lines []gatewayAccessLogLine
 		for _, pod := range pods.Items {
+			// A pod that a rollout is replacing serves no traffic, and can be
+			// gone before its logs are read.
+			if pod.DeletionTimestamp != nil {
+				continue
+			}
 			container := ""
 			for _, candidate := range pod.Spec.Containers {
 				if candidate.Name == "envoy" || candidate.Name == "agentgateway" {
