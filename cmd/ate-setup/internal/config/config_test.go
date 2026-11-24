@@ -71,6 +71,7 @@ func loadEnv(t *testing.T) {
 		"ATE_INSTALL_FAKE_DATA_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
+		"ATE_INSTALL_PPROF",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
 		"ATE_OTLP_ENDPOINT",
 		"ATE_PREVIEW",
@@ -133,6 +134,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CordonSystemInfraComponents {
 		t.Error("CordonSystemInfraComponents = true, want false")
+	}
+	if cfg.Pprof != PprofOff {
+		t.Errorf("Pprof = %q, want %q", cfg.Pprof, PprofOff)
 	}
 }
 
@@ -273,6 +277,63 @@ func TestLoadE2ETuning(t *testing.T) {
 			}
 			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_E2E_TUNING"]; exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_E2E_TUNING = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadPprof(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		opts      Options
+		env       string
+		wantPprof string
+	}{
+		{
+			name:      "default",
+			wantPprof: PprofOff,
+		},
+		{
+			name:      "flag on",
+			opts:      Options{Pprof: PprofOn},
+			wantPprof: PprofOn,
+		},
+		{
+			name:      "flag contention",
+			opts:      Options{Pprof: PprofContention},
+			wantPprof: PprofContention,
+		},
+		{
+			name:      "environment",
+			env:       PprofContention,
+			wantPprof: PprofContention,
+		},
+		{
+			name:      "flag beats the environment",
+			opts:      Options{Pprof: PprofOff},
+			env:       PprofOn,
+			wantPprof: PprofOff,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != "" {
+				t.Setenv("ATE_INSTALL_PPROF", tc.env)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Pprof != tc.wantPprof {
+				t.Errorf("Pprof = %q, want %q", cfg.Pprof, tc.wantPprof)
+			}
+			env := scriptEnvMap(t, cfg)
+			if tc.wantPprof != PprofOff {
+				if env["ATE_INSTALL_PPROF"] != tc.wantPprof {
+					t.Errorf("ScriptEnv()[ATE_INSTALL_PPROF] = %q, want %q", env["ATE_INSTALL_PPROF"], tc.wantPprof)
+				}
+			} else if _, ok := env["ATE_INSTALL_PPROF"]; ok {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_PPROF = %q for off, want it absent", env["ATE_INSTALL_PPROF"])
 			}
 		})
 	}
@@ -1040,6 +1101,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"negative rollout timeout", Options{RolloutTimeout: "-30s"}},
 		{"podcert workers", Options{PodcertWorkersPerSigner: -1}},
 		{"cluster size", Options{ClusterSize: "size5"}},
+		{"pprof", Options{Pprof: "invalid"}},
 		{"extproc invalid format", Options{AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
 		{"provider not JSON", Options{CredentialProvider: "k8s.io"}},
