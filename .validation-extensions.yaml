@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Custom validation rules for Agent Substrate.
+# Custom validation rules for Agent Substrate.  Each new format needs an
+# exhaustive test in internal/apivalidationtest/doc.go
 formats:
   # Names of singleton resources
   - name: ate-singleton-name
