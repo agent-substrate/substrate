@@ -614,7 +614,7 @@ func TestEgressRules(t *testing.T) {
 				}
 			}
 
-			testgolden.Check(t, "egress-rules-"+tc.name+".txt", []byte(got.String()))
+			testgolden.Check(t, "egress-rules-"+tc.name+".golden", []byte(got.String()))
 		})
 	}
 }

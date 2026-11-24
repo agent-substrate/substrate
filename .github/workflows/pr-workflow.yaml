@@ -219,9 +219,8 @@ jobs:
   # preview mode. The e2e-test job below reports the required checks.
   e2e:
     name: >-
-      ${{ format('e2e ({0}, {1}{2}{3}{4})', matrix.dataplane, matrix.sandbox,
+      ${{ format('e2e ({0}, {1}{2}{3})', matrix.dataplane, matrix.sandbox,
         matrix.ip_family != 'ipv4' && format(', {0}', matrix.ip_family) || '',
-        matrix.ip_family == 'ipv6' && matrix.actor_ipv6 == 'off' && ', actor IPv6 off' || '',
         matrix.preview == 'on' && ', preview' || '') }}
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and one lane; generous, but far short of
@@ -244,9 +243,6 @@ jobs:
           ) }}
         # "off" enables no unrelated preview features; "on" enables all of them.
         preview: ['off', 'on']
-        # IPv6-only runs both states. IPv4 does not gain addresses from the
-        # gate, and dual-stack needs only the enabled coverage.
-        actor_ipv6: ['off', 'on']
         sandbox: [gvisor, microvm]
         # IPv4 and IPv6-only run presubmit. Dual-stack joins them after merge
         # and on the weekly schedule.
@@ -257,19 +253,10 @@ jobs:
             || '["ipv4", "ipv6"]'
           ) }}
         exclude:
-        - actor_ipv6: 'on'
-          ip_family: ipv4
-        - actor_ipv6: 'off'
-          ip_family: dual
         - preview: 'on'
           ip_family: ipv6
         - preview: 'on'
           ip_family: dual
-        # The gate-disabled path is worker-runtime behavior. Envoy covers it;
-        # AgentGateway still runs the enabled IPv6-only lane postsubmit.
-        - actor_ipv6: 'off'
-          dataplane: agentgateway
-          ip_family: ipv6
     env:
       IP_FAMILY: ${{ matrix.ip_family }}
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
@@ -284,7 +271,7 @@ jobs:
       # --preview, so tests see the same gates as the install.
       ATE_PREVIEW: >-
         ${{ matrix.preview == 'on' && 'ALL'
-          || matrix.actor_ipv6 == 'on' && 'ActorIPv6'
+          || matrix.ip_family != 'ipv4' && 'ActorIPv6'
           || '' }}
       # The suites' router client (internal/e2e/ingressauth.go). Only e2e
       # installs allowlist it, so the suites can reach actors through the
@@ -292,9 +279,8 @@ jobs:
       ATE_INGRESS_ALLOWED_SPIFFE_IDS: spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
       # The lane name is also used for its JUnit file.
       LANE: >-
-        ${{ format('e2e-{0}{1}{2}{3}', matrix.sandbox,
+        ${{ format('e2e-{0}{1}{2}', matrix.sandbox,
           matrix.ip_family != 'ipv4' && format('-{0}', matrix.ip_family) || '',
-          matrix.ip_family == 'ipv6' && matrix.actor_ipv6 == 'off' && '-actor-ipv6-off' || '',
           matrix.preview == 'on' && '-preview' || '') }}
       ARTIFACTS: ${{ github.workspace }}/_artifacts
       # Cache the envoy-dataplane Rust build. Only main writes it, so PRs
@@ -430,9 +416,8 @@ jobs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: >-
-          ${{ format('test-results-e2e-{0}-{1}{2}{3}{4}', matrix.dataplane, matrix.sandbox,
+          ${{ format('test-results-e2e-{0}-{1}{2}{3}', matrix.dataplane, matrix.sandbox,
             matrix.ip_family != 'ipv4' && format('-{0}', matrix.ip_family) || '',
-            matrix.ip_family == 'ipv6' && matrix.actor_ipv6 == 'off' && '-actor-ipv6-off' || '',
             matrix.preview == 'on' && '-preview' || '') }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error

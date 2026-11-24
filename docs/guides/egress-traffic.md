@@ -15,12 +15,11 @@ This document specifies supported egress traffic and the contract between
 Substrate and its egress policy enforcement point (PEP).
 
 > [!NOTE]
-> Substrate supports IPv4-only, IPv6-only, and dual-stack Kubernetes clusters.
-> The cluster family does not determine the private actor network family.
+> Substrate supports IPv4-only and dual-stack Kubernetes clusters by default.
+> IPv6-only clusters require the `ActorIPv6` preview gate.
 
-Every actor gets the private IPv4 network `169.254.17.0/30`, including actors on
-IPv6-only clusters. Actor networks are either IPv4-only or dual-stack; they are
-never IPv6-only. Actor IPv6 networking is a preview feature. With
+Every actor gets the private IPv4 network `169.254.17.0/30`. Actor networks are
+either IPv4-only or dual-stack; they are never IPv6-only. With
 `ATE_PREVIEW=ActorIPv6`, an actor whose worker Pod has an IPv6 address also gets
 `fd00:169:254::/126`. Actor ingress, DNS, and wakeup probes use the IPv4 network.
 Applications must listen on IPv4 or on a dual-stack socket. IPv6-only listeners,
