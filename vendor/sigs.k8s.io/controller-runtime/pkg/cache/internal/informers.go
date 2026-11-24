@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"sigs.k8s.io/controller-runtime/pkg/cache/cacheapi"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/internal/log"
 	"sigs.k8s.io/controller-runtime/pkg/internal/syncs"
@@ -69,6 +70,7 @@ type InformersOpts struct {
 	NewInformer           func(cache.ListerWatcher, runtime.Object, time.Duration, cache.Indexers) cache.SharedIndexInformer
 	Selector              Selector
 	Transform             cache.TransformFunc
+	DropManagedFields     *bool
 	UnsafeDisableDeepCopy bool
 	EnableWatchBookmarks  bool
 	WatchErrorHandler     cache.WatchErrorHandlerWithContext
@@ -97,6 +99,7 @@ func NewInformers(config *rest.Config, options *InformersOpts) *Informers {
 		namespace:             options.Namespace,
 		selector:              options.Selector,
 		transform:             options.Transform,
+		dropManagedFields:     options.DropManagedFields,
 		unsafeDisableDeepCopy: options.UnsafeDisableDeepCopy,
 		enableWatchBookmarks:  options.EnableWatchBookmarks,
 		newInformer:           newInformer,
@@ -136,10 +139,7 @@ type tracker struct {
 
 // GetOptions provides configuration to customize the behavior when
 // getting an informer.
-type GetOptions struct {
-	// BlockUntilSynced controls if the informer retrieval will block until the informer is synced. Defaults to `true`.
-	BlockUntilSynced *bool
-}
+type GetOptions = cacheapi.InformerGetOptions
 
 // Informers create and caches Informers for (runtime.Object, schema.GroupVersionKind) pairs.
 // It uses a standard parameter codec constructed based on the given generated Scheme.
@@ -197,6 +197,10 @@ type Informers struct {
 	transform             cache.TransformFunc
 	unsafeDisableDeepCopy bool
 	enableWatchBookmarks  bool
+
+	// dropManagedFields overrides DropManagedFields of the rest.Config used by the ListWatches.
+	// If nil, the value of the rest.Config is used.
+	dropManagedFields *bool
 
 	// NewInformer allows overriding of the shared index informer constructor for testing.
 	newInformer func(cache.ListerWatcher, runtime.Object, time.Duration, cache.Indexers) cache.SharedIndexInformer
@@ -270,22 +274,22 @@ func (ip *Informers) waitForStarted(ctx context.Context) bool {
 	}
 }
 
-// getHasSyncedFuncs returns all the HasSynced functions for the informers in this map.
-func (ip *Informers) getHasSyncedFuncs() []cache.InformerSynced {
+// getHasSyncedCheckers returns all the HasSynced checkers for the informers in this map.
+func (ip *Informers) getHasSyncedCheckers() []cache.DoneChecker {
 	ip.mu.RLock()
 	defer ip.mu.RUnlock()
 
-	res := make([]cache.InformerSynced, 0,
+	res := make([]cache.DoneChecker, 0,
 		len(ip.tracker.Structured)+len(ip.tracker.Unstructured)+len(ip.tracker.Metadata),
 	)
 	for _, i := range ip.tracker.Structured {
-		res = append(res, i.Informer.HasSynced)
+		res = append(res, i.Informer.HasSyncedChecker())
 	}
 	for _, i := range ip.tracker.Unstructured {
-		res = append(res, i.Informer.HasSynced)
+		res = append(res, i.Informer.HasSyncedChecker())
 	}
 	for _, i := range ip.tracker.Metadata {
-		res = append(res, i.Informer.HasSynced)
+		res = append(res, i.Informer.HasSyncedChecker())
 	}
 	return res
 }
@@ -295,7 +299,7 @@ func (ip *Informers) WaitForCacheSync(ctx context.Context) bool {
 	if !ip.waitForStarted(ctx) {
 		return false
 	}
-	return cache.WaitForCacheSync(ctx.Done(), ip.getHasSyncedFuncs()...)
+	return cache.WaitFor(ctx, "cache sync", ip.getHasSyncedCheckers()...)
 }
 
 // Peek attempts to get the informer for the GVK, but does not start one if one does not exist.
@@ -326,9 +330,9 @@ func (ip *Informers) Get(ctx context.Context, gvk schema.GroupVersionKind, obj r
 		shouldBlock = *opts.BlockUntilSynced
 	}
 
-	if shouldBlock && started && !i.Informer.HasSynced() {
+	if shouldBlock && started && !cache.IsDone(i.Informer.HasSyncedChecker()) {
 		// Wait for it to sync before returning the Informer so that folks don't read from a stale cache.
-		if !cache.WaitForCacheSync(ctx.Done(), i.Informer.HasSynced) {
+		if !cache.WaitFor(ctx, "informer sync", i.Informer.HasSyncedChecker()) {
 			return started, nil, apierrors.NewTimeoutError(fmt.Sprintf("failed waiting for %T Informer to sync", obj), 0)
 		}
 	}
@@ -447,6 +451,12 @@ func (ip *Informers) makeListWatcher(gvk schema.GroupVersionKind, obj runtime.Ob
 		namespace = restrictNamespaceBySelector(ip.namespace, ip.selector)
 	}
 
+	// Copy the config to not modify the (shared) config of the caller.
+	cfg := rest.CopyConfig(ip.config)
+	if ip.dropManagedFields != nil {
+		cfg.DropManagedFields = *ip.dropManagedFields
+	}
+
 	switch obj.(type) {
 	//
 	// Unstructured
@@ -454,7 +464,6 @@ func (ip *Informers) makeListWatcher(gvk schema.GroupVersionKind, obj runtime.Ob
 	case runtime.Unstructured:
 		// If the rest configuration has a negotiated serializer passed in,
 		// we should remove it and use the one that the dynamic client sets for us.
-		cfg := rest.CopyConfig(ip.config)
 		cfg.NegotiatedSerializer = nil
 		dynamicClient, err := dynamic.NewForConfigAndClient(cfg, ip.httpClient)
 		if err != nil {
@@ -485,7 +494,6 @@ func (ip *Informers) makeListWatcher(gvk schema.GroupVersionKind, obj runtime.Ob
 	case *metav1.PartialObjectMetadata, *metav1.PartialObjectMetadataList:
 		// Always clear the negotiated serializer and use the one
 		// set from the metadata client.
-		cfg := rest.CopyConfig(ip.config)
 		cfg.NegotiatedSerializer = nil
 
 		// Grab the metadata metadataClient.
@@ -533,7 +541,7 @@ func (ip *Informers) makeListWatcher(gvk schema.GroupVersionKind, obj runtime.Ob
 	// Structured.
 	//
 	default:
-		client, err := apiutil.RESTClientForGVK(gvk, false, false, ip.config, ip.codecs, ip.httpClient)
+		client, err := apiutil.RESTClientForGVK(gvk, false, false, cfg, ip.codecs, ip.httpClient)
 		if err != nil {
 			return nil, err
 		}

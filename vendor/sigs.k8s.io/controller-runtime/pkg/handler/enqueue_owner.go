@@ -24,7 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -172,7 +171,8 @@ func (e *enqueueRequestForOwner[object]) getOwnerReconcileRequest(obj metav1.Obj
 		if err != nil {
 			log.Error(err, "Could not parse OwnerReference APIVersion",
 				"api version", ref.APIVersion)
-			return
+			// Only skip the current entry so other OwnerReferences are still processed.
+			continue
 		}
 
 		// Compare the OwnerReference Group and Kind against the OwnerType Group and Kind specified by the user.
@@ -181,15 +181,16 @@ func (e *enqueueRequestForOwner[object]) getOwnerReconcileRequest(obj metav1.Obj
 		// object in the event.
 		if ref.Kind == e.groupKind.Kind && refGV.Group == e.groupKind.Group {
 			// Match found - add a Request for the object referred to in the OwnerReference
-			request := reconcile.Request{NamespacedName: types.NamespacedName{
+			request := reconcile.Request{
 				Name: ref.Name,
-			}}
+			}
 
 			// if owner is not namespaced then we should not set the namespace
 			mapping, err := e.mapper.RESTMapping(e.groupKind, refGV.Version)
 			if err != nil {
 				log.Error(err, "Could not retrieve rest mapping", "kind", e.groupKind)
-				return
+				// Only skip the current entry so other OwnerReferences are still processed.
+				continue
 			}
 			if mapping.Scope.Name() != meta.RESTScopeNameRoot {
 				request.Namespace = obj.GetNamespace()

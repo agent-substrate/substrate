@@ -21,7 +21,7 @@ import (
 
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
-	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextensionsclientset "k8s.io/apiextensions-api/pkg/client/clientset/clientset"
 	"k8s.io/client-go/kubernetes"
 )
 

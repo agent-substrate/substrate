@@ -27,9 +27,6 @@ type CodecClientType int32
 const (
 	CodecClientType_HTTP1 CodecClientType = 0
 	CodecClientType_HTTP2 CodecClientType = 1
-	// [#not-implemented-hide:] QUIC implementation is not production ready yet. Use this enum with
-	// caution to prevent accidental execution of QUIC code. I.e. `!= HTTP2` is no longer sufficient
-	// to distinguish HTTP1 and HTTP2 traffic.
 	CodecClientType_HTTP3 CodecClientType = 2
 )
 

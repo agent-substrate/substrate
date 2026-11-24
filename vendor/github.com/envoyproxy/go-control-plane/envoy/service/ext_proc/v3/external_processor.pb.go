@@ -171,7 +171,7 @@ func (x *ProtocolConfiguration) GetSendBodyWithoutWaitingForHeaderResponse() boo
 
 // This represents the different types of messages that the data plane can send
 // to an external processing server.
-// [#next-free-field: 12]
+// [#next-free-field: 14]
 type ProcessingRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Each request message will include one of the following sub-messages. Which
@@ -208,8 +208,32 @@ type ProcessingRequest struct {
 	// Specify the filter protocol configurations to be sent to the server.
 	// “protocol_config“ is only encoded in the first “ProcessingRequest“ message from the client to the server.
 	ProtocolConfig *ProtocolConfiguration `protobuf:"bytes,11,opt,name=protocol_config,json=protocolConfig,proto3" json:"protocol_config,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Flow control initialization for “FULL_DUPLEX_STREAMED“ and
+	// “GRPC“ body send modes.
+	//
+	// Must be set in the initial message on the stream. Not used in
+	// subsequent messages.
+	//
+	// [#not-implemented-hide:]
+	FlowControlInit *ProcessingRequest_FlowControlInit `protobuf:"bytes,12,opt,name=flow_control_init,json=flowControlInit,proto3" json:"flow_control_init,omitempty"`
+	// Flow control updates for “FULL_DUPLEX_STREAMED“ and “GRPC“ body
+	// send modes.
+	//
+	// This message may be included in a request message that also
+	// populates one of the fields in the “request“ oneof above, or it
+	// may be sent in a request message that does not set the
+	// “request“ oneof.
+	//
+	// In “FULL_DUPLEX_STREAMED“ body send mode, for backward
+	// compatibility with data planes that do not yet support flow control,
+	// the data plane must not send a message containing only this field
+	// (i.e., not setting the “request“ oneof) unless the ext_proc server
+	// has sent a window update, thus indicating that it supports flow control.
+	//
+	// [#not-implemented-hide:]
+	ClientWindowUpdate *ProcessingRequest_ClientWindowUpdate `protobuf:"bytes,13,opt,name=client_window_update,json=clientWindowUpdate,proto3" json:"client_window_update,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ProcessingRequest) Reset() {
@@ -331,6 +355,20 @@ func (x *ProcessingRequest) GetProtocolConfig() *ProtocolConfiguration {
 	return nil
 }
 
+func (x *ProcessingRequest) GetFlowControlInit() *ProcessingRequest_FlowControlInit {
+	if x != nil {
+		return x.FlowControlInit
+	}
+	return nil
+}
+
+func (x *ProcessingRequest) GetClientWindowUpdate() *ProcessingRequest_ClientWindowUpdate {
+	if x != nil {
+		return x.ClientWindowUpdate
+	}
+	return nil
+}
+
 type isProcessingRequest_Request interface {
 	isProcessingRequest_Request()
 }
@@ -401,7 +439,7 @@ func (*ProcessingRequest_ResponseTrailers) isProcessingRequest_Request() {}
 //   - If it is set to “FULL_DUPLEX_STREAMED“, the server must follow the API defined
 //     for this mode to send the “ProcessingResponse“ messages.
 //
-// [#next-free-field: 14]
+// [#next-free-field: 15]
 type ProcessingResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The response type that is sent by the server.
@@ -476,8 +514,30 @@ type ProcessingResponse struct {
 	// Such a message can be sent at most once in a particular data plane ext_proc filter processing
 	// state. To enable this API, “max_message_timeout“ must be set to a value >= 1ms.
 	OverrideMessageTimeout *durationpb.Duration `protobuf:"bytes,10,opt,name=override_message_timeout,json=overrideMessageTimeout,proto3" json:"override_message_timeout,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Flow control updates for “FULL_DUPLEX_STREAMED“ and “GRPC“ body
+	// send modes.
+	//
+	// This message may be included in a response message that also
+	// populates one of the fields in the “response“ oneof above, or it
+	// may be sent in a response message that does not set the
+	// “response“ oneof.
+	//
+	// In “FULL_DUPLEX_STREAMED“ body send mode, for backward
+	// compatibility with data planes that do not yet support flow control,
+	// the ext_proc server must not set this field unless the data plane
+	// sent initial window sizes in its initial message on the stream.
+	// Conversely, if the data plane did send initial window sizes in its
+	// initial message on the stream, the ext_proc server must send a
+	// window update immediately to let the data plane know that it also
+	// supports flow control. If the ext_proc server is sending a message
+	// immediately anyway (e.g., for a header or body chunk), it can include
+	// this field in that same message; otherwise, the ext_proc server must
+	// send a message containing only this field.
+	//
+	// [#not-implemented-hide:]
+	ServerWindowUpdate *ProcessingResponse_ServerWindowUpdate `protobuf:"bytes,14,opt,name=server_window_update,json=serverWindowUpdate,proto3" json:"server_window_update,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ProcessingResponse) Reset() {
@@ -620,6 +680,13 @@ func (x *ProcessingResponse) GetRequestDrain() bool {
 func (x *ProcessingResponse) GetOverrideMessageTimeout() *durationpb.Duration {
 	if x != nil {
 		return x.OverrideMessageTimeout
+	}
+	return nil
+}
+
+func (x *ProcessingResponse) GetServerWindowUpdate() *ProcessingResponse_ServerWindowUpdate {
+	if x != nil {
+		return x.ServerWindowUpdate
 	}
 	return nil
 }
@@ -794,11 +861,17 @@ type HttpBody struct {
 	// If “true“, this will be the last “HttpBody“ message that will be sent and no trailers
 	// will be sent for the current request/response.
 	EndOfStream bool `protobuf:"varint,2,opt,name=end_of_stream,json=endOfStream,proto3" json:"end_of_stream,omitempty"`
-	// This field is used in “GRPC“ body send mode when “end_of_stream“ is “true“ and “body“
-	// is empty. Those values would normally indicate an empty message on the stream with the
-	// end-of-stream bit set. However, if the half-close happens after the last message on the stream
-	// was already sent, then this field will be “true“ to indicate an end-of-stream with *no*
-	// message (as opposed to an empty message).
+	// This field is used only in “GRPC“ body send mode. It is not used in any other body send
+	// mode.
+	//
+	// This field is used only when “end_of_stream“ is true and “body“ is empty.
+	// Normally, in “GRPC“ body send mode, an empty “body“ field indicates an empty message on
+	// the gRPC stream. However, it is possible that the gRPC client sends a half-close without
+	// actually sending a message on the stream, so we need a way to differentiate between
+	// an empty message being sent and no message being sent. If this field is true, then it
+	// indicates that no message has been sent; if it is false, then it indicates that an empty
+	// message has been sent.
+	// [#not-implemented-hide:]
 	EndOfStreamWithoutMessage bool `protobuf:"varint,3,opt,name=end_of_stream_without_message,json=endOfStreamWithoutMessage,proto3" json:"end_of_stream_without_message,omitempty"`
 	// This field is used in “GRPC“ body send mode to indicate whether the message is compressed.
 	// This will never be set to “true“ by gRPC but may be set to “true“ by a proxy like Envoy.
@@ -1656,6 +1729,227 @@ func (*BodyMutation_ClearBody) isBodyMutation_Mutation() {}
 
 func (*BodyMutation_StreamedResponse) isBodyMutation_Mutation() {}
 
+// Initial flow control window sizes for “FULL_DUPLEX_STREAMED“ and
+// “GRPC“ body send modes.
+//
+// A sender starts with this amount of flow control window. Whenever
+// it sends body data, it must decrement its flow control window by
+// the number of bytes that it has sent. When its flow control
+// window is less than or equal to the amount of body data it wishes
+// to send, it may not send until it receives a window update causing
+// its flow control window to be large enough.
+//
+// However, note that in “GRPC“ body send mode, whenever the flow
+// control window is greater than zero, a sender may send a single
+// message, even if the size of that message exceeds the available flow
+// control window. At that point, the flow control window will be negative
+// and the sender must not send the next message until it becomes positive.
+//
+// Note that the initial size for the to-sidestream windows are set by
+// the sender, not the receiver. This is because each sidestream may be
+// routed to a different ext_proc server instance, but there is no
+// connection-level handshake to set a default for that server
+// instance, so the only alternative here would be to have the
+// ext_proc server instance set this on a per-stream basis, which
+// would require an additional round-trip and therefore hurt latency.
+// This unfortunately means that the ext_proc server instance has a
+// bit less control: as soon as it receives these initial values, it can
+// immediately send a window update that reduces the window, but it
+// must be prepared to handle any data that the sender has already sent.
+// The initial sizes for the to-sidestream windows are generally
+// expected to be in the range of 32K to 64K.
+//
+// [#not-implemented-hide:]
+type ProcessingRequest_FlowControlInit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Downstream-to-sidestream initial window size.
+	InitialWindowDownstreamToSidestream int64 `protobuf:"varint,1,opt,name=initial_window_downstream_to_sidestream,json=initialWindowDownstreamToSidestream,proto3" json:"initial_window_downstream_to_sidestream,omitempty"`
+	// Sidestream-to-upstream initial window size.
+	InitialWindowSidestreamToUpstream int64 `protobuf:"varint,2,opt,name=initial_window_sidestream_to_upstream,json=initialWindowSidestreamToUpstream,proto3" json:"initial_window_sidestream_to_upstream,omitempty"`
+	// Upstream-to-sidestream initial window size.
+	InitialWindowUpstreamToSidestream int64 `protobuf:"varint,3,opt,name=initial_window_upstream_to_sidestream,json=initialWindowUpstreamToSidestream,proto3" json:"initial_window_upstream_to_sidestream,omitempty"`
+	// Sidestream-to-downstream initial window size.
+	InitialWindowSidestreamToDownstream int64 `protobuf:"varint,4,opt,name=initial_window_sidestream_to_downstream,json=initialWindowSidestreamToDownstream,proto3" json:"initial_window_sidestream_to_downstream,omitempty"`
+	unknownFields                       protoimpl.UnknownFields
+	sizeCache                           protoimpl.SizeCache
+}
+
+func (x *ProcessingRequest_FlowControlInit) Reset() {
+	*x = ProcessingRequest_FlowControlInit{}
+	mi := &file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProcessingRequest_FlowControlInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProcessingRequest_FlowControlInit) ProtoMessage() {}
+
+func (x *ProcessingRequest_FlowControlInit) ProtoReflect() protoreflect.Message {
+	mi := &file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProcessingRequest_FlowControlInit.ProtoReflect.Descriptor instead.
+func (*ProcessingRequest_FlowControlInit) Descriptor() ([]byte, []int) {
+	return file_envoy_service_ext_proc_v3_external_processor_proto_rawDescGZIP(), []int{1, 0}
+}
+
+func (x *ProcessingRequest_FlowControlInit) GetInitialWindowDownstreamToSidestream() int64 {
+	if x != nil {
+		return x.InitialWindowDownstreamToSidestream
+	}
+	return 0
+}
+
+func (x *ProcessingRequest_FlowControlInit) GetInitialWindowSidestreamToUpstream() int64 {
+	if x != nil {
+		return x.InitialWindowSidestreamToUpstream
+	}
+	return 0
+}
+
+func (x *ProcessingRequest_FlowControlInit) GetInitialWindowUpstreamToSidestream() int64 {
+	if x != nil {
+		return x.InitialWindowUpstreamToSidestream
+	}
+	return 0
+}
+
+func (x *ProcessingRequest_FlowControlInit) GetInitialWindowSidestreamToDownstream() int64 {
+	if x != nil {
+		return x.InitialWindowSidestreamToDownstream
+	}
+	return 0
+}
+
+// Flow control window update. Values may be positive or negative. The
+// sender must immediately add these values to its flow control window,
+// which governs how much data can be sent.
+//
+// [#not-implemented-hide:]
+type ProcessingRequest_ClientWindowUpdate struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Window update for sidestream-to-upstream.
+	WindowIncrementSidestreamToUpstream int64 `protobuf:"varint,1,opt,name=window_increment_sidestream_to_upstream,json=windowIncrementSidestreamToUpstream,proto3" json:"window_increment_sidestream_to_upstream,omitempty"`
+	// Window update for sidestream-to-downstream.
+	WindowIncrementSidestreamToDownstream int64 `protobuf:"varint,2,opt,name=window_increment_sidestream_to_downstream,json=windowIncrementSidestreamToDownstream,proto3" json:"window_increment_sidestream_to_downstream,omitempty"`
+	unknownFields                         protoimpl.UnknownFields
+	sizeCache                             protoimpl.SizeCache
+}
+
+func (x *ProcessingRequest_ClientWindowUpdate) Reset() {
+	*x = ProcessingRequest_ClientWindowUpdate{}
+	mi := &file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProcessingRequest_ClientWindowUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProcessingRequest_ClientWindowUpdate) ProtoMessage() {}
+
+func (x *ProcessingRequest_ClientWindowUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProcessingRequest_ClientWindowUpdate.ProtoReflect.Descriptor instead.
+func (*ProcessingRequest_ClientWindowUpdate) Descriptor() ([]byte, []int) {
+	return file_envoy_service_ext_proc_v3_external_processor_proto_rawDescGZIP(), []int{1, 1}
+}
+
+func (x *ProcessingRequest_ClientWindowUpdate) GetWindowIncrementSidestreamToUpstream() int64 {
+	if x != nil {
+		return x.WindowIncrementSidestreamToUpstream
+	}
+	return 0
+}
+
+func (x *ProcessingRequest_ClientWindowUpdate) GetWindowIncrementSidestreamToDownstream() int64 {
+	if x != nil {
+		return x.WindowIncrementSidestreamToDownstream
+	}
+	return 0
+}
+
+// Flow control window update. Values may be positive or negative. The
+// sender must immediately add these values to its flow control window,
+// which governs how much data can be sent.
+//
+// [#not-implemented-hide:]
+type ProcessingResponse_ServerWindowUpdate struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Window update for downstream-to-sidestream.
+	WindowIncrementDownstreamToSidestream int64 `protobuf:"varint,1,opt,name=window_increment_downstream_to_sidestream,json=windowIncrementDownstreamToSidestream,proto3" json:"window_increment_downstream_to_sidestream,omitempty"`
+	// Window update for upstream-to-sidestream.
+	WindowIncrementUpstreamToSidestream int64 `protobuf:"varint,2,opt,name=window_increment_upstream_to_sidestream,json=windowIncrementUpstreamToSidestream,proto3" json:"window_increment_upstream_to_sidestream,omitempty"`
+	unknownFields                       protoimpl.UnknownFields
+	sizeCache                           protoimpl.SizeCache
+}
+
+func (x *ProcessingResponse_ServerWindowUpdate) Reset() {
+	*x = ProcessingResponse_ServerWindowUpdate{}
+	mi := &file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProcessingResponse_ServerWindowUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProcessingResponse_ServerWindowUpdate) ProtoMessage() {}
+
+func (x *ProcessingResponse_ServerWindowUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProcessingResponse_ServerWindowUpdate.ProtoReflect.Descriptor instead.
+func (*ProcessingResponse_ServerWindowUpdate) Descriptor() ([]byte, []int) {
+	return file_envoy_service_ext_proc_v3_external_processor_proto_rawDescGZIP(), []int{2, 0}
+}
+
+func (x *ProcessingResponse_ServerWindowUpdate) GetWindowIncrementDownstreamToSidestream() int64 {
+	if x != nil {
+		return x.WindowIncrementDownstreamToSidestream
+	}
+	return 0
+}
+
+func (x *ProcessingResponse_ServerWindowUpdate) GetWindowIncrementUpstreamToSidestream() int64 {
+	if x != nil {
+		return x.WindowIncrementUpstreamToSidestream
+	}
+	return 0
+}
+
 var File_envoy_service_ext_proc_v3_external_processor_proto protoreflect.FileDescriptor
 
 const file_envoy_service_ext_proc_v3_external_processor_proto_rawDesc = "" +
@@ -1664,7 +1958,7 @@ const file_envoy_service_ext_proc_v3_external_processor_proto_rawDesc = "" +
 	"\x15ProtocolConfiguration\x12|\n" +
 	"\x11request_body_mode\x18\x01 \x01(\x0e2F.envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendModeB\b\xfaB\x05\x82\x01\x02\x10\x01R\x0frequestBodyMode\x12~\n" +
 	"\x12response_body_mode\x18\x02 \x01(\x0e2F.envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendModeB\b\xfaB\x05\x82\x01\x02\x10\x01R\x10responseBodyMode\x12^\n" +
-	"-send_body_without_waiting_for_header_response\x18\x03 \x01(\bR'sendBodyWithoutWaitingForHeaderResponse\"\xac\a\n" +
+	"-send_body_without_waiting_for_header_response\x18\x03 \x01(\bR'sendBodyWithoutWaitingForHeaderResponse\"\xaf\r\n" +
 	"\x11ProcessingRequest\x12Q\n" +
 	"\x0frequest_headers\x18\x02 \x01(\v2&.envoy.service.ext_proc.v3.HttpHeadersH\x00R\x0erequestHeaders\x12S\n" +
 	"\x10response_headers\x18\x03 \x01(\v2&.envoy.service.ext_proc.v3.HttpHeadersH\x00R\x0fresponseHeaders\x12H\n" +
@@ -1678,12 +1972,22 @@ const file_envoy_service_ext_proc_v3_external_processor_proto_rawDesc = "" +
 	"attributes\x12-\n" +
 	"\x12observability_mode\x18\n" +
 	" \x01(\bR\x11observabilityMode\x12Y\n" +
-	"\x0fprotocol_config\x18\v \x01(\v20.envoy.service.ext_proc.v3.ProtocolConfigurationR\x0eprotocolConfig\x1aV\n" +
+	"\x0fprotocol_config\x18\v \x01(\v20.envoy.service.ext_proc.v3.ProtocolConfigurationR\x0eprotocolConfig\x12h\n" +
+	"\x11flow_control_init\x18\f \x01(\v2<.envoy.service.ext_proc.v3.ProcessingRequest.FlowControlInitR\x0fflowControlInit\x12q\n" +
+	"\x14client_window_update\x18\r \x01(\v2?.envoy.service.ext_proc.v3.ProcessingRequest.ClientWindowUpdateR\x12clientWindowUpdate\x1a\xe1\x02\n" +
+	"\x0fFlowControlInit\x12T\n" +
+	"'initial_window_downstream_to_sidestream\x18\x01 \x01(\x03R#initialWindowDownstreamToSidestream\x12P\n" +
+	"%initial_window_sidestream_to_upstream\x18\x02 \x01(\x03R!initialWindowSidestreamToUpstream\x12P\n" +
+	"%initial_window_upstream_to_sidestream\x18\x03 \x01(\x03R!initialWindowUpstreamToSidestream\x12T\n" +
+	"'initial_window_sidestream_to_downstream\x18\x04 \x01(\x03R#initialWindowSidestreamToDownstream\x1a\xc4\x01\n" +
+	"\x12ClientWindowUpdate\x12T\n" +
+	"'window_increment_sidestream_to_upstream\x18\x01 \x01(\x03R#windowIncrementSidestreamToUpstream\x12X\n" +
+	")window_increment_sidestream_to_downstream\x18\x02 \x01(\x03R%windowIncrementSidestreamToDownstream\x1aV\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12-\n" +
-	"\x05value\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x05value:\x028\x01B\x0e\n" +
-	"\arequest\x12\x03\xf8B\x01J\x04\b\x01\x10\x02R\n" +
-	"async_mode\"\xfc\t\n" +
+	"\x05value\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x05value:\x028\x01B\t\n" +
+	"\arequestJ\x04\b\x01\x10\x02R\n" +
+	"async_mode\"\xb2\f\n" +
 	"\x12ProcessingResponse\x12U\n" +
 	"\x0frequest_headers\x18\x01 \x01(\v2*.envoy.service.ext_proc.v3.HeadersResponseH\x00R\x0erequestHeaders\x12W\n" +
 	"\x10response_headers\x18\x02 \x01(\v2*.envoy.service.ext_proc.v3.HeadersResponseH\x00R\x0fresponseHeaders\x12L\n" +
@@ -1698,11 +2002,16 @@ const file_envoy_service_ext_proc_v3_external_processor_proto_rawDesc = "" +
 	"\rmode_override\x18\t \x01(\v29.envoy.extensions.filters.http.ext_proc.v3.ProcessingModeR\fmodeOverride\x12#\n" +
 	"\rrequest_drain\x18\f \x01(\bR\frequestDrain\x12S\n" +
 	"\x18override_message_timeout\x18\n" +
-	" \x01(\v2\x19.google.protobuf.DurationR\x16overrideMessageTimeout\x1a]\n" +
+	" \x01(\v2\x19.google.protobuf.DurationR\x16overrideMessageTimeout\x12r\n" +
+	"\x14server_window_update\x18\x0e \x01(\v2@.envoy.service.ext_proc.v3.ProcessingResponse.ServerWindowUpdateR\x12serverWindowUpdate\x1a\xc4\x01\n" +
+	"\x12ServerWindowUpdate\x12X\n" +
+	")window_increment_downstream_to_sidestream\x18\x01 \x01(\x03R%windowIncrementDownstreamToSidestream\x12T\n" +
+	"'window_increment_upstream_to_sidestream\x18\x02 \x01(\x03R#windowIncrementUpstreamToSidestream\x1a]\n" +
 	"\x19TypedDynamicMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
-	"\x05value\x18\x02 \x01(\v2\x14.google.protobuf.AnyR\x05value:\x028\x01B\x0f\n" +
-	"\bresponse\x12\x03\xf8B\x01\"\xa9\x02\n" +
+	"\x05value\x18\x02 \x01(\v2\x14.google.protobuf.AnyR\x05value:\x028\x01B\n" +
+	"\n" +
+	"\bresponse\"\xa9\x02\n" +
 	"\vHttpHeaders\x129\n" +
 	"\aheaders\x18\x01 \x01(\v2\x1f.envoy.config.core.v3.HeaderMapR\aheaders\x12c\n" +
 	"\n" +
@@ -1783,90 +2092,96 @@ func file_envoy_service_ext_proc_v3_external_processor_proto_rawDescGZIP() []byt
 }
 
 var file_envoy_service_ext_proc_v3_external_processor_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_envoy_service_ext_proc_v3_external_processor_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_envoy_service_ext_proc_v3_external_processor_proto_goTypes = []any{
-	(CommonResponse_ResponseStatus)(0),  // 0: envoy.service.ext_proc.v3.CommonResponse.ResponseStatus
-	(*ProtocolConfiguration)(nil),       // 1: envoy.service.ext_proc.v3.ProtocolConfiguration
-	(*ProcessingRequest)(nil),           // 2: envoy.service.ext_proc.v3.ProcessingRequest
-	(*ProcessingResponse)(nil),          // 3: envoy.service.ext_proc.v3.ProcessingResponse
-	(*HttpHeaders)(nil),                 // 4: envoy.service.ext_proc.v3.HttpHeaders
-	(*HttpBody)(nil),                    // 5: envoy.service.ext_proc.v3.HttpBody
-	(*HttpTrailers)(nil),                // 6: envoy.service.ext_proc.v3.HttpTrailers
-	(*HeadersResponse)(nil),             // 7: envoy.service.ext_proc.v3.HeadersResponse
-	(*BodyResponse)(nil),                // 8: envoy.service.ext_proc.v3.BodyResponse
-	(*TrailersResponse)(nil),            // 9: envoy.service.ext_proc.v3.TrailersResponse
-	(*StreamedImmediateResponse)(nil),   // 10: envoy.service.ext_proc.v3.StreamedImmediateResponse
-	(*CommonResponse)(nil),              // 11: envoy.service.ext_proc.v3.CommonResponse
-	(*ImmediateResponse)(nil),           // 12: envoy.service.ext_proc.v3.ImmediateResponse
-	(*GrpcStatus)(nil),                  // 13: envoy.service.ext_proc.v3.GrpcStatus
-	(*HeaderMutation)(nil),              // 14: envoy.service.ext_proc.v3.HeaderMutation
-	(*StreamedBodyResponse)(nil),        // 15: envoy.service.ext_proc.v3.StreamedBodyResponse
-	(*BodyMutation)(nil),                // 16: envoy.service.ext_proc.v3.BodyMutation
-	nil,                                 // 17: envoy.service.ext_proc.v3.ProcessingRequest.AttributesEntry
-	nil,                                 // 18: envoy.service.ext_proc.v3.ProcessingResponse.TypedDynamicMetadataEntry
-	nil,                                 // 19: envoy.service.ext_proc.v3.HttpHeaders.AttributesEntry
-	(v3.ProcessingMode_BodySendMode)(0), // 20: envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode
-	(*v31.Metadata)(nil),                // 21: envoy.config.core.v3.Metadata
-	(*structpb.Struct)(nil),             // 22: google.protobuf.Struct
-	(*v3.ProcessingMode)(nil),           // 23: envoy.extensions.filters.http.ext_proc.v3.ProcessingMode
-	(*durationpb.Duration)(nil),         // 24: google.protobuf.Duration
-	(*v31.HeaderMap)(nil),               // 25: envoy.config.core.v3.HeaderMap
-	(*v32.HttpStatus)(nil),              // 26: envoy.type.v3.HttpStatus
-	(*v31.HeaderValueOption)(nil),       // 27: envoy.config.core.v3.HeaderValueOption
-	(*anypb.Any)(nil),                   // 28: google.protobuf.Any
+	(CommonResponse_ResponseStatus)(0),           // 0: envoy.service.ext_proc.v3.CommonResponse.ResponseStatus
+	(*ProtocolConfiguration)(nil),                // 1: envoy.service.ext_proc.v3.ProtocolConfiguration
+	(*ProcessingRequest)(nil),                    // 2: envoy.service.ext_proc.v3.ProcessingRequest
+	(*ProcessingResponse)(nil),                   // 3: envoy.service.ext_proc.v3.ProcessingResponse
+	(*HttpHeaders)(nil),                          // 4: envoy.service.ext_proc.v3.HttpHeaders
+	(*HttpBody)(nil),                             // 5: envoy.service.ext_proc.v3.HttpBody
+	(*HttpTrailers)(nil),                         // 6: envoy.service.ext_proc.v3.HttpTrailers
+	(*HeadersResponse)(nil),                      // 7: envoy.service.ext_proc.v3.HeadersResponse
+	(*BodyResponse)(nil),                         // 8: envoy.service.ext_proc.v3.BodyResponse
+	(*TrailersResponse)(nil),                     // 9: envoy.service.ext_proc.v3.TrailersResponse
+	(*StreamedImmediateResponse)(nil),            // 10: envoy.service.ext_proc.v3.StreamedImmediateResponse
+	(*CommonResponse)(nil),                       // 11: envoy.service.ext_proc.v3.CommonResponse
+	(*ImmediateResponse)(nil),                    // 12: envoy.service.ext_proc.v3.ImmediateResponse
+	(*GrpcStatus)(nil),                           // 13: envoy.service.ext_proc.v3.GrpcStatus
+	(*HeaderMutation)(nil),                       // 14: envoy.service.ext_proc.v3.HeaderMutation
+	(*StreamedBodyResponse)(nil),                 // 15: envoy.service.ext_proc.v3.StreamedBodyResponse
+	(*BodyMutation)(nil),                         // 16: envoy.service.ext_proc.v3.BodyMutation
+	(*ProcessingRequest_FlowControlInit)(nil),    // 17: envoy.service.ext_proc.v3.ProcessingRequest.FlowControlInit
+	(*ProcessingRequest_ClientWindowUpdate)(nil), // 18: envoy.service.ext_proc.v3.ProcessingRequest.ClientWindowUpdate
+	nil, // 19: envoy.service.ext_proc.v3.ProcessingRequest.AttributesEntry
+	(*ProcessingResponse_ServerWindowUpdate)(nil), // 20: envoy.service.ext_proc.v3.ProcessingResponse.ServerWindowUpdate
+	nil,                                 // 21: envoy.service.ext_proc.v3.ProcessingResponse.TypedDynamicMetadataEntry
+	nil,                                 // 22: envoy.service.ext_proc.v3.HttpHeaders.AttributesEntry
+	(v3.ProcessingMode_BodySendMode)(0), // 23: envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode
+	(*v31.Metadata)(nil),                // 24: envoy.config.core.v3.Metadata
+	(*structpb.Struct)(nil),             // 25: google.protobuf.Struct
+	(*v3.ProcessingMode)(nil),           // 26: envoy.extensions.filters.http.ext_proc.v3.ProcessingMode
+	(*durationpb.Duration)(nil),         // 27: google.protobuf.Duration
+	(*v31.HeaderMap)(nil),               // 28: envoy.config.core.v3.HeaderMap
+	(*v32.HttpStatus)(nil),              // 29: envoy.type.v3.HttpStatus
+	(*v31.HeaderValueOption)(nil),       // 30: envoy.config.core.v3.HeaderValueOption
+	(*anypb.Any)(nil),                   // 31: google.protobuf.Any
 }
 var file_envoy_service_ext_proc_v3_external_processor_proto_depIdxs = []int32{
-	20, // 0: envoy.service.ext_proc.v3.ProtocolConfiguration.request_body_mode:type_name -> envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode
-	20, // 1: envoy.service.ext_proc.v3.ProtocolConfiguration.response_body_mode:type_name -> envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode
+	23, // 0: envoy.service.ext_proc.v3.ProtocolConfiguration.request_body_mode:type_name -> envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode
+	23, // 1: envoy.service.ext_proc.v3.ProtocolConfiguration.response_body_mode:type_name -> envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode
 	4,  // 2: envoy.service.ext_proc.v3.ProcessingRequest.request_headers:type_name -> envoy.service.ext_proc.v3.HttpHeaders
 	4,  // 3: envoy.service.ext_proc.v3.ProcessingRequest.response_headers:type_name -> envoy.service.ext_proc.v3.HttpHeaders
 	5,  // 4: envoy.service.ext_proc.v3.ProcessingRequest.request_body:type_name -> envoy.service.ext_proc.v3.HttpBody
 	5,  // 5: envoy.service.ext_proc.v3.ProcessingRequest.response_body:type_name -> envoy.service.ext_proc.v3.HttpBody
 	6,  // 6: envoy.service.ext_proc.v3.ProcessingRequest.request_trailers:type_name -> envoy.service.ext_proc.v3.HttpTrailers
 	6,  // 7: envoy.service.ext_proc.v3.ProcessingRequest.response_trailers:type_name -> envoy.service.ext_proc.v3.HttpTrailers
-	21, // 8: envoy.service.ext_proc.v3.ProcessingRequest.metadata_context:type_name -> envoy.config.core.v3.Metadata
-	17, // 9: envoy.service.ext_proc.v3.ProcessingRequest.attributes:type_name -> envoy.service.ext_proc.v3.ProcessingRequest.AttributesEntry
+	24, // 8: envoy.service.ext_proc.v3.ProcessingRequest.metadata_context:type_name -> envoy.config.core.v3.Metadata
+	19, // 9: envoy.service.ext_proc.v3.ProcessingRequest.attributes:type_name -> envoy.service.ext_proc.v3.ProcessingRequest.AttributesEntry
 	1,  // 10: envoy.service.ext_proc.v3.ProcessingRequest.protocol_config:type_name -> envoy.service.ext_proc.v3.ProtocolConfiguration
-	7,  // 11: envoy.service.ext_proc.v3.ProcessingResponse.request_headers:type_name -> envoy.service.ext_proc.v3.HeadersResponse
-	7,  // 12: envoy.service.ext_proc.v3.ProcessingResponse.response_headers:type_name -> envoy.service.ext_proc.v3.HeadersResponse
-	8,  // 13: envoy.service.ext_proc.v3.ProcessingResponse.request_body:type_name -> envoy.service.ext_proc.v3.BodyResponse
-	8,  // 14: envoy.service.ext_proc.v3.ProcessingResponse.response_body:type_name -> envoy.service.ext_proc.v3.BodyResponse
-	9,  // 15: envoy.service.ext_proc.v3.ProcessingResponse.request_trailers:type_name -> envoy.service.ext_proc.v3.TrailersResponse
-	9,  // 16: envoy.service.ext_proc.v3.ProcessingResponse.response_trailers:type_name -> envoy.service.ext_proc.v3.TrailersResponse
-	12, // 17: envoy.service.ext_proc.v3.ProcessingResponse.immediate_response:type_name -> envoy.service.ext_proc.v3.ImmediateResponse
-	10, // 18: envoy.service.ext_proc.v3.ProcessingResponse.streamed_immediate_response:type_name -> envoy.service.ext_proc.v3.StreamedImmediateResponse
-	22, // 19: envoy.service.ext_proc.v3.ProcessingResponse.dynamic_metadata:type_name -> google.protobuf.Struct
-	18, // 20: envoy.service.ext_proc.v3.ProcessingResponse.typed_dynamic_metadata:type_name -> envoy.service.ext_proc.v3.ProcessingResponse.TypedDynamicMetadataEntry
-	23, // 21: envoy.service.ext_proc.v3.ProcessingResponse.mode_override:type_name -> envoy.extensions.filters.http.ext_proc.v3.ProcessingMode
-	24, // 22: envoy.service.ext_proc.v3.ProcessingResponse.override_message_timeout:type_name -> google.protobuf.Duration
-	25, // 23: envoy.service.ext_proc.v3.HttpHeaders.headers:type_name -> envoy.config.core.v3.HeaderMap
-	19, // 24: envoy.service.ext_proc.v3.HttpHeaders.attributes:type_name -> envoy.service.ext_proc.v3.HttpHeaders.AttributesEntry
-	25, // 25: envoy.service.ext_proc.v3.HttpTrailers.trailers:type_name -> envoy.config.core.v3.HeaderMap
-	11, // 26: envoy.service.ext_proc.v3.HeadersResponse.response:type_name -> envoy.service.ext_proc.v3.CommonResponse
-	11, // 27: envoy.service.ext_proc.v3.BodyResponse.response:type_name -> envoy.service.ext_proc.v3.CommonResponse
-	14, // 28: envoy.service.ext_proc.v3.TrailersResponse.header_mutation:type_name -> envoy.service.ext_proc.v3.HeaderMutation
-	4,  // 29: envoy.service.ext_proc.v3.StreamedImmediateResponse.headers_response:type_name -> envoy.service.ext_proc.v3.HttpHeaders
-	15, // 30: envoy.service.ext_proc.v3.StreamedImmediateResponse.body_response:type_name -> envoy.service.ext_proc.v3.StreamedBodyResponse
-	25, // 31: envoy.service.ext_proc.v3.StreamedImmediateResponse.trailers_response:type_name -> envoy.config.core.v3.HeaderMap
-	0,  // 32: envoy.service.ext_proc.v3.CommonResponse.status:type_name -> envoy.service.ext_proc.v3.CommonResponse.ResponseStatus
-	14, // 33: envoy.service.ext_proc.v3.CommonResponse.header_mutation:type_name -> envoy.service.ext_proc.v3.HeaderMutation
-	16, // 34: envoy.service.ext_proc.v3.CommonResponse.body_mutation:type_name -> envoy.service.ext_proc.v3.BodyMutation
-	25, // 35: envoy.service.ext_proc.v3.CommonResponse.trailers:type_name -> envoy.config.core.v3.HeaderMap
-	26, // 36: envoy.service.ext_proc.v3.ImmediateResponse.status:type_name -> envoy.type.v3.HttpStatus
-	14, // 37: envoy.service.ext_proc.v3.ImmediateResponse.headers:type_name -> envoy.service.ext_proc.v3.HeaderMutation
-	13, // 38: envoy.service.ext_proc.v3.ImmediateResponse.grpc_status:type_name -> envoy.service.ext_proc.v3.GrpcStatus
-	27, // 39: envoy.service.ext_proc.v3.HeaderMutation.set_headers:type_name -> envoy.config.core.v3.HeaderValueOption
-	15, // 40: envoy.service.ext_proc.v3.BodyMutation.streamed_response:type_name -> envoy.service.ext_proc.v3.StreamedBodyResponse
-	22, // 41: envoy.service.ext_proc.v3.ProcessingRequest.AttributesEntry.value:type_name -> google.protobuf.Struct
-	28, // 42: envoy.service.ext_proc.v3.ProcessingResponse.TypedDynamicMetadataEntry.value:type_name -> google.protobuf.Any
-	22, // 43: envoy.service.ext_proc.v3.HttpHeaders.AttributesEntry.value:type_name -> google.protobuf.Struct
-	2,  // 44: envoy.service.ext_proc.v3.ExternalProcessor.Process:input_type -> envoy.service.ext_proc.v3.ProcessingRequest
-	3,  // 45: envoy.service.ext_proc.v3.ExternalProcessor.Process:output_type -> envoy.service.ext_proc.v3.ProcessingResponse
-	45, // [45:46] is the sub-list for method output_type
-	44, // [44:45] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	17, // 11: envoy.service.ext_proc.v3.ProcessingRequest.flow_control_init:type_name -> envoy.service.ext_proc.v3.ProcessingRequest.FlowControlInit
+	18, // 12: envoy.service.ext_proc.v3.ProcessingRequest.client_window_update:type_name -> envoy.service.ext_proc.v3.ProcessingRequest.ClientWindowUpdate
+	7,  // 13: envoy.service.ext_proc.v3.ProcessingResponse.request_headers:type_name -> envoy.service.ext_proc.v3.HeadersResponse
+	7,  // 14: envoy.service.ext_proc.v3.ProcessingResponse.response_headers:type_name -> envoy.service.ext_proc.v3.HeadersResponse
+	8,  // 15: envoy.service.ext_proc.v3.ProcessingResponse.request_body:type_name -> envoy.service.ext_proc.v3.BodyResponse
+	8,  // 16: envoy.service.ext_proc.v3.ProcessingResponse.response_body:type_name -> envoy.service.ext_proc.v3.BodyResponse
+	9,  // 17: envoy.service.ext_proc.v3.ProcessingResponse.request_trailers:type_name -> envoy.service.ext_proc.v3.TrailersResponse
+	9,  // 18: envoy.service.ext_proc.v3.ProcessingResponse.response_trailers:type_name -> envoy.service.ext_proc.v3.TrailersResponse
+	12, // 19: envoy.service.ext_proc.v3.ProcessingResponse.immediate_response:type_name -> envoy.service.ext_proc.v3.ImmediateResponse
+	10, // 20: envoy.service.ext_proc.v3.ProcessingResponse.streamed_immediate_response:type_name -> envoy.service.ext_proc.v3.StreamedImmediateResponse
+	25, // 21: envoy.service.ext_proc.v3.ProcessingResponse.dynamic_metadata:type_name -> google.protobuf.Struct
+	21, // 22: envoy.service.ext_proc.v3.ProcessingResponse.typed_dynamic_metadata:type_name -> envoy.service.ext_proc.v3.ProcessingResponse.TypedDynamicMetadataEntry
+	26, // 23: envoy.service.ext_proc.v3.ProcessingResponse.mode_override:type_name -> envoy.extensions.filters.http.ext_proc.v3.ProcessingMode
+	27, // 24: envoy.service.ext_proc.v3.ProcessingResponse.override_message_timeout:type_name -> google.protobuf.Duration
+	20, // 25: envoy.service.ext_proc.v3.ProcessingResponse.server_window_update:type_name -> envoy.service.ext_proc.v3.ProcessingResponse.ServerWindowUpdate
+	28, // 26: envoy.service.ext_proc.v3.HttpHeaders.headers:type_name -> envoy.config.core.v3.HeaderMap
+	22, // 27: envoy.service.ext_proc.v3.HttpHeaders.attributes:type_name -> envoy.service.ext_proc.v3.HttpHeaders.AttributesEntry
+	28, // 28: envoy.service.ext_proc.v3.HttpTrailers.trailers:type_name -> envoy.config.core.v3.HeaderMap
+	11, // 29: envoy.service.ext_proc.v3.HeadersResponse.response:type_name -> envoy.service.ext_proc.v3.CommonResponse
+	11, // 30: envoy.service.ext_proc.v3.BodyResponse.response:type_name -> envoy.service.ext_proc.v3.CommonResponse
+	14, // 31: envoy.service.ext_proc.v3.TrailersResponse.header_mutation:type_name -> envoy.service.ext_proc.v3.HeaderMutation
+	4,  // 32: envoy.service.ext_proc.v3.StreamedImmediateResponse.headers_response:type_name -> envoy.service.ext_proc.v3.HttpHeaders
+	15, // 33: envoy.service.ext_proc.v3.StreamedImmediateResponse.body_response:type_name -> envoy.service.ext_proc.v3.StreamedBodyResponse
+	28, // 34: envoy.service.ext_proc.v3.StreamedImmediateResponse.trailers_response:type_name -> envoy.config.core.v3.HeaderMap
+	0,  // 35: envoy.service.ext_proc.v3.CommonResponse.status:type_name -> envoy.service.ext_proc.v3.CommonResponse.ResponseStatus
+	14, // 36: envoy.service.ext_proc.v3.CommonResponse.header_mutation:type_name -> envoy.service.ext_proc.v3.HeaderMutation
+	16, // 37: envoy.service.ext_proc.v3.CommonResponse.body_mutation:type_name -> envoy.service.ext_proc.v3.BodyMutation
+	28, // 38: envoy.service.ext_proc.v3.CommonResponse.trailers:type_name -> envoy.config.core.v3.HeaderMap
+	29, // 39: envoy.service.ext_proc.v3.ImmediateResponse.status:type_name -> envoy.type.v3.HttpStatus
+	14, // 40: envoy.service.ext_proc.v3.ImmediateResponse.headers:type_name -> envoy.service.ext_proc.v3.HeaderMutation
+	13, // 41: envoy.service.ext_proc.v3.ImmediateResponse.grpc_status:type_name -> envoy.service.ext_proc.v3.GrpcStatus
+	30, // 42: envoy.service.ext_proc.v3.HeaderMutation.set_headers:type_name -> envoy.config.core.v3.HeaderValueOption
+	15, // 43: envoy.service.ext_proc.v3.BodyMutation.streamed_response:type_name -> envoy.service.ext_proc.v3.StreamedBodyResponse
+	25, // 44: envoy.service.ext_proc.v3.ProcessingRequest.AttributesEntry.value:type_name -> google.protobuf.Struct
+	31, // 45: envoy.service.ext_proc.v3.ProcessingResponse.TypedDynamicMetadataEntry.value:type_name -> google.protobuf.Any
+	25, // 46: envoy.service.ext_proc.v3.HttpHeaders.AttributesEntry.value:type_name -> google.protobuf.Struct
+	2,  // 47: envoy.service.ext_proc.v3.ExternalProcessor.Process:input_type -> envoy.service.ext_proc.v3.ProcessingRequest
+	3,  // 48: envoy.service.ext_proc.v3.ExternalProcessor.Process:output_type -> envoy.service.ext_proc.v3.ProcessingResponse
+	48, // [48:49] is the sub-list for method output_type
+	47, // [47:48] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_envoy_service_ext_proc_v3_external_processor_proto_init() }
@@ -1908,7 +2223,7 @@ func file_envoy_service_ext_proc_v3_external_processor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_envoy_service_ext_proc_v3_external_processor_proto_rawDesc), len(file_envoy_service_ext_proc_v3_external_processor_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

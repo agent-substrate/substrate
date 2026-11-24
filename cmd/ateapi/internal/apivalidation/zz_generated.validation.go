@@ -143,12 +143,11 @@ func Validate_AcquireWorkerEpochRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -202,16 +201,11 @@ func Validate_Actor(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.Immutable).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -252,12 +246,11 @@ func Validate_Actor(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -331,12 +324,11 @@ func Validate_Actor(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -1172,16 +1164,11 @@ func Validate_ActorTemplate(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.Immutable).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -1400,7 +1387,10 @@ func Validate_ActorTemplate(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "GoldenEgressPolicy", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "GoldenEgressPolicy", false,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.EgressPolicyTemplate) field.ErrorList {
+					return validate.ForbiddenPointer(ctx, op, fldPath, obj, oldObj)
+				}).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -1525,16 +1515,11 @@ func Validate_Atespace(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.Immutable).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -2178,12 +2163,11 @@ func Validate_CreateActorEgressPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -2348,12 +2332,11 @@ func Validate_CreateAtespaceAccessPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -2758,12 +2741,11 @@ func Validate_DeleteActorEgressPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -2879,12 +2861,11 @@ func Validate_DeleteActorRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -2964,12 +2945,11 @@ func Validate_DeleteActorTemplateRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -3049,12 +3029,11 @@ func Validate_DeleteAtespaceAccessPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -3174,12 +3153,11 @@ func Validate_DeleteAtespaceRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -3334,12 +3312,11 @@ func Validate_DeleteTagRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -3419,12 +3396,11 @@ func Validate_DeleteWorkerRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -3508,12 +3484,11 @@ func Validate_DrainWorkerRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -3571,16 +3546,11 @@ func Validate_EgressPolicy(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.Immutable).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -4265,12 +4235,11 @@ func Validate_GetActorEgressPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -4356,12 +4325,11 @@ func Validate_GetActorRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -4411,12 +4379,11 @@ func Validate_GetActorTemplateRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -4466,12 +4433,11 @@ func Validate_GetAtespaceAccessPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -4561,12 +4527,11 @@ func Validate_GetAtespaceRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -4665,12 +4630,11 @@ func Validate_GetTagRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -4720,12 +4684,11 @@ func Validate_GetWorkerRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -4822,12 +4785,11 @@ func Validate_GoldenSnapshotStatus(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -5661,12 +5623,11 @@ func Validate_ListWorkerActorAssignmentsRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -5789,12 +5750,11 @@ func Validate_MarkWorkerAvailableRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -5848,12 +5808,11 @@ func Validate_MarkWorkerUnavailableRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -6025,12 +5984,11 @@ func Validate_MintWorkerActorCertificateRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -6135,12 +6093,11 @@ func Validate_MintWorkerActorCertificateRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -6194,12 +6151,11 @@ func Validate_MintWorkerActorJwtRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -6546,12 +6502,11 @@ func Validate_RegisterWorkerRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -6705,12 +6660,11 @@ func Validate_ReportActorCrashedRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -6755,12 +6709,11 @@ func Validate_ReportActorCrashedRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -6905,12 +6858,11 @@ func Validate_ReportActorSnapshotStateRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -7023,12 +6975,11 @@ func Validate_RequestActorSuspendRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -7073,12 +7024,11 @@ func Validate_RequestActorSuspendRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -7528,12 +7478,11 @@ func Validate_ResumeActorRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -7583,12 +7532,11 @@ func Validate_RevertActorRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -7816,12 +7764,11 @@ func Validate_SetWorkerSandboxRuntimesRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -8212,7 +8159,10 @@ func Validate_SnapshotConfig(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "PerTemplateSnapshotLocation", false, validate.ForbiddenValue).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "PerTemplateSnapshotLocation", false,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+				}).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -8608,12 +8558,11 @@ func Validate_SuspendActorRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -8876,16 +8825,11 @@ func Validate_Tag(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.Immutable).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -8999,12 +8943,11 @@ func Validate_Tag(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -9061,12 +9004,11 @@ func Validate_TagStatus(
 			func() { // cohort = "durable_snapshot"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "durable_snapshot",
-					func(o *v1.Snapshot) *v1.SnapshotStorage { return o.DurableSnapshot }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.Snapshot) *v1.SnapshotStorage { return o.DurableSnapshot }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.SnapshotStorage) field.ErrorList {
+						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "durable_snapshot",
-					func(o *v1.Snapshot) *v1.SnapshotStorage { return o.DurableSnapshot }, ateDeepEqual, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -9338,12 +9280,11 @@ func Validate_UpdateActorEgressPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.RequiredValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -9428,7 +9369,10 @@ func Validate_UpdateActorRequest(
 			func() { // cohort = "metadata"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
-					func(o *v1.Actor) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.Actor) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
 					earlyReturn = true
 				}
@@ -9477,12 +9421,11 @@ func Validate_UpdateAtespaceAccessPolicyRequest(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -9611,7 +9554,10 @@ func Validate_UpdateTagRequest(
 			func() { // cohort = "metadata"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
-					func(o *v1.Tag) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.Tag) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
 					earlyReturn = true
 				}
@@ -9664,7 +9610,10 @@ func Validate_UpdateWorkerRequest(
 			func() { // cohort = "metadata"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
-					func(o *v1.Worker) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.Worker) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ResourceMetadata) field.ErrorList {
+						return validate.RequiredPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
 					earlyReturn = true
 				}
@@ -9881,7 +9830,10 @@ func Validate_Volume(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.ExternalVolumeSource) field.ErrorList {
+					return validate.ForbiddenPointer(ctx, op, fldPath, obj, oldObj)
+				}).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -10149,16 +10101,11 @@ func Validate_Worker(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.Immutable).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
@@ -10503,12 +10450,11 @@ func Validate_WorkerAssignment(
 			func() { // cohort = "atespace"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj)
+					}).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
-					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 					earlyReturn = true
 				}
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",

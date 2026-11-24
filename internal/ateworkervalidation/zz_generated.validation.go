@@ -1424,19 +1424,11 @@ func Validate_RestoreWorkloadRequest(
 			func() { // cohort = "containers"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
-					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.RequiredSlice).MarkShortCircuit(); len(e) != 0 {
-					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
 					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual,
 					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj []*ateworkerpb.Container) field.ErrorList {
-						return validate.MaxItems(ctx, op, fldPath, obj, oldObj, 10)
+						return validate.RequiredSlice(ctx, op, fldPath, obj, oldObj)
 					}).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
-					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.OptionalSlice).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
 					earlyReturn = true
 				}
 				if earlyReturn {
@@ -1904,19 +1896,11 @@ func Validate_RunWorkloadRequest(
 			func() { // cohort = "containers"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
-					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.RequiredSlice).MarkShortCircuit(); len(e) != 0 {
-					errs = append(errs, e...)
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
 					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual,
 					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj []*ateworkerpb.Container) field.ErrorList {
-						return validate.MaxItems(ctx, op, fldPath, obj, oldObj, 10)
+						return validate.RequiredSlice(ctx, op, fldPath, obj, oldObj)
 					}).MarkShortCircuit(); len(e) != 0 {
-					earlyReturn = true
-				}
-				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
-					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.OptionalSlice).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
 					earlyReturn = true
 				}
 				if earlyReturn {

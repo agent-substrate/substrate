@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-   http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -42,7 +42,18 @@ func (hs multiMutating) Handle(ctx context.Context, req Request) Response {
 				fmt.Errorf("unexpected patch type returned by the handler: %v, only allow: %v",
 					resp.PatchType, admissionv1.PatchTypeJSONPatch))
 		}
-		patches = append(patches, resp.Patches...)
+		// Same semantics as Response.Complete: Patches take precedence over Patch.
+		switch {
+		case len(resp.Patches) > 0:
+			patches = append(patches, resp.Patches...)
+		case len(resp.Patch) > 0:
+			var rawPatches []jsonpatch.JsonPatchOperation
+			if err := json.Unmarshal(resp.Patch, &rawPatches); err != nil {
+				return Errored(http.StatusInternalServerError,
+					fmt.Errorf("error when unmarshaling the patch returned by the handler: %w", err))
+			}
+			patches = append(patches, rawPatches...)
+		}
 		warnings = append(warnings, resp.Warnings...)
 	}
 	var err error
@@ -51,15 +62,13 @@ func (hs multiMutating) Handle(ctx context.Context, req Request) Response {
 		return Errored(http.StatusBadRequest, fmt.Errorf("error when marshaling the patch: %w", err))
 	}
 	return Response{
-		AdmissionResponse: admissionv1.AdmissionResponse{
-			Allowed: true,
-			Result: &metav1.Status{
-				Code: http.StatusOK,
-			},
-			Patch:     marshaledPatch,
-			Warnings:  warnings,
-			PatchType: func() *admissionv1.PatchType { pt := admissionv1.PatchTypeJSONPatch; return &pt }(),
+		Allowed: true,
+		Result: &metav1.Status{
+			Code: http.StatusOK,
 		},
+		Patch:     marshaledPatch,
+		Warnings:  warnings,
+		PatchType: new(admissionv1.PatchTypeJSONPatch),
 	}
 }
 
@@ -83,13 +92,11 @@ func (hs multiValidating) Handle(ctx context.Context, req Request) Response {
 		warnings = append(warnings, resp.Warnings...)
 	}
 	return Response{
-		AdmissionResponse: admissionv1.AdmissionResponse{
-			Allowed: true,
-			Result: &metav1.Status{
-				Code: http.StatusOK,
-			},
-			Warnings: warnings,
+		Allowed: true,
+		Result: &metav1.Status{
+			Code: http.StatusOK,
 		},
+		Warnings: warnings,
 	}
 }
 
