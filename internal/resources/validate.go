@@ -544,21 +544,6 @@ func ValidateNestedMountPathsAt(paths []string, at func(i int) *field.Path) fiel
 	return errs
 }
 
-// envVarNameRE constrains env var names to any printable ASCII character
-// except '='.
-var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
-
-// ValidateEnvVarName checks an environment variable name.
-func ValidateEnvVarName(fldPath *field.Path, name string) field.ErrorList {
-	if name == "" {
-		return nil
-	}
-	if !envVarNameRE.MatchString(name) {
-		return field.ErrorList{field.Invalid(fldPath, name, "may contain any printable ASCII character except '='")}
-	}
-	return nil
-}
-
 // ValidateProjectedPath applies volumepath.ValidateProjected to a file path
 // projected into a system-info volume. atelet re-checks it before writing to
 // the host.

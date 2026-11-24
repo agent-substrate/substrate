@@ -512,17 +512,6 @@ func TestValidateMountPath(t *testing.T) {
 	})
 }
 
-func TestValidateEnvVarName(t *testing.T) {
-	runStringRule(t, ValidateEnvVarName, []stringRuleCase{
-		{"empty is left to tags", "", false},
-		{"conventional", "HOME_DIR", false},
-		{"printable punctuation", "a.b-c", false},
-		{"equals sign", "A=B", true},
-		{"control character", "A\tB", true},
-		{"non-ASCII", "é", true},
-	})
-}
-
 func TestValidateProjectedPath(t *testing.T) {
 	runStringRule(t, ValidateProjectedPath, []stringRuleCase{
 		{"empty is left to tags", "", false},

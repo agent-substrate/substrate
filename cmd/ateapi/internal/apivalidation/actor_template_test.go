@@ -687,7 +687,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].Env = []*ateapi.EnvVar{{Name: "FOO=BAR"}}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "").WithOrigin("format=ate-env-var-name")},
 	}, {
 		name: "env missing name",
 		mutate: func(tmpl *ateapi.ActorTemplate) {

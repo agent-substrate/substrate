@@ -1735,7 +1735,7 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "env: name with equals sign",
 			obj:  env(func(e *ateletpb.EnvVar) { e.Name = "A=B" }),
-			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
+			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "").WithOrigin("format=ate-env-var-name")},
 		}, {
 			name: "env: name too long",
 			obj:  env(func(e *ateletpb.EnvVar) { e.Name = strings.Repeat("N", 257) }),

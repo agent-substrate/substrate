@@ -59,10 +59,6 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
 
-func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateEnvVarName(fldPath, *value)
-}
-
 func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateMountPath(fldPath, *value)
 }

@@ -18,7 +18,7 @@ formats:
   - name: ate-singleton-name
     docs: This field must be "default"
     # allow optional/required to cover "" for subfields
-    pattern: '(^$|^default$)'
+    pattern: (^$|^default$)
     message: must be "default"
 
   # HTTP probe paths
@@ -27,3 +27,10 @@ formats:
     # allow optional/required to cover "" for subfields
     pattern: (^$|^/([A-Za-z0-9\-._~!$&'\(\)*+,;=:@/]|%[0-9A-Fa-f]{2})*$)
     message: must be a valid HTTP path (RFC 3986)
+
+  # Environment variable names
+  - name: ate-env-var-name
+    docs: This field must be a valid environment variable name
+    # allow optional/required to cover "" for subfields
+    pattern: (^$|^[ -<>-~]+$)
+    message: may contain any printable ASCII character except '='

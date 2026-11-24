@@ -169,10 +169,6 @@ func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operatio
 	return nil
 }
 
-func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateEnvVarName(fldPath, *value)
-}
-
 func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return resources.ValidateAddCapabilities(fldPath, value)
 }

@@ -3187,7 +3187,7 @@ type EnvVar struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=256 # guardrail
-	// +k8s:customValidation # printable ASCII except '='
+	// +k8s:format=ate-env-var-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// +k8s:optional
 	// +k8s:maxLength=32768 # guardrail

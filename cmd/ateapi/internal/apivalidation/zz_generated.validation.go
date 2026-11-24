@@ -3815,6 +3815,8 @@ func Validate_EgressRule(
 	return errs
 }
 
+var formatPattern_ate_env_var_name = regexp.MustCompile("(^$|^[ -<>-~]+$)")
+
 // Validate_EnvVar validates an instance of EnvVar according
 // to declarative validation rules in the API schema.
 func Validate_EnvVar(
@@ -3841,8 +3843,7 @@ func Validate_EnvVar(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_EnvVar_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.Matches(ctx, op, fldPath, obj, oldObj, formatPattern_ate_env_var_name, "may contain any printable ASCII character except '='", "format=ate-env-var-name"); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {

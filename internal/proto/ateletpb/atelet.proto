@@ -888,7 +888,7 @@ message EnvVar {
   //
   // +k8s:required
   // +k8s:maxLength=256 # guardrail
-  // +k8s:customValidation # printable ASCII except '='
+  // +k8s:format=ate-env-var-name
   string name = 1;
 
   // +k8s:optional
