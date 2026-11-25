@@ -509,8 +509,18 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.SnapshotConfig.StorageLocation = "gs://" + strings.Repeat("x", 1020)
 		},
+		want: field.ErrorList{field.Forbidden(field.NewPath("snapshot_config", "storage_location"), "")},
+		wantWithPreview: map[string]field.ErrorList{"PerTemplateSnapshotLocation": {
+			field.Invalid(field.NewPath("snapshot_config", "storage_location"), nil, ""),
+			field.TooLong(field.NewPath("snapshot_config", "storage_location"), nil, 1024).WithOrigin("maxLength"),
+		}},
+	}, {
+		name: "gs:// storage_location too long for GCS",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://bucket/" + strings.Repeat("a", 333)
+		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("snapshot_config", "storage_location"), "")},
-		wantWithPreview: map[string]field.ErrorList{"PerTemplateSnapshotLocation": {field.TooLong(field.NewPath("snapshot_config", "storage_location"), nil, 1024).WithOrigin("maxLength")}},
+		wantWithPreview: map[string]field.ErrorList{"PerTemplateSnapshotLocation": {field.Invalid(field.NewPath("snapshot_config", "storage_location"), nil, "")}},
 	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },

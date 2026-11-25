@@ -116,7 +116,8 @@ func TestIsValidResourceName(t *testing.T) {
 		{"valid start number", "1actor", true},
 		{"invalid end hyphen", "actor-", false},
 		{"invalid special chars", "actor@1", false},
-		{"invalid length", strings.Repeat("a", 64), false},
+		{"longest", strings.Repeat("a", maxResourceNameLength), true},
+		{"invalid length", strings.Repeat("a", maxResourceNameLength+1), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -204,6 +205,12 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"escaped atespaces", "gs://snaps/root/%61tespaces/team-a", true},
 		{"escaped separators", "gs://snaps/root%2Fatespaces%2Fteam-a", true},
 		{"atespaces as part of a segment", "gs://snaps/root/my-atespaces/atespaces_old", false},
+
+		{"longest gs path", "gs://bucket/" + strings.Repeat("a", 332), false},
+		{"gs path one byte too long", "gs://bucket/" + strings.Repeat("a", 333), true},
+		{"gs path too long with a trailing slash", "gs://bucket/" + strings.Repeat("a", 333) + "/", true},
+		{"long s3 path", "s3://bucket/" + strings.Repeat("a", 333), false},
+		{"gs bucket alone too long", "gs://" + strings.Repeat("b", 340), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
