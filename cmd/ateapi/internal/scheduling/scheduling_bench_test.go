@@ -238,13 +238,38 @@ func carriesOld(w *ateapi.Worker) bool {
 	return false
 }
 
+// indexedBenchFleet backs a benchmark fleet with a pre-built node index so
+// WorkersByNode returns the node slice directly without copying, matching
+// Workers. BenchmarkWorkers and BenchmarkWorkersByNode in workercache measure
+// the cache copy cost on their own.
+type indexedBenchFleet struct {
+	workers fleet
+	byNode  map[string][]*ateapi.Worker
+}
+
+func newIndexedBenchFleet(f fleet) *indexedBenchFleet {
+	byNode := make(map[string][]*ateapi.Worker, len(f)/benchWorkersPerNode+1)
+	for _, w := range f {
+		if node := w.GetNodeName(); node != "" {
+			byNode[node] = append(byNode[node], w)
+		}
+	}
+	return &indexedBenchFleet{workers: f, byNode: byNode}
+}
+
+func (f *indexedBenchFleet) Workers() ([]*ateapi.Worker, error) { return f.workers, nil }
+
+func (f *indexedBenchFleet) WorkersByNode(node string) ([]*ateapi.Worker, error) {
+	return f.byNode[node], nil
+}
+
 // TestBenchScenarios pins what each benchmark scenario measures: placement
 // succeeds, and lands on the kind of worker the scenario is about.
 func TestBenchScenarios(t *testing.T) {
 	const n = 100
 	for _, sc := range benchScenarios {
 		t.Run(sc.name, func(t *testing.T) {
-			s := New(sc.fleet(n))
+			s := New(newIndexedBenchFleet(sc.fleet(n)))
 			c := benchConstraints(sc, n)
 			for range 20 {
 				got, err := scheduleResume(context.Background(), s, c, sc.relaxable)
@@ -263,13 +288,13 @@ func TestBenchScenarios(t *testing.T) {
 }
 
 // BenchmarkSchedule times one placement per scenario and fleet size, the way
-// assignWorkerAttempt asks for it (see scheduleResume). The fleet is a plain
-// slice, so the workercache copy is not included; BenchmarkWorkers in
-// workercache measures that on its own.
+// assignWorkerAttempt asks for it (see scheduleResume). The fleet is backed by
+// pre-built slices, so the workercache copy is not included; BenchmarkWorkers
+// and BenchmarkWorkersByNode in workercache measure that on their own.
 func BenchmarkSchedule(b *testing.B) {
 	for _, n := range benchFleetSizes {
 		for _, sc := range benchScenarios {
-			s := New(sc.fleet(n))
+			s := New(newIndexedBenchFleet(sc.fleet(n)))
 			c := benchConstraints(sc, n)
 			b.Run(fmt.Sprintf("%s/n=%d", sc.name, n), func(b *testing.B) {
 				b.ReportAllocs()

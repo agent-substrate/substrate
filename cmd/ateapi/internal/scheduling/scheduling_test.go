@@ -599,6 +599,19 @@ type fleet []*ateapi.Worker
 
 func (f fleet) Workers() ([]*ateapi.Worker, error) { return f, nil }
 
+func (f fleet) WorkersByNode(node string) ([]*ateapi.Worker, error) {
+	if node == "" {
+		return nil, nil
+	}
+	var out []*ateapi.Worker
+	for _, w := range f {
+		if w.GetNodeName() == node {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
 func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapi.Worker)) *ateapi.Worker {
 	w := &ateapi.Worker{
 		WorkerPod: pod,
@@ -859,5 +872,210 @@ func TestHasRoomBooksRuntimeOverhead(t *testing.T) {
 	}
 	if !s.HasRoom(roomy, constraints) {
 		t.Error("HasRoom() = false with room for the actor and its overhead, want true")
+	}
+}
+
+type indexedFleet struct {
+	workers     []*ateapi.Worker
+	byNode      map[string][]*ateapi.Worker
+	workersCall int
+	byNodeCall  int
+	lookupErr   error
+}
+
+func newIndexedFleet(f fleet) *indexedFleet {
+	byNode := make(map[string][]*ateapi.Worker, len(f))
+	for _, w := range f {
+		if node := w.GetNodeName(); node != "" {
+			byNode[node] = append(byNode[node], w)
+		}
+	}
+	return &indexedFleet{workers: f, byNode: byNode}
+}
+
+func (f *indexedFleet) Workers() ([]*ateapi.Worker, error) {
+	f.workersCall++
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	out := make([]*ateapi.Worker, len(f.workers))
+	copy(out, f.workers)
+	return out, nil
+}
+
+func (f *indexedFleet) WorkersByNode(node string) ([]*ateapi.Worker, error) {
+	f.byNodeCall++
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	if node == "" {
+		return nil, nil
+	}
+	return f.byNode[node], nil
+}
+
+func TestScheduleRequiredNodesUsesNodeLookup(t *testing.T) {
+	errCacheNotReady := errors.New("worker cache not ready")
+
+	tests := []struct {
+		name            string
+		fleet           fleet
+		requiredNodes   []string
+		limits          *ateapi.Resources
+		lookupErr       error
+		wantPod         string
+		wantErr         error
+		wantWorkersCall int
+		wantByNodeCall  int
+	}{
+		{
+			name: "picks eligible worker on single RequiredNode without scanning full fleet",
+			fleet: fleet{
+				worker("w-other", "gvisor", "node-a", nil, withMaxActors(4)),
+				worker("w-busy", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "a"), assigned("demo", "b")),
+				worker("w-idle", "gvisor", "node-b", nil, withMaxActors(4)),
+			},
+			requiredNodes:   []string{"node-b"},
+			wantPod:         "w-idle",
+			wantWorkersCall: 0,
+			wantByNodeCall:  1,
+		},
+		{
+			name: "returns ErrNoCapacity without scanning full fleet when RequiredNode is full",
+			fleet: fleet{
+				worker("w-remote-free", "gvisor", "node-a", nil, withMaxActors(4)),
+				worker("w-pinned-full", "gvisor", "node-b", nil, withMaxActors(1), assigned("demo", "a")),
+			},
+			requiredNodes:   []string{"node-b"},
+			wantErr:         ErrNoCapacity,
+			wantWorkersCall: 0,
+			wantByNodeCall:  1,
+		},
+		{
+			name: "returns ErrNoCapacity without scanning full fleet when RequiredNode is unknown",
+			fleet: fleet{
+				worker("w-a", "gvisor", "node-a", nil, withMaxActors(4)),
+			},
+			requiredNodes:   []string{"node-missing"},
+			wantErr:         ErrNoCapacity,
+			wantWorkersCall: 0,
+			wantByNodeCall:  1,
+		},
+		{
+			name: "returns ErrDoesNotFit without scanning full fleet when RequiredNode worker is too small",
+			fleet: fleet{
+				worker("w-remote-big", "gvisor", "node-a", nil, withCapacity(8000, 16<<30), withMaxActors(4)),
+				worker("w-pinned-small", "gvisor", "node-b", nil, withCapacity(1000, 1<<30), withMaxActors(4)),
+			},
+			requiredNodes:   []string{"node-b"},
+			limits:          resources.CPUMemory(4000, 0),
+			wantErr:         ErrDoesNotFit,
+			wantWorkersCall: 0,
+			wantByNodeCall:  1,
+		},
+		{
+			name: "returns ErrNoCapacity when RequiredNode has a large UNAVAILABLE worker",
+			fleet: fleet{
+				worker("w-pinned-small", "gvisor", "node-b", nil, withCapacity(1000, 1<<30), withMaxActors(4)),
+				worker("w-pinned-unavail", "gvisor", "node-b", nil, withCapacity(8000, 16<<30), withMaxActors(4),
+					withState(ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)),
+			},
+			requiredNodes:   []string{"node-b"},
+			limits:          resources.CPUMemory(4000, 0),
+			wantErr:         ErrNoCapacity,
+			wantWorkersCall: 0,
+			wantByNodeCall:  1,
+		},
+		{
+			name: "falls back to Workers for nil RequiredNodes",
+			fleet: fleet{
+				worker("w-a", "gvisor", "node-a", nil, withMaxActors(4)),
+			},
+			requiredNodes:   nil,
+			wantPod:         "w-a",
+			wantWorkersCall: 1,
+			wantByNodeCall:  0,
+		},
+		{
+			name: "falls back to Workers for empty RequiredNodes",
+			fleet: fleet{
+				worker("w-a", "gvisor", "node-a", nil, withMaxActors(4)),
+			},
+			requiredNodes:   []string{},
+			wantPod:         "w-a",
+			wantWorkersCall: 1,
+			wantByNodeCall:  0,
+		},
+		{
+			name: "falls back to Workers for empty-string RequiredNode",
+			fleet: fleet{
+				worker("w-a", "gvisor", "node-a", nil, withMaxActors(4)),
+				worker("w-unnamed", "gvisor", "", nil, withMaxActors(4)),
+			},
+			requiredNodes:   []string{""},
+			wantPod:         "w-unnamed",
+			wantWorkersCall: 1,
+			wantByNodeCall:  0,
+		},
+		{
+			name: "falls back to Workers for multi-node RequiredNodes",
+			fleet: fleet{
+				worker("w-c", "gvisor", "node-c", nil, withMaxActors(4)),
+				worker("w-a", "gvisor", "node-a", nil, withMaxActors(4), assigned("demo", "a")),
+				worker("w-b", "gvisor", "node-b", nil, withMaxActors(4)),
+			},
+			requiredNodes:   []string{"node-a", "node-b"},
+			wantPod:         "w-b",
+			wantWorkersCall: 1,
+			wantByNodeCall:  0,
+		},
+		{
+			name: "propagates error when WorkersByNode fails",
+			fleet: fleet{
+				worker("w-b", "gvisor", "node-b", nil),
+			},
+			requiredNodes:   []string{"node-b"},
+			lookupErr:       errCacheNotReady,
+			wantErr:         errCacheNotReady,
+			wantWorkersCall: 0,
+			wantByNodeCall:  1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := newIndexedFleet(tc.fleet)
+			idx.lookupErr = tc.lookupErr
+
+			got, err := New(idx, WithIntn(firstIntn)).Schedule(context.Background(), Constraints{
+				SandboxClass:  "gvisor",
+				RequiredNodes: tc.requiredNodes,
+				Limits:        tc.limits,
+			})
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Schedule() error = %v, want %v", err, tc.wantErr)
+				}
+				if tc.wantErr == ErrNoCapacity && errors.Is(err, ErrDoesNotFit) {
+					t.Fatalf("Schedule() error = %v, want plain ErrNoCapacity, not ErrDoesNotFit", err)
+				}
+				if tc.wantErr != ErrNoCapacity && tc.wantErr != ErrDoesNotFit && errors.Is(err, ErrNoCapacity) {
+					t.Fatalf("Schedule() error = %v, must not wrap ErrNoCapacity", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Schedule() error = %v", err)
+				}
+				if got.GetWorkerPod() != tc.wantPod {
+					t.Errorf("Schedule() = %q, want %q", got.GetWorkerPod(), tc.wantPod)
+				}
+			}
+
+			if idx.workersCall != tc.wantWorkersCall || idx.byNodeCall != tc.wantByNodeCall {
+				t.Errorf("calls = (Workers:%d, WorkersByNode:%d), want (%d, %d)",
+					idx.workersCall, idx.byNodeCall, tc.wantWorkersCall, tc.wantByNodeCall)
+			}
+		})
 	}
 }

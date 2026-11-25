@@ -50,3 +50,37 @@ func BenchmarkWorkers(b *testing.B) {
 		cancel()
 	}
 }
+
+// BenchmarkWorkersByNode times the node-indexed copy WorkersByNode() hands to a
+// pinned Schedule call, with 4 workers per node matching scheduling_bench_test.go.
+func BenchmarkWorkersByNode(b *testing.B) {
+	const workersPerNode = 4
+	for _, n := range []int{100, 1000, 10000} {
+		workers := make([]*ateapi.Worker, 0, n)
+		for i := range n {
+			w := makeWorker("ns", fmt.Sprintf("w-%d", i), 1)
+			w.NodeName = fmt.Sprintf("node-%d", i/workersPerNode)
+			workers = append(workers, w)
+		}
+		c := workercache.New(newFakeStore(workers...), time.Hour)
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := c.Start(ctx); err != nil {
+			cancel()
+			b.Fatal(err)
+		}
+		targetNode := fmt.Sprintf("node-%d", (n/2)/workersPerNode)
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				got, err := c.WorkersByNode(targetNode)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(got) != workersPerNode {
+					b.Fatalf("WorkersByNode(%q) returned %d workers, want %d", targetNode, len(got), workersPerNode)
+				}
+			}
+		})
+		cancel()
+	}
+}

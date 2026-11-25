@@ -93,9 +93,15 @@ type Scheduler interface {
 	HasRoom(worker *ateapi.Worker, constraints Constraints) bool
 }
 
-// WorkerSource provides the whole fleet of workers.
+// WorkerSource provides read access to the worker fleet.
 type WorkerSource interface {
+	// Workers returns a snapshot of all known workers in the fleet.
 	Workers() ([]*ateapi.Worker, error)
+
+	// WorkersByNode returns all known workers running on node, regardless of
+	// state, or an empty slice when node is empty or has no workers. Returns an
+	// error if the underlying source is not ready.
+	WorkersByNode(node string) ([]*ateapi.Worker, error)
 }
 
 type scheduler struct {
@@ -128,7 +134,7 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 // the higher of actor-slot and compute-resource utilization. Spreading across
 // the warm pool avoids hotspots until autoscaling reclaims idle workers.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
-	workers, err := s.source.Workers()
+	workers, err := s.workersForSchedule(constraints)
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers: %w", err)
 	}
@@ -166,6 +172,16 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return candidates[j].worker, nil
 	}
 	return candidates[i].worker, nil
+}
+
+// workersForSchedule returns the candidate workers for constraints. It queries
+// WorkersByNode when RequiredNodes names a single node, and falls back to
+// Workers for unconstrained, empty-node, or multi-node requests.
+func (s *scheduler) workersForSchedule(constraints Constraints) ([]*ateapi.Worker, error) {
+	if len(constraints.RequiredNodes) == 1 && constraints.RequiredNodes[0] != "" {
+		return s.source.WorkersByNode(constraints.RequiredNodes[0])
+	}
+	return s.source.Workers()
 }
 
 // doesNotFit reports whether at least one registered worker meets constraints,
