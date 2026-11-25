@@ -19,6 +19,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
@@ -311,5 +312,102 @@ func TestNoteFailureIgnoresRetryLater(t *testing.T) {
 	}
 	if a.consecutiveFailures != 0 {
 		t.Errorf("consecutiveFailures = %d, want 0", a.consecutiveFailures)
+	}
+}
+
+// requestCount reads the locust_requests_total success count for name.
+func requestCount(t *testing.T, name string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("Gather() = %v", err)
+	}
+	var total float64
+	for _, mf := range families {
+		if mf.GetName() != "locust_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, lp := range m.GetLabel() {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["name"] == name && labels["status"] == "success" && labels["user_class"] == userClass {
+				total += m.GetCounter().GetValue()
+			}
+		}
+	}
+	return total
+}
+
+func TestGluttonIterate_FirstCycleRows(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		template     string
+		wantTemplate string
+		want         map[string]float64
+	}{
+		{
+			name:         "sync",
+			mode:         dynconfig.LifecycleModeSync,
+			wantTemplate: templateName,
+			want: map[string]float64{
+				"ColdStart":                     1,
+				"ResumeActorFirstResume":        1,
+				"SuspendActorFirstSuspend":      1,
+				"ResumeActorAfterFirstSuspend":  1,
+				"SuspendActor":                  2,
+				"ResumeActor":                   1,
+				"SuspendActorAsyncFirstSuspend": 0,
+			},
+		},
+		{
+			name:         "async with template",
+			mode:         dynconfig.LifecycleModeAsync,
+			template:     "glutton-node",
+			wantTemplate: "glutton-node",
+			want: map[string]float64{
+				"ColdStart":                     1,
+				"ResumeActorFirstResume":        1,
+				"SuspendActorAsyncFirstSuspend": 1,
+				"ResumeActorAfterFirstSuspend":  1,
+				"SuspendActorAsync":             2,
+				"ResumeActor":                   1,
+				"SuspendActorFirstSuspend":      0,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := map[string]float64{}
+			for name := range tc.want {
+				before[name] = requestCount(t, name)
+			}
+			srv := &fake.Server{}
+			fakeCtrl := &fakeControlClient{}
+			cfg := newTestConfig(t, srv, &userclass.Config{
+				APIStub:  fakeCtrl,
+				Atespace: "bench-test",
+				Dyn: dynconfig.Static(gluttonKnobs{
+					Lifecycle: dynconfig.Lifecycle{LifecycleMode: tc.mode},
+					Template:  tc.template,
+				}),
+			})
+
+			rt := &taskRuntime{cfg: cfg}
+			for range 3 {
+				rt.iterate()
+			}
+
+			for name, want := range tc.want {
+				if got := requestCount(t, name) - before[name]; got != want {
+					t.Errorf("%s rows = %v, want %v", name, got, want)
+				}
+			}
+			if got := fakeCtrl.templates; !slices.Equal(got, []string{tc.wantTemplate}) {
+				t.Errorf("CreateActor templates = %v, want [%s]", got, tc.wantTemplate)
+			}
+		})
 	}
 }

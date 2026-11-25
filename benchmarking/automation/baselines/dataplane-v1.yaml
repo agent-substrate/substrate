@@ -1,0 +1,106 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Dataplane baseline, version 1. See README.md in this directory.
+#
+# Each entry drives one actor on one microVM worker, so the control plane
+# serves well under one request a second and the numbers measure the data
+# plane. Do not change an entry's workload, sizes or load here: results of
+# one version must stay comparable with each other. Copy the file to the next
+# version instead.
+
+# Fields every entry shares. targetCluster is required, and --env-file
+# overrides it.
+x-common: &common
+  type: locust
+  targetCluster: dev
+  sandboxClass: microvm
+  workerCount: 1
+  users: 1
+
+tests:
+  # Go: glutton fills a 512Mi working set before the first suspend, rewrites
+  # 64Mi of it each cycle, and reads all of it after each resume.
+  - name: dataplane_v1_go_glutton
+    <<: *common
+    description: "Dataplane baseline v1: Go (glutton), 512Mi working set"
+    file: /app/tests/glutton.py
+    duration: 3m
+    actorMemory: "1Gi"
+    workloadTemplates: ["glutton"]
+    flags:
+      - "--metadata"
+      - '{"baseline": "dataplane", "baseline_version": "v1", "workload": "go"}'
+      - "--lifecycle-mode"
+      - "sync"
+      - "--mem-target"
+      - "512Mi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--mem-read"
+      - "all"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  # Node.js: the same load on glutton-node, which keeps the working set on
+  # the V8 heap.
+  - name: dataplane_v1_node_glutton
+    <<: *common
+    description: "Dataplane baseline v1: Node.js (glutton-node), 512Mi working set"
+    file: /app/tests/glutton.py
+    duration: 3m
+    actorMemory: "1Gi"
+    workloadTemplates: ["glutton-node"]
+    flags:
+      - "--metadata"
+      - '{"baseline": "dataplane", "baseline_version": "v1", "workload": "nodejs"}'
+      - "--glutton-template"
+      - "glutton-node"
+      - "--lifecycle-mode"
+      - "sync"
+      - "--mem-target"
+      - "512Mi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--mem-read"
+      - "all"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  # Python: sweperf replays the astropy-7336 SWE-bench trajectory in 4
+  # suspend/resume cycles, then deletes the actor and starts a new one. The
+  # template sets its own 2 CPU and 4Gi limits.
+  - name: dataplane_v1_python_sweperf
+    <<: *common
+    description: "Dataplane baseline v1: Python (sweperf astropy-7336)"
+    file: /app/tests/sweperf.py
+    duration: 5m
+    workloadTemplates: ["sweperf-astropy-7336"]
+    flags:
+      - "--metadata"
+      - '{"baseline": "dataplane", "baseline_version": "v1", "workload": "python"}'
+      - "--sweperf-template"
+      - "sweperf-astropy-7336"
+      - "--sweperf-total-steps"
+      - "21"
+      - "--sweperf-num-cycles"
+      - "4"
+      - "--lifecycle-mode"
+      - "sync"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"

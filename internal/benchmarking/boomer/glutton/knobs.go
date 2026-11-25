@@ -51,6 +51,10 @@ type gluttonKnobs struct {
 	// MaxPingsPerWake caps the pings sent during one resume/suspend cycle;
 	// values below 1 read as 1.
 	MaxPingsPerWake int `json:"max_pings_per_wake"`
+	// Template is the ActorTemplate actors are created from; empty falls
+	// back to templateName. glutton-node serves /ping, /writeram and
+	// /readram, so it supports every knob but the CPU load.
+	Template string `json:"glutton_template"`
 }
 
 var gluttonCodec = dynconfig.Typed[gluttonKnobs]{

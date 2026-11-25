@@ -18,8 +18,9 @@
 Reads allocatable CPU/RAM, node count and worker pod count from the Kubernetes
 API, then derives the actor-density frontiers (actors per node / vCPU / GB RAM
 and the actors-per-pod percentiles) for a completed trial. Also records the
-nodes' Kubernetes version, the worker pods' declared capacity and sandbox
-class, the run window, and any caller-supplied --metadata, and reads worker
+nodes' Kubernetes version, OS, kernel, container runtime and zone, the worker
+pods' declared capacity, sandbox class and image, the microVM guest assets,
+the run window, and any caller-supplied --metadata, and reads worker
 pod restarts and evictions around a run, for server telemetry's `oom_events`.
 """
 
@@ -38,6 +39,10 @@ WORKER_POOL_NAMESPACE = "benchmark-workloads"
 WORKER_POOL_LABEL = "ate.dev/worker-pool"
 LIVE_POD_PHASES = ("Running", "Pending")
 MACHINE_TYPE_LABEL = "node.kubernetes.io/instance-type"
+ZONE_LABEL = "topology.kubernetes.io/zone"
+# The cluster-wide SandboxConfig that ate-setup applies for microVM workers
+# (manifests/ate-install/sandboxconfig-microvm.yaml.tmpl).
+MICROVM_SANDBOX_CONFIG = "microvm"
 
 # The worker pod's container, as named by the atecontroller.
 WORKER_CONTAINER = "worker"
@@ -59,6 +64,15 @@ EMPTY_FACTS: dict[str, Any] = {
     "worker_actor_capacity": None,
     "worker_memory_limit_gb": None,
     "sandbox_class": None,
+    "worker_image": None,
+    "os_image": None,
+    "kernel_version": None,
+    "container_runtime_version": None,
+    "node_architecture": None,
+    "zone": None,
+    "capacity_cores": None,
+    "capacity_ram_gb": None,
+    "microvm_assets": None,
 }
 
 
@@ -154,6 +168,7 @@ def _worker_container_facts(
     capacities: set[int] = set()
     memory_gb: set[float] = set()
     sandbox_classes: set[str] = set()
+    images: set[str] = set()
     # Logged once rather than per pod, so a large pool does not flood the log.
     unreadable: set[str] = set()
     for p in pods:
@@ -176,6 +191,8 @@ def _worker_container_facts(
             match = SANDBOX_CLASS_IMAGE.search(c.image or "")
             if match:
                 sandbox_classes.add(match.group(1))
+            if c.image:
+                images.add(c.image)
     if unreadable:
         _log(logs, "Notice: skipped unreadable worker container values: "
              + ", ".join(sorted(unreadable)))
@@ -183,7 +200,33 @@ def _worker_container_facts(
         "worker_actor_capacity": _joined(capacities),
         "worker_memory_limit_gb": _joined(memory_gb),
         "sandbox_class": _joined(sandbox_classes),
+        "worker_image": _joined(images),
     }
+
+
+def _microvm_assets(arch: str, logs: TextIO | None = None) -> str | None:
+    """The microVM guest assets for arch, as the SandboxConfig's default
+    version followed by each asset's name and the first 12 characters of its
+    sha256, e.g. v2:cloud-hypervisor=448af3d4e59b,kata-kernel=f87d8359035c."""
+    try:
+        sc = client.CustomObjectsApi().get_cluster_custom_object(
+            "ate.dev", "v1", "sandboxconfigs", MICROVM_SANDBOX_CONFIG,
+            _request_timeout=API_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        reason = getattr(e, "reason", e)
+        _log(logs, f"Notice: could not read SandboxConfig {MICROVM_SANDBOX_CONFIG}: {reason}")
+        return None
+    spec = sc.get("spec", {})
+    default = spec.get("defaultVersion")
+    version = next((v for v in spec.get("versions", []) if v.get("name") == default), None)
+    assets = (version or {}).get("assets", {}).get(arch)
+    if not assets:
+        _log(logs, f"Notice: SandboxConfig {MICROVM_SANDBOX_CONFIG} has no {arch} assets in version {default!r}")
+        return None
+    return f"{default}:" + ",".join(
+        f"{name}={a.get('sha256', '')[:12]}" for name, a in sorted(assets.items())
+    )
 
 
 def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
@@ -230,8 +273,16 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
         node_count = 0
         total_cores = 0.0
         total_ram_bytes = 0
+        capacity_cores = 0.0
+        capacity_ram_bytes = 0
         machine_types = set()
         versions = set()
+        zones = set()
+        # Per node_info field: os_image, kernel_version, ...
+        info: dict[str, set[str]] = {
+            k: set() for k in ("os_image", "kernel_version",
+                               "container_runtime_version", "architecture")
+        }
         for node in nodes:
             metadata = node.metadata
             if metadata is None or metadata.name not in worker_nodes:
@@ -240,11 +291,20 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
             allocatable = node.status.allocatable or {}
             total_cores += float(parse_quantity(allocatable["cpu"]))
             total_ram_bytes += int(parse_quantity(allocatable["memory"]))
-            machine_type = (metadata.labels or {}).get(MACHINE_TYPE_LABEL)
-            if machine_type:
-                machine_types.add(machine_type)
-            if node.status.node_info and node.status.node_info.kubelet_version:
-                versions.add(node.status.node_info.kubelet_version)
+            capacity = node.status.capacity or {}
+            capacity_cores += float(parse_quantity(capacity["cpu"]))
+            capacity_ram_bytes += int(parse_quantity(capacity["memory"]))
+            labels = metadata.labels or {}
+            if labels.get(MACHINE_TYPE_LABEL):
+                machine_types.add(labels[MACHINE_TYPE_LABEL])
+            if labels.get(ZONE_LABEL):
+                zones.add(labels[ZONE_LABEL])
+            node_info = node.status.node_info
+            if node_info and node_info.kubelet_version:
+                versions.add(node_info.kubelet_version)
+            for k, values in info.items():
+                if node_info and getattr(node_info, k, None):
+                    values.add(getattr(node_info, k))
         facts["node_count"] = node_count
         facts["allocatable_cores"] = round(total_cores, 2)
         # GiB, as the apiserver and kubectl quote it.
@@ -254,9 +314,20 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
         facts["machine_type"] = _joined(machine_types)
         # The worker nodes' Kubernetes version, e.g. v1.33.5-gke.1080000.
         facts["kubernetes_version"] = _joined(versions)
+        # The nodes' full size, before the kubelet's and system reservations.
+        facts["capacity_cores"] = round(capacity_cores, 2)
+        facts["capacity_ram_gb"] = round(capacity_ram_bytes / (1024**3), 2)
+        facts["zone"] = _joined(zones)
+        facts["os_image"] = _joined(info["os_image"])
+        facts["kernel_version"] = _joined(info["kernel_version"])
+        facts["container_runtime_version"] = _joined(info["container_runtime_version"])
+        facts["node_architecture"] = _joined(info["architecture"])
     except Exception as e:
         reason = getattr(e, "reason", e)
         _log(logs, f"Notice: could not read node capacity: {reason}")
+
+    if facts["sandbox_class"] == "microvm" and facts["node_architecture"]:
+        facts["microvm_assets"] = _microvm_assets(facts["node_architecture"], logs)
 
     return facts
 

@@ -40,8 +40,10 @@ WINDOW = {"prom_url": "http://localhost:9090", "start_ts": 100,
           "end_ts": 105, "steady_start_ts": 100}
 
 
-def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ())):
-    """A query_prometheus_range fake: packing, PSI, active actors, working set, disk.
+def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ()),
+           system=()):
+    """A query_prometheus_range fake: packing, PSI, active actors, working set,
+    disk, node CPU and network.
 
     Pod PSI only answers the pod-slice selector, so a query that loses the id
     regex (and would also sum the pause container) gets nothing back. Node PSI
@@ -66,6 +68,9 @@ def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ()
         if "container_fs_" in query:
             series = disk[0] if "container_fs_reads_" in query else disk[1]
             return list(series) if live_workers in query else []
+        # Node CPU and network, kept to nodes hosting a worker pod.
+        if "container_pressure" not in query and 'container="node"' in query:
+            return list(system) if "and on (instance) count by (instance)" in query else []
         if 'container="node"' in query:
             return list(node) if worker_nodes in query and pod_slice in query else []
         return list(pod) if pod_slice in query else []
@@ -103,7 +108,7 @@ SNAPSHOT_OP = '{ate_snapshot_phase="total"}'
 SUMS = {
     "count": "atelet_snapshot_size_bytes_count" + MEMORY_IMAGE,
     "size": "atelet_snapshot_size_bytes_sum" + MEMORY_IMAGE,
-    "bytes": "sum(atelet_snapshot_size_bytes_sum)",
+    "bytes": "sum(atelet_snapshot_size_bytes_sum",
     # Checkpoint seconds: both checkpoint_mb_s and checkpoint_mean_s read it.
     "seconds": "ate_actor_checkpoint_duration_seconds_sum" + SNAPSHOT_OP,
     "restore_sum": "ate_actor_restore_duration_seconds_sum" + SNAPSHOT_OP,
@@ -135,7 +140,7 @@ def snapshot_prom(quantile=None, start=None, end=None, at=(100, 105), oom=None):
         else:
             name = next((n for n, s in SUMS.items() if s in query), None)
             val = by_time.get(time_ts, {}).get(name)
-            then = re.search(r" @ (\d+)\)", query)
+            then = re.search(r" @ (\d+)", query)
             if then and val is not None:
                 was = by_time.get(int(then.group(1)), {}).get(name, "0")
                 val = str(float(val) - float(was))
@@ -265,7 +270,9 @@ class ServerTelemetryTest(unittest.TestCase):
                  "values": [[100, str(2**30)], [105, str(2**30)]]}],
             actor_ws=[{"metric": {"instance": "atelet-a"},
                        "values": [[135, str(6 * 2**30)]]}],
-            disk=(boot, boot))
+            disk=(boot, boot),
+            system=[{"metric": {"instance": "node-a"},
+                     "values": [[100, "1.5"], [105, "2.5"]]}])
         # The default 70s lag reads the snapshot window at 135 and 140.
         mock_instant.side_effect = snapshot_prom(
             "11.5",
@@ -308,6 +315,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(
             set(summary),
             {"metadata", "cluster_packing", "node_psi", "pod_psi", "node_disk",
+             "node_system",
              "snapshots", "active_actors", "working_set", "oom_events"},
         )
         packing = summary["cluster_packing"]
@@ -329,7 +337,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(row["metric"], "server_summary")
         m = row["measurements"]
         # Every source answered, so a key wired to a wrong name would read None.
-        self.assertEqual(len(m), 88)
+        self.assertEqual(len(m), 103)
         self.assertEqual([k for k, v in m.items() if v is None], [])
         # Every value a string, so one row's types match every other row's.
         self.assertTrue(all(isinstance(v, str) for v in m.values()))
@@ -342,6 +350,8 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(m["restore_mean_s"], "0.5")
         self.assertEqual(m["checkpoint_mean_s"], "2.0")
         self.assertEqual(m["active_actors_p99"], "3.0")
+        self.assertEqual(m["node_cpu_cores_p50"], "2.5")
+        self.assertEqual(m["node_net_tx_mb_s_max"], "2.5")
         # Read at 135, moved back to 100; 6 GiB over the 3 actors on atelet-a.
         actor = summary["working_set"]["actor"]
         self.assertEqual(actor["timeseries"][0]["timestamp"], 100)
@@ -452,7 +462,7 @@ class ServerTelemetryTest(unittest.TestCase):
         # Percentiles diff buckets from the window start, never a fixed 5m.
         queries = [c.args[1] for c in mock_instant.call_args_list]
         self.assertFalse(any("[5m]" in q for q in queries))
-        self.assertTrue(any("@ 100)" in q for q in queries))
+        self.assertTrue(any("@ 100 or" in q for q in queries))
 
         # Both edges read half the lag late: 107 and 112.
         mock_instant.side_effect = snapshot_prom(
@@ -460,7 +470,7 @@ class ServerTelemetryTest(unittest.TestCase):
         mock_instant.reset_mock()
         self.assertEqual(snapshots(lag_s=15)["checkpoints_in_window"], 50)
         queries = [c.args[1] for c in mock_instant.call_args_list]
-        self.assertTrue(any("@ 107)" in q for q in queries))
+        self.assertTrue(any("@ 107 or" in q for q in queries))
 
         # Sum reset or zero count -> size_avg_mb None.
         mock_instant.side_effect = snapshot_prom(
@@ -604,6 +614,21 @@ class ServerTelemetryTest(unittest.TestCase):
             self.assertIn(live, block)
         self.assertIn('container="node"', q["node"])
         self.assertIn("and on (pod)", q["worker"])
+
+    def test_window_growth_subtracts_per_series(self):
+        # A series gone by the window end, such as a previous test's atelet
+        # that the telemetry-meter still exports at the start, must not be
+        # subtracted from the sum.
+        s = 'atelet_snapshot_size_bytes_count{file_name="memory-ranges"}'
+        self.assertEqual(server_telemetry._window_growth(s, 100),
+                         f"{s} - ({s} @ 100 or {s} * 0)")
+        with mock.patch("server_telemetry.query_prometheus_instant",
+                        return_value=[]) as mock_instant:
+            server_telemetry._window_delta("http://p", s, 100, 105)
+            server_telemetry._query_window_quantile("http://p", 0.5, s, 100, 105)
+        delta, _, quantile = [c.args[1] for c in mock_instant.call_args_list]
+        self.assertEqual(delta, f"sum({s} - ({s} @ 100 or {s} * 0))")
+        self.assertIn(f"sum by (le) ({s} - ({s} @ 100 or {s} * 0))", quantile)
 
     def test_oom_query_shape(self):
         q = server_telemetry._oom_growth_query('container="node"', 100, 600)

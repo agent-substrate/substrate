@@ -33,6 +33,7 @@ _UNSUPPORTED_TOP_LEVEL_KEYS = (
     "actorCPU",
     "workerMemory",
     "workerWaitTimeout",
+    "workloadTemplates",
     "isolate",
 )
 

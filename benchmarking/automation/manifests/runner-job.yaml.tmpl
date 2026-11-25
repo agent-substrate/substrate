@@ -53,6 +53,11 @@ rules:
   resources: ["nodes"]
   # list only: the runner reads whole collections, never a single object.
   verbs: ["list"]
+# The microvm SandboxConfig names the guest assets in trial_summary.
+- apiGroups: ["ate.dev"]
+  resources: ["sandboxconfigs"]
+  resourceNames: ["microvm"]
+  verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -310,6 +310,76 @@ def run_metadata() -> dict[str, Any]:
     return md
 
 
+# ate-setup's pinned microVM releases, relative to the substrate checkout.
+MICROVM_STEPS_GO = "cmd/ate-setup/internal/steps/microvm.go"
+
+
+def microvm_versions(substrate_dir: str = ".") -> dict[str, str]:
+    """The Kata and Cloud Hypervisor releases ate-setup installs, read from
+    the checkout the orchestrator deployed."""
+    src = (Path(substrate_dir) / MICROVM_STEPS_GO).read_text()
+    out = {}
+    for key, const in (
+        ("kata_version", "defaultKataVersion"),
+        ("cloud_hypervisor_version", "defaultCloudHypervisorVersion"),
+    ):
+        m = re.search(rf'\b{const}\s*=\s*"([^"]+)"', src)
+        if not m:
+            raise ValueError(f"{const} not found in {MICROVM_STEPS_GO}")
+        out[key] = m.group(1)
+    return out
+
+
+def worker_cpu_platforms() -> str | None:
+    """The CPU platforms of the GCE instances that run worker pods, comma
+    joined, or None when no worker node is a GCE instance. The Kubernetes API
+    has no CPU model, so this asks Compute Engine, with one call per project.
+    A failed gcloud call is logged and leaves its nodes out; a failed kubectl
+    call fails the test, as the cluster is then unusable anyway."""
+    nodes = set(run(
+        ["kubectl", "get", "pods", "-n", "benchmark-workloads", "-l", "ate.dev/worker-pool",
+         "-o", "jsonpath={.items[*].spec.nodeName}"],
+        stdout=subprocess.PIPE, text=True,
+    ).stdout.split())
+    provider_ids = run(
+        ["kubectl", "get", "nodes", "-o",
+         "jsonpath={range .items[*]}{.metadata.name} {.spec.providerID}{\"\\n\"}{end}"],
+        stdout=subprocess.PIPE, text=True,
+    ).stdout.splitlines()
+    # gce://<project>/<zone>/<instance>, by project.
+    instances: dict[str, list[str]] = {}
+    for line in provider_ids:
+        name, _, provider_id = line.partition(" ")
+        m = re.fullmatch(r"gce://([^/]+)/[^/]+/([^/]+)", provider_id)
+        if name in nodes and m:
+            instances.setdefault(m.group(1), []).append(m.group(2))
+    platforms = set()
+    for project, names in sorted(instances.items()):
+        r = run_no_check(
+            ["gcloud", "compute", "instances", "list", "--project", project,
+             "--filter", f"name:({' '.join(sorted(names))})",
+             "--format", "value(cpuPlatform)"],
+            stdout=subprocess.PIPE, text=True,
+        )
+        if r.returncode != 0:
+            print(f"Warning: no CPU platform for the nodes in project {project}", flush=True)
+            continue
+        platforms.update(line for line in r.stdout.split("\n") if line.strip())
+    return ",".join(sorted(platforms)) or None
+
+
+def dataplane_metadata(test: dict[str, Any]) -> dict[str, Any]:
+    """Facts about the worker nodes and the sandbox, read after the deploy,
+    for the runner's --metadata."""
+    md: dict[str, Any] = {}
+    if test.get("sandboxClass") == "microvm":
+        md.update(microvm_versions())
+    platforms = worker_cpu_platforms()
+    if platforms:
+        md["cpu_platform"] = platforms
+    return md
+
+
 def split_metadata_flag(test: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
     """Separates a test's own --metadata from the rest of its flags.
 
@@ -493,6 +563,13 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"test {name!r} has invalid type {ttype!r} "
                 f"(want one of {list(TEST_TYPES)})"
             )
+        templates = t.get("workloadTemplates", [])
+        if not isinstance(templates, list) or not all(
+            isinstance(n, str) and re.fullmatch(r"[a-z0-9-]+", n) for n in templates
+        ):
+            raise ValueError(
+                f"test {name!r}: workloadTemplates must be a list of template names"
+            )
         TYPES[ttype].validate(t)
         if ttype == "locust":
             # A malformed --metadata fails here rather than mid-sweep.
@@ -547,6 +624,7 @@ def deploy_workloads(
     worker_memory: str = "",
     fake_atelet_args: Iterable[str] = (),
     actor_cpu: str = "",
+    templates: Iterable[str] = (),
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -577,7 +655,12 @@ def deploy_workloads(
     # An isolate block's tuning of fake-atelet, on the fake data plane.
     cmd += list(fake_atelet_args)
     # deploy.sh itself blocks until every template's golden snapshot exists.
-    run(cmd)
+    # Without workloadTemplates it deploys its default set.
+    templates = list(templates)
+    if templates:
+        run(cmd, env={**os.environ, "WORKLOAD_TEMPLATES": " ".join(templates)})
+    else:
+        run(cmd)
 
 
 def teardown_test_workloads(test_types: Iterable[str]) -> None:
@@ -615,10 +698,12 @@ def run_test(
     # flag; the test's keys win over the run's.
     if test_type(test) == "locust":
         flags, own = split_metadata_flag(test)
-        flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+        flags += ["--metadata", json.dumps({**run_metadata(), **dataplane_metadata(test), **own})]
         # The whole entry, so runner features (such as observers or evaluations)
         # read what they need without adding a new flag per field.
         flags += ["--test-entry", json.dumps(test)]
+        for template in test.get("workloadTemplates", []):
+            flags += ["--golden-template", template]
     manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)
@@ -787,6 +872,7 @@ def main() -> None:
                         test.get("workerMemory", ""),
                         isolate_workload_args(test),
                         test.get("actorCPU", ""),
+                        test.get("workloadTemplates", ()),
                     )
                 try:
                     status = run_test(

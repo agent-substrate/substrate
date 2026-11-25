@@ -346,6 +346,13 @@ type gluttonActor struct {
 	// deleted is set once replaceActor has issued this actor's DeleteActor,
 	// so a second pass does not re-send it.
 	deleted bool
+	// createLatency is the CreateActor latency, added to the first resume's
+	// for the ColdStart row.
+	createLatency time.Duration
+	// suspends and resumes count successful calls, so the first suspend and
+	// the resume after it get rows of their own.
+	suspends int
+	resumes  int
 	// consecutiveFailures counts replaceIfPersistent failures since the last
 	// success. See noteFailure.
 	consecutiveFailures int
@@ -405,22 +412,49 @@ func (u *gluttonActor) ensureAtespace(ctx context.Context) error {
 }
 
 func (u *gluttonActor) create(ctx context.Context) error {
-	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
+	tmpl := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).Template
+	if tmpl == "" {
+		tmpl = templateName
+	}
+	start := time.Now()
+	err := u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
 			Actor: &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: templateName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: tmpl},
 			},
 		}, grpc.Trailer(tr))
 		return err
 	})
+	u.createLatency = time.Since(start)
+	return err
+}
+
+// resumeMetricName names the row for the next resume: the first restores
+// from the golden snapshot, and the second is the first from the actor's own
+// snapshot.
+func (u *gluttonActor) resumeMetricName() string {
+	switch {
+	case u.firstResume:
+		return "ResumeActorFirstResume"
+	case u.resumes == 1 && u.suspends == 1:
+		return "ResumeActorAfterFirstSuspend"
+	}
+	return "ResumeActor"
+}
+
+// suspendMetricName names the row for a suspend: base, or base plus
+// FirstSuspend for the actor's first.
+func (u *gluttonActor) suspendMetricName(base string) string {
+	if u.suspends == 0 {
+		return base + "FirstSuspend"
+	}
+	return base
 }
 
 func (u *gluttonActor) resume(ctx context.Context) error {
-	metricName := "ResumeActor"
-	if u.firstResume {
-		metricName = "ResumeActorFirstResume"
-	}
+	metricName := u.resumeMetricName()
+	start := time.Now()
 	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
 		// Retry Aborted "concurrent update conflict" transparently — it's a
 		// race, not a real failure, and the caller is expected to retry per
@@ -447,7 +481,13 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 		}
 		return err
 	}
+	if u.firstResume {
+		// Client latencies of CreateActor and the first resume, without the
+		// think time a replacement actor waits between them.
+		bmetrics.RecordSuccess("actor", "ColdStart", userClass, u.createLatency+time.Since(start), 0)
+	}
 	u.firstResume = false
+	u.resumes++
 	u.actorRunning = true
 	u.noteSuccess()
 	return nil
@@ -469,7 +509,7 @@ func (u *gluttonActor) hibernate(ctx context.Context) error {
 }
 
 func (u *gluttonActor) pause(ctx context.Context) error {
-	err := u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, u.suspendMetricName("SuspendActorAsync"), func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
 			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
@@ -479,13 +519,14 @@ func (u *gluttonActor) pause(ctx context.Context) error {
 	u.actorRunning = false
 	u.hibernatePending = err != nil
 	if err == nil {
+		u.suspends++
 		u.noteSuccess()
 	}
 	return err
 }
 
 func (u *gluttonActor) suspend(ctx context.Context) error {
-	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, u.suspendMetricName("SuspendActor"), func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
 			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
@@ -495,6 +536,7 @@ func (u *gluttonActor) suspend(ctx context.Context) error {
 	u.actorRunning = false
 	u.hibernatePending = err != nil
 	if err == nil {
+		u.suspends++
 		u.noteSuccess()
 	}
 	return err

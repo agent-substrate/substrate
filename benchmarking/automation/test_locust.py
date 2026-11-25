@@ -15,7 +15,9 @@
 """Unit tests for testtypes/locust.py:
 python3 benchmarking/automation/test_locust.py"""
 
+import glob
 import os
+import re
 import unittest
 from unittest import mock
 
@@ -124,10 +126,26 @@ class JobTest(unittest.TestCase):
 
 class TestsYamlTest(unittest.TestCase):
     def test_entries_validate(self):
-        path = os.path.join(os.path.dirname(__file__), "tests.yaml")
-        with open(path) as f:
-            tests = yaml.safe_load(f)["tests"]
-        orchestrator.validate_and_normalize_tests(tests)
+        here = os.path.dirname(__file__)
+        paths = [os.path.join(here, "tests.yaml"),
+                 *glob.glob(os.path.join(here, "baselines", "*.yaml"))]
+        for path in paths:
+            with self.subTest(path=os.path.relpath(path, here)), open(path) as f:
+                orchestrator.validate_and_normalize_tests(yaml.safe_load(f)["tests"])
+
+    def test_baseline_entries_name_their_version(self):
+        # A baseline file's results are compared by version, so each entry
+        # must carry the version of the file it is in.
+        here = os.path.dirname(__file__)
+        for path in glob.glob(os.path.join(here, "baselines", "*.yaml")):
+            version = re.search(r"-(v\d+)\.yaml$", path).group(1)
+            with open(path) as f:
+                tests = yaml.safe_load(f)["tests"]
+            for test in tests:
+                with self.subTest(test=test["name"]):
+                    _, md = orchestrator.split_metadata_flag(test)
+                    self.assertEqual(md.get("baseline_version"), version)
+                    self.assertIn(f"_{version}_", test["name"])
 
 
 if __name__ == "__main__":

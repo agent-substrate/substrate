@@ -53,6 +53,7 @@ from cluster_facts import (
     snapshot_worker_pods,
 )
 from common.boomer_config import build_config_json
+from golden_snapshot import append_golden_snapshots
 from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
 from ladder_steps import append_ladder_steps
@@ -232,6 +233,16 @@ def parse_args() -> argparse.Namespace:
             "suspend/resume phase percentiles to stats.jsonl (see "
             "benchmarking/analysis/README.md). Pass --no-phase-breakdown to "
             "skip reading pod logs"
+        ),
+    )
+    p.add_argument(
+        "--golden-template",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "A benchmark-workloads ActorTemplate whose golden snapshot build "
+            "time to record as a golden_snapshot row; repeatable"
         ),
     )
     args, extra = p.parse_known_args()
@@ -750,6 +761,15 @@ def main() -> None:
                 )
             except Exception as e:
                 tee(logs, f"Warning: Failed to record cluster facts: {e}")
+
+        if args.golden_template:
+            try:
+                n = append_golden_snapshots(
+                    jsonl_path, args.golden_template, data_ts, args.tag, args.name
+                )
+                tee(logs, f"Appended {n} golden_snapshot rows to {jsonl_path}")
+            except Exception as e:
+                tee(logs, f"Warning: Failed to record golden snapshot times: {e}")
 
         # A turnover run is measured from the end of its fill, past the
         # registration of its fleet: the server telemetry's steady window and

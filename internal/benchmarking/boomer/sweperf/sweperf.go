@@ -76,7 +76,9 @@ const (
 	cycleCELMetric          = "CycleCEL"
 	taskCELMetric           = "TaskCEL"
 	taskWallClockMetric     = "TaskWallClock"
-	derivedMetricMethod     = "actor"
+	// coldStartMetric spans CreateActor until the sandbox answers /status.
+	coldStartMetric     = "ColdStart"
+	derivedMetricMethod = "actor"
 )
 
 // init registers the sweperf user class so the boomer worker can select it by
@@ -421,6 +423,7 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 		return nil, fmt.Errorf("pollLiveness: %w", err)
 	}
 	u.startupDur = time.Since(startupStart)
+	bmetrics.RecordSuccess(derivedMetricMethod, coldStartMetric, u.userClass, u.startupDur, 0)
 
 	// pollLiveness left the actor running, so cycle 1's resume is a no-op.
 	u.awake = true
@@ -539,15 +542,18 @@ type sweperfUser struct {
 	loopWall   time.Duration
 	loopFailed bool
 	// Facts for the task record (logTaskRecord).
-	userID      int64         // boomer goroutine ID, unique per boomer process
-	taskStart   time.Time     // when startUser began
-	startupDur  time.Duration // CreateActor until the sandbox answered /status
-	loopThink   time.Duration // think time between this task's cycles
-	loopRetries int           // failed resumes, each of which retries its cycle
-	resumeMax   time.Duration // slowest non-no-op ResumeActor, as recorded on its row
-	ttfeMax     time.Duration // slowest resume-to-ack; zero when no cycle after the no-op resume got an async ack
-	failStep    string        // first failed step: resume, execute or suspend
-	failCycle   int           // cycle of failStep
+	userID     int64         // boomer goroutine ID, unique per boomer process
+	taskStart  time.Time     // when startUser began
+	startupDur time.Duration // CreateActor until the sandbox answered /status
+	// firstSuspended is set by cycle 1's successful suspend and cleared by
+	// the next resume, which gets a row of its own.
+	firstSuspended bool
+	loopThink      time.Duration // think time between this task's cycles
+	loopRetries    int           // failed resumes, each of which retries its cycle
+	resumeMax      time.Duration // slowest non-no-op ResumeActor, as recorded on its row
+	ttfeMax        time.Duration // slowest resume-to-ack; zero when no cycle after the no-op resume got an async ack
+	failStep       string        // first failed step: resume, execute or suspend
+	failCycle      int           // cycle of failStep
 }
 
 // ref is the control-plane reference to this user's actor.
@@ -602,14 +608,21 @@ func (u *sweperfUser) create(ctx context.Context) error {
 // on its ResumeActor row and whether it worked. A failure is the caller's cue
 // to abandon the cycle rather than talk to a sandbox that is not running.
 func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
-	latency, err := u.tracedCallRecord(ctx, "ResumeActor", !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
+	// Cycle 1 resumes the actor CreateActor started, so the resume after
+	// cycle 1's suspend is the first from the actor's own snapshot.
+	name := "ResumeActor"
+	if u.firstSuspended {
+		name = "ResumeActorAfterFirstSuspend"
+		u.firstSuspended = false
+	}
+	latency, err := u.tracedCallRecord(ctx, name, !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	if err != nil {
-		slog.Error("ResumeActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		slog.Error(name+" failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 		return latency, false
 	}
 	return latency, true
@@ -624,6 +637,9 @@ func (u *sweperfUser) suspend(ctx context.Context) bool {
 	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
 		name, mode = "SuspendActor", ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
 	}
+	if u.cycleIndex == 0 {
+		name += "FirstSuspend"
+	}
 	err := u.tracedCall(ctx, name, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
@@ -635,6 +651,7 @@ func (u *sweperfUser) suspend(ctx context.Context) bool {
 		slog.Error(name+" failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 		return false
 	}
+	u.firstSuspended = u.cycleIndex == 0
 	return true
 }
 

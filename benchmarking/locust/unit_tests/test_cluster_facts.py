@@ -55,14 +55,21 @@ ARGV = ["runner.py", "-f", "tests/glutton.py", "-t", "1m", "-u", "10",
 KUBERNETES_VERSION = "v1.33.5-gke.1080000"
 
 
-def node(machine_type="c3-standard-4", name="node-a"):
-    labels = {} if machine_type is None else {
-        cluster_facts.MACHINE_TYPE_LABEL: machine_type}
+def node(machine_type="c3-standard-4", name="node-a", kernel="6.6.97+"):
+    labels = {cluster_facts.ZONE_LABEL: "us-central1-a"}
+    if machine_type is not None:
+        labels[cluster_facts.MACHINE_TYPE_LABEL] = machine_type
     return SimpleNamespace(
         metadata=SimpleNamespace(labels=labels, name=name),
         status=SimpleNamespace(
             allocatable={"cpu": NODE_CPU, "memory": NODE_MEMORY},
-            node_info=SimpleNamespace(kubelet_version=KUBERNETES_VERSION)))
+            capacity={"cpu": "4", "memory": "16Gi"},
+            node_info=SimpleNamespace(
+                kubelet_version=KUBERNETES_VERSION,
+                os_image="Container-Optimized OS from Google",
+                kernel_version=kernel,
+                container_runtime_version="containerd://2.0.6",
+                architecture="amd64")))
 
 
 def container(name="worker", args=(), memory=None,
@@ -162,6 +169,44 @@ class ClusterFactsTest(unittest.TestCase):
         self.assertEqual(facts["allocatable_cores"], 11.76)   # 3 x 3.92
         self.assertEqual(facts["allocatable_ram_gb"], 38.89)
         self.assertEqual(facts["machine_type"], "c3-standard-4,n2-standard-8")
+
+    def test_node_info(self):
+        facts = discover(fake_api(
+            nodes=[node(name="node-a"), node(name="node-b", kernel="6.12.1")],
+            ns_pods=[pod(node_name="node-a"), pod(node_name="node-b")]))
+        self.assertEqual(facts["capacity_cores"], 8.0)
+        self.assertEqual(facts["capacity_ram_gb"], 32.0)
+        self.assertEqual(facts["zone"], "us-central1-a")
+        self.assertEqual(facts["os_image"], "Container-Optimized OS from Google")
+        # A mixed pool lists every value.
+        self.assertEqual(facts["kernel_version"], "6.12.1,6.6.97+")
+        self.assertEqual(facts["container_runtime_version"], "containerd://2.0.6")
+        self.assertEqual(facts["node_architecture"], "amd64")
+
+    def test_microvm_assets(self):
+        image = "registry/ateworker-microvm-0123abcd@sha256:11"
+        sandbox_config = {"spec": {"defaultVersion": "v2", "versions": [
+            {"name": "v1", "assets": {"amd64": {"kata-kernel": {"sha256": "0" * 64}}}},
+            {"name": "v2", "assets": {
+                "arm64": {"kata-kernel": {"sha256": "1" * 64}},
+                "amd64": {"kata-kernel": {"sha256": "f87d8359035cb7557b16"},
+                          "cloud-hypervisor": {"sha256": "448af3d4e59b22c2987f"}}}},
+        ]}}
+        api = fake_api(nodes=[node()], ns_pods=[pod(containers=[container(image=image)])])
+        custom = mock.Mock()
+        custom.get_cluster_custom_object.return_value = sandbox_config
+        with mock.patch.object(cluster_facts.client, "CustomObjectsApi", return_value=custom):
+            facts = discover(api)
+        self.assertEqual(facts["worker_image"], image)
+        self.assertEqual(facts["microvm_assets"],
+                         "v2:cloud-hypervisor=448af3d4e59b,kata-kernel=f87d8359035c")
+
+    def test_gvisor_skips_microvm_assets(self):
+        custom = mock.Mock()
+        with mock.patch.object(cluster_facts.client, "CustomObjectsApi", return_value=custom):
+            facts = discover(fake_api(nodes=[node()], ns_pods=[pod(containers=[container()])]))
+        self.assertIsNone(facts["microvm_assets"])
+        custom.get_cluster_custom_object.assert_not_called()
 
     def test_worker_pod_count(self):
         pods = [pod("Running"), pod("Pending"), pod("Succeeded"), pod("Failed")]

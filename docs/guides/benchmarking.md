@@ -224,6 +224,11 @@ ran inside the sandbox, as reported by `replay.py`.
 * `TaskCEL`: CEL summed over one task.
 * `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time and actor
   startup.
+* `ColdStart`: `CreateActor` until the new actor's sandbox answers `/status`.
+* `SuspendActorFirstSuspend` (or `SuspendActorAsyncFirstSuspend`) and
+  `ResumeActorAfterFirstSuspend`: the suspend that ends cycle 1 and the resume that starts
+  cycle 2, the first from the actor's own snapshot. They are left out of the `SuspendActor`
+  and `ResumeActor` rows.
 * `CreateAtespace`, `CreateActor`, `ResumeActor`, `SuspendActor`, `DeleteActor`: Server-side
   elapsed time for each control-plane RPC from the response trailer, or client time without one.
 * `<rpc>_rtt`: Client round trip for the RPC of the same name, recorded only when the trailer is
@@ -237,7 +242,7 @@ runs on a freshly started actor and its resume is a no-op. Its successful `Resum
 `ResumeActor_rtt` and `ResumeToFirstExec` samples are not recorded; failures still are.
 
 The last cycle of a task is not suspended: the actor is deleted straight from running. A
-task of `n` cycles therefore records `n - 1` `SuspendActor` samples, and `TaskWallClock`
+task of `n` cycles therefore records `n - 1` suspend samples, and `TaskWallClock`
 does not include a final suspend. `DeleteActor` therefore times deleting a running actor,
 including its sandbox teardown, so it is not comparable with older runs that suspended the
 actor before deleting it.
@@ -876,6 +881,15 @@ map holds the raw facts and the derived numbers side by side.
   recorded so the ratios below can be re-derived later, or recomputed against
   a different denominator.
 * `kubernetes_version`: the worker nodes' Kubernetes version (kubelet version).
+* `capacity_cores`, `capacity_ram_gb` (GiB): the worker nodes' full size,
+  before the kubelet's and system reservations. `zone`, `os_image`,
+  `kernel_version`, `container_runtime_version`, `node_architecture`: the
+  worker nodes' labels and node info. A mixed pool gives a sorted
+  comma-joined list.
+* `worker_image`: the worker container image, by digest when ko built it.
+  `microvm_assets`: for a microVM pool, the `microvm` SandboxConfig's default
+  version and the first 12 characters of each guest asset's sha256 for the
+  nodes' architecture, such as `v2:cloud-hypervisor=448af3d4e59b,...`.
 * `worker_actor_capacity`, `worker_memory_limit_gb` (GiB): the capacity each
   worker pod declares, its ateworker `--max-actors` (1000 when unset) and its
   container memory limit (null when unset, as the node bounds it instead).
@@ -888,7 +902,11 @@ map holds the raw facts and the derived numbers side by side.
 * `metadata_<key>`: one per key of the free-form `--metadata '<json>'` object,
   for facts only the caller knows. Non-string values are stored as JSON, and
   null values are skipped. The orchestrator passes `cluster_name`,
-  `cluster_location` and `project_id` from the target cluster, plus any keys in
+  `cluster_location` and `project_id` from the target cluster,
+  `cpu_platform` from Compute Engine for GCE worker nodes (the orchestrator
+  needs `compute.instances.get`; without it the key is left out), and for
+  microVM tests `kata_version` and `cloud_hypervisor_version`, the releases
+  `ate-setup` installs from the checkout. It also adds any keys in
   the `BENCHMARK_METADATA` environment variable (a JSON object) and in the
   test's own `--metadata` flag, whose keys win on conflict.
 * `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most actors
@@ -947,6 +965,13 @@ actually did, independent of what the load generator reported.
   keys name the device without `/dev/`, as in
   `node_disk_nvme0n1_write_p99_mb_s`. A device's keys are absent when it was
   never seen, and `null` when it was seen only outside the steady-state window.
+* `node_system.cpu_cores`, `net_rx_mb_s`, `net_tx_mb_s`: CPU in use (cores),
+  and network throughput (MiB/s), from cAdvisor's root cgroup on the nodes
+  hosting a worker pod, with every node's samples pooled and `max` added.
+  A one-minute rate read every 10s. Network sums every host interface cAdvisor
+  reports, so where pod veths are not named `veth*`, as on GKE, pod traffic
+  counts on the veth and on the NIC. Compare it between runs on the same
+  cluster type.
 * `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
 * `snapshots.size_avg_mb`: mean memory image size.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the

@@ -32,7 +32,9 @@ type fakeControlClient struct {
 	mu             sync.Mutex
 	calls          []string
 	deleteRequests []*ateapi.DeleteActorRequest
-	suspendReqs    []*ateapi.SuspendActorRequest
+	// templates holds each CreateActor's ActorTemplate name, in order.
+	templates   []string
+	suspendReqs []*ateapi.SuspendActorRequest
 	// resumeErrs is returned by successive ResumeActor calls, in order, until
 	// it is drained; every call after that succeeds.
 	resumeErrs []error
@@ -65,6 +67,7 @@ func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.Creat
 func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "CreateActor")
+	f.templates = append(f.templates, in.GetActor().GetActorTemplate().GetName())
 	fn := f.createActorFn
 	f.mu.Unlock()
 	if fn != nil {
