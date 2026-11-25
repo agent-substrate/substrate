@@ -100,6 +100,8 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
 	manifest := `metadata:
   atespace: ate-demo-counter
   name: counter
+  annotations:
+    build.example.com/commit: abc1234
 snapshot_config:
   storage_location: gs://ate-snapshots/ate-demo-counter/
 `
@@ -109,6 +111,9 @@ snapshot_config:
 	}
 	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
 		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
+	}
+	if got.GetMetadata().GetAnnotations()["build.example.com/commit"] != "abc1234" {
+		t.Errorf("metadata.annotations = %v", got.GetMetadata().GetAnnotations())
 	}
 }
 
