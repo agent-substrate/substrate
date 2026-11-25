@@ -46,7 +46,7 @@ func (c *Client) RolloutStatus(ctx context.Context, kind, namespace, name string
 	defer log.Elapsed(time.Now(), fmt.Sprintf("rollout status %s/%s", kind, name))
 	var lastMsg string
 	var notFoundCount int
-	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+	err := c.poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		var done bool
 		var msg string
 		var err error
@@ -169,7 +169,7 @@ func (c *Client) statefulSetRolledOut(ctx context.Context, namespace, name strin
 // WaitNamespaceActive replaces
 // `kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/<name>`.
 func (c *Client) WaitNamespaceActive(ctx context.Context, name string, timeout time.Duration) error {
-	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+	err := c.poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		ns, err := c.Typed.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -190,7 +190,7 @@ func (c *Client) WaitNamespaceActive(ctx context.Context, name string, timeout t
 // the Job reports Failed=True.
 func (c *Client) WaitJobComplete(ctx context.Context, namespace, name string, timeout time.Duration) error {
 	defer log.Elapsed(time.Now(), fmt.Sprintf("wait for job/%s", name))
-	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+	err := c.poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		job, err := c.Typed.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
@@ -231,7 +231,7 @@ func (c *Client) WaitCondition(ctx context.Context, gvk schema.GroupVersionKind,
 		return err
 	}
 
-	err = poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+	err = c.poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		current, err := ri.Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -274,7 +274,7 @@ func (c *Client) WaitClusterTrustBundles(ctx context.Context, names []string, ti
 			return fmt.Errorf("waiting for ClusterTrustBundle %s: the %s budget was spent on the bundles before it", name, timeout)
 		}
 		var lastErr error
-		err := poll(ctx, remaining, func(ctx context.Context) (bool, error) {
+		err := c.poll(ctx, remaining, func(ctx context.Context) (bool, error) {
 			gv, err := clustertrustbundle.Discover(c.Typed.Discovery())
 			if err != nil {
 				lastErr = err
@@ -299,7 +299,7 @@ func (c *Client) WaitClusterTrustBundles(ctx context.Context, names []string, ti
 
 // WaitDeleted blocks until the named object is no longer present.
 func (c *Client) WaitDeleted(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string, timeout time.Duration) error {
-	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+	err := c.poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		exists, err := c.Exists(ctx, gvk, namespace, name)
 		if err != nil {
 			return false, err

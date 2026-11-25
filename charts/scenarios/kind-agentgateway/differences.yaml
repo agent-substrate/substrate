@@ -1,0 +1,526 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# The differences between the ate-setup install and the chart install of this
+# scenario, by object and field path, with the value from each install.
+# cmd/ate-setup/internal/chartcompare fails when the installs differ in any
+# other way. Run it with -update-differences to rewrite this file.
+ConfigMap/ate-system/ate-api-server-envvars:
+  data.ATE_API_POSTGRES_OWNER_ROLE:
+    ate-setup: substrate_owner
+    charts: null
+  data.ATE_API_POSTGRES_READ_WRITE_ROLE:
+    ate-setup: substrate_readwrite
+    charts: null
+  data.ATE_API_POSTGRES_SCHEMA:
+    ate-setup: null
+    charts: substrate
+ConfigMap/ate-system/ate-otel-config: only ate-setup
+ConfigMap/ate-system/atenet-egress: only ate-setup
+ConfigMap/ate-system/atenet-egress-agentgateway-substrate-config:
+  ? data.config.yaml.binds[0].listeners[0].routes[1].policies.substrateEgress.credentialProviders[0].target.policies.backendTLS.hostname
+  : ate-setup: k8s-credential-provider.ate-system.svc
+    charts: null
+  data.config.yaml.binds[0].listeners[0].routes[1].policies.substrateEgress.credentialProviders[0].target.policies.backendTLS.root:
+    ate-setup: /run/servicedns-ca/trust-bundle.pem
+    charts: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+  data.config.yaml.binds[0].listeners[0].routes[1].policies.substrateEgress.policies.backendTLS.root:
+    ate-setup: /run/servicedns-ca/trust-bundle.pem
+    charts: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+  ? data.config.yaml.binds[0].listeners[1].routes[1].policies.substrateEgress.credentialProviders[0].target.policies.backendTLS.hostname
+  : ate-setup: k8s-credential-provider.ate-system.svc
+    charts: null
+  data.config.yaml.binds[0].listeners[1].routes[1].policies.substrateEgress.credentialProviders[0].target.policies.backendTLS.root:
+    ate-setup: /run/servicedns-ca/trust-bundle.pem
+    charts: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+  data.config.yaml.binds[0].listeners[1].routes[1].policies.substrateEgress.policies.backendTLS.root:
+    ate-setup: /run/servicedns-ca/trust-bundle.pem
+    charts: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+  data.config.yaml.frontendPolicies.substrateEgressActorResolution.policies.backendTLS.root:
+    ate-setup: /run/servicedns-ca/trust-bundle.pem
+    charts: /run/servicedns.podcert.ate.dev/trust-bundle.pem
+ConfigMap/ate-system/atenet-router-agentgateway-config:
+  data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled-grpc].policies.substrateIngress.policies.http:
+    ate-setup: null
+    charts:
+      requestTimeout: 60s
+  data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled-grpc].policies.substrateIngress.requestParking:
+    ate-setup: null
+    charts:
+      budget: 60s
+  data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled].policies.substrateIngress.policies.http:
+    ate-setup: null
+    charts:
+      requestTimeout: 60s
+  data.config.yaml.binds[1].listeners[0].routes[substrate-actors-tunneled].policies.substrateIngress.requestParking:
+    ate-setup: null
+    charts:
+      budget: 60s
+  data.config.yaml.frontendPolicies.tracing:
+    ate-setup:
+      host: $AGENTGATEWAY_OTLP_ADDRESS
+      protocol: grpc
+      randomSampling: 0.01
+    charts: null
+  data.config.yaml.routes[substrate-actors-grpc].policies.substrateIngress.policies.http:
+    ate-setup: null
+    charts:
+      requestTimeout: 60s
+  data.config.yaml.routes[substrate-actors-grpc].policies.substrateIngress.requestParking:
+    ate-setup: null
+    charts:
+      budget: 60s
+  data.config.yaml.routes[substrate-actors].policies.substrateIngress.policies.http:
+    ate-setup: null
+    charts:
+      requestTimeout: 60s
+  data.config.yaml.routes[substrate-actors].policies.substrateIngress.requestParking:
+    ate-setup: null
+    charts:
+      budget: 60s
+DaemonSet/ate-system/atelet:
+  spec.template.spec.containers[atelet].args:
+    ate-setup: []
+    charts:
+    - --ateapi-address=k8s:///api.ate-system.svc:443
+    - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+    - --ateapi-server-name=api.ate-system.svc
+    - --herder-allowed-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-api-server
+    - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
+  spec.template.spec.containers[atelet].env[OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[atelet].env[OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_METRICS_EXPORTER
+      value: prometheus
+  spec.template.spec.containers[atelet].env[OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.containers[atelet].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.containers[atelet].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[atelet].resources.requests.memory:
+    ate-setup: 128Mi
+    charts: 256Mi
+  spec.template.spec.containers[atelet].volumeMounts[podidentity].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.initContainers[objectstore-plugin].args:
+    ate-setup: []
+    charts:
+    - --exchange-address=api.ate-system.svc:8445
+    - --exchange-server-name=api.ate-system.svc
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_ACCESS_KEY_ID]:
+    ate-setup:
+      name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_SECRET_ACCESS_KEY]:
+    ate-setup:
+      name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].env[OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.initContainers[objectstore-plugin].env[OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_METRICS_EXPORTER
+      value: prometheus
+  spec.template.spec.initContainers[objectstore-plugin].env[OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].configMapRef:
+    ate-setup:
+      name: ate-otel-config
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].secretRef:
+    ate-setup: null
+    charts:
+      name: rustfs-credentials
+Deployment/ate-system/ate-api-server:
+  spec.template.spec.containers[ate-api-server].args:
+    ate-setup:
+    - --postgres-owner-role=@env
+    - --postgres-read-write-role=@env
+    charts:
+    - --api-server-sidecar-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-api-server
+    - --atelet-service-account=atelet
+    - --controller-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/ate-controller
+    - --egress-gateway-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/atenet-egress
+    - --ingress-router-spiffe-id=spiffe://cluster.local/ns/ate-system/sa/atenet-router
+    - --postgres-owner-role=substrate_owner
+    - --postgres-read-write-role=substrate_readwrite
+  spec.template.spec.containers[ate-api-server].env[ATE_API_POSTGRES_OWNER_CONNECTION_STRING]:
+    ate-setup: null
+    charts:
+      name: ATE_API_POSTGRES_OWNER_CONNECTION_STRING
+      valueFrom:
+        secretKeyRef:
+          key: ownerConnectionString
+          name: substrate-postgres-owner
+  spec.template.spec.containers[ate-api-server].env[ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING]:
+    ate-setup: null
+    charts:
+      name: ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING
+      valueFrom:
+        secretKeyRef:
+          key: readWriteConnectionString
+          name: substrate-postgres-readwrite
+  spec.template.spec.containers[ate-api-server].env[OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-api-server].env[OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_METRICS_EXPORTER
+      value: prometheus
+  spec.template.spec.containers[ate-api-server].env[OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-api-server].env[OTEL_TRACES_SAMPLER]:
+    ate-setup:
+      name: OTEL_TRACES_SAMPLER
+      value: parentbased_always_on
+    charts: null
+  spec.template.spec.containers[ate-api-server].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    - configMapRef:
+        name: ate-api-server-envvars
+        optional: true
+    - secretRef:
+        name: ate-api-server-secret-envvars
+        optional: true
+    charts:
+    - configMapRef:
+        name: ate-api-server-envvars
+        optional: true
+  spec.template.spec.containers[ate-api-server].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[ate-api-server].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 100m
+      memory: 256Mi
+  spec.template.spec.containers[ate-api-server].volumeMounts[podidentity].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.initContainers[objectstore-plugin].args:
+    ate-setup: []
+    charts:
+    - --ateapi-server-name=api.ate-system.svc
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_ACCESS_KEY_ID]:
+    ate-setup:
+      name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].env[AWS_SECRET_ACCESS_KEY]:
+    ate-setup:
+      name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].env[OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.initContainers[objectstore-plugin].env[OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_METRICS_EXPORTER
+      value: prometheus
+  spec.template.spec.initContainers[objectstore-plugin].env[OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].configMapRef:
+    ate-setup:
+      name: ate-otel-config
+    charts: null
+  spec.template.spec.initContainers[objectstore-plugin].envFrom[0].secretRef:
+    ate-setup: null
+    charts:
+      name: rustfs-credentials
+Deployment/ate-system/ate-controller:
+  spec.template.spec.containers[ate-controller].args:
+    ate-setup: []
+    charts:
+    - --ateapi-conn-spec=k8s:///api.ate-system.svc:443
+    - --atelet-service-account=atelet
+    - --router-service-account=atenet-router
+  spec.template.spec.containers[ate-controller].env[ATE_WORKER_OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: ATE_WORKER_OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-controller].env[ATE_WORKER_OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: ATE_WORKER_OTEL_METRICS_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-controller].env[ATE_WORKER_OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: ATE_WORKER_OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-controller].env[OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-controller].env[OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_METRICS_EXPORTER
+      value: prometheus
+  spec.template.spec.containers[ate-controller].env[OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.containers[ate-controller].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.containers[ate-controller].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "1"
+      memory: 512Mi
+  spec.template.spec.containers[ate-controller].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 50m
+      memory: 128Mi
+  spec.template.spec.containers[ate-controller].volumeMounts[podidentity].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.containers[ate-controller].volumeMounts[servicedns-ca].readOnly:
+    ate-setup: null
+    charts: true
+Deployment/ate-system/atenet-egress:
+  spec.template.spec.containers[agentgateway].env[RUST_LOG].value:
+    ate-setup: debug
+    charts: info
+  spec.template.spec.containers[agentgateway].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[agentgateway].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 50m
+      memory: 128Mi
+  spec.template.spec.containers[agentgateway].volumeMounts[servicedns-ca]:
+    ate-setup:
+      mountPath: /run/servicedns-ca
+      name: servicedns-ca
+      readOnly: true
+    charts: null
+  spec.template.spec.volumes[drain-signal]:
+    ate-setup:
+      emptyDir: {}
+      name: drain-signal
+    charts: null
+  spec.template.spec.volumes[servicedns-ca]:
+    ate-setup:
+      name: servicedns-ca
+      projected:
+        defaultMode: 420
+        sources:
+        - clusterTrustBundle:
+            labelSelector:
+              matchLabels:
+                podcert.ate.dev/canarying: live
+            path: trust-bundle.pem
+            signerName: servicedns.podcert.ate.dev/identity
+    charts: null
+Deployment/ate-system/atenet-router:
+  spec.template.spec.containers[agentgateway].env[AGENTGATEWAY_OTLP_ADDRESS]:
+    ate-setup:
+      name: AGENTGATEWAY_OTLP_ADDRESS
+      value: opentelemetry-collector.otel-system.svc:4317
+    charts: null
+  spec.template.spec.containers[agentgateway].ports[gw-metrics]:
+    ate-setup: null
+    charts:
+      containerPort: 15020
+      name: gw-metrics
+      protocol: TCP
+  spec.template.spec.containers[agentgateway].ports[stats]:
+    ate-setup:
+      containerPort: 15020
+      name: stats
+      protocol: TCP
+    charts: null
+  spec.template.spec.containers[agentgateway].readinessProbe:
+    ate-setup: null
+    charts:
+      failureThreshold: 3
+      httpGet:
+        path: /healthz/ready
+        port: readiness
+        scheme: HTTP
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 1
+  spec.template.spec.containers[agentgateway].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: "2"
+      memory: 1Gi
+  spec.template.spec.containers[agentgateway].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 100m
+      memory: 128Mi
+  spec.template.spec.containers[agentgateway].volumeMounts[agentgateway-config]:
+    ate-setup: null
+    charts:
+      mountPath: /etc/agentgateway
+      name: agentgateway-config
+  spec.template.spec.containers[agentgateway].volumeMounts[envoy-config]:
+    ate-setup:
+      mountPath: /etc/agentgateway
+      name: envoy-config
+    charts: null
+  spec.template.spec.containers[agentgateway].volumeMounts[podidentity].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.containers[agentgateway].volumeMounts[servicedns-ca].readOnly:
+    ate-setup: null
+    charts: true
+  spec.template.spec.terminationGracePeriodSeconds:
+    ate-setup: 60
+    charts: 30
+  spec.template.spec.volumes[agentgateway-config]:
+    ate-setup: null
+    charts:
+      configMap:
+        defaultMode: 420
+        name: atenet-router-agentgateway-config
+      name: agentgateway-config
+  spec.template.spec.volumes[drain-signal]:
+    ate-setup:
+      emptyDir: {}
+      name: drain-signal
+    charts: null
+  spec.template.spec.volumes[envoy-config]:
+    ate-setup:
+      configMap:
+        defaultMode: 420
+        name: atenet-router-agentgateway-config
+      name: envoy-config
+    charts: null
+  spec.template.spec.volumes[podidentity].projected.sources[0].podCertificate.certificateChainPath:
+    ate-setup: null
+    charts: cert.pem
+  spec.template.spec.volumes[podidentity].projected.sources[0].podCertificate.keyPath:
+    ate-setup: null
+    charts: key.pem
+  spec.template.spec.volumes[servicedns].projected.sources[0].podCertificate.certificateChainPath:
+    ate-setup: null
+    charts: cert.pem
+  spec.template.spec.volumes[servicedns].projected.sources[0].podCertificate.keyPath:
+    ate-setup: null
+    charts: key.pem
+Deployment/ate-system/k8s-credential-provider:
+  spec.template.spec.containers[k8s-credential-provider].args:
+    ate-setup: []
+    charts:
+    - --injector-identity=spiffe://cluster.local/ns/ate-system/sa/atenet-egress
+  spec.template.spec.containers[k8s-credential-provider].env[OTEL_LOGS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_LOGS_EXPORTER
+      value: none
+  spec.template.spec.containers[k8s-credential-provider].env[OTEL_METRICS_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_METRICS_EXPORTER
+      value: prometheus
+  spec.template.spec.containers[k8s-credential-provider].env[OTEL_TRACES_EXPORTER]:
+    ate-setup: null
+    charts:
+      name: OTEL_TRACES_EXPORTER
+      value: none
+  spec.template.spec.containers[k8s-credential-provider].envFrom:
+    ate-setup:
+    - configMapRef:
+        name: ate-otel-config
+    charts: null
+  spec.template.spec.containers[k8s-credential-provider].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: 500m
+      memory: 256Mi
+  spec.template.spec.containers[k8s-credential-provider].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 10m
+      memory: 64Mi
+Deployment/podcertificate-controller-system/podcertificate-controller:
+  spec.template.spec.containers[controller].args:
+    ate-setup:
+    - --preview=
+    charts:
+    - --postgres-client-service-account=ate-api-server
+  spec.template.spec.containers[controller].resources.limits:
+    ate-setup: null
+    charts:
+      cpu: 500m
+      memory: 256Mi
+  spec.template.spec.containers[controller].resources.requests:
+    ate-setup: null
+    charts:
+      cpu: 10m
+      memory: 64Mi
+Role/ate-system/atenet-router-endpointslices: only ate-setup
+RoleBinding/ate-system/atenet-router-endpointslices: only ate-setup
+ServiceAccount/podcertificate-controller-system/podcertificate-controller:
+  metadata.labels:
+    ate-setup: null
+    charts:
+      app: podcertificate-controller

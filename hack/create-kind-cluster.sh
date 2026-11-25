@@ -32,6 +32,7 @@ if [[ $# -gt 0 ]]; then
       echo "  KIND_CLUSTER_NAME      Name of the cluster to create (default: kind)."
       echo "  IP_FAMILY              Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
       echo "  ATE_KIND_RESERVED_CPU  CPU reserved for the kubelet and the system on each node (default: none)."
+      echo "  KIND_NODE_IMAGE        Node image, which selects the Kubernetes version (default: the default of kind)."
       exit 0
       ;;
   esac
@@ -156,7 +157,8 @@ if [[ "${IP_FAMILY}" != "ipv4" &&
 fi
 
 echo "Creating kind cluster '${KIND_CLUSTER_NAME}'..."
-"${ROOT}"/hack/kind.sh create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml"
+"${ROOT}"/hack/kind.sh create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml" \
+  ${KIND_NODE_IMAGE:+--image "${KIND_NODE_IMAGE}"}
 
 # A daemon with IPv6 off hands kind a v4-only network whatever it asked for.
 if [[ "${IP_FAMILY}" != "ipv4" &&

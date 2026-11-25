@@ -27,6 +27,9 @@ import (
 
 // Exec runs command in a container and attaches the supplied streams.
 func (c *Client) Exec(ctx context.Context, namespace, pod, container string, command []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if c.APIServerOnly {
+		return nil
+	}
 	req := c.Typed.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(namespace).

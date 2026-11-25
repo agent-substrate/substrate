@@ -1,0 +1,143 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Actor JWT discovery
+templates:
+- ate-idp-server.yaml
+- ate-api-server-envvars.yaml
+- ate-system-networkpolicies.yaml
+release:
+  name: custom
+  namespace: custom-system
+# The render requires a snapshot location.
+set:
+  ateApi.snapshotLocation: gs://snapshots/
+tests:
+- it: serves discovery with the API signing pool and a service certificate
+  template: ate-idp-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    image.registry: mirror.example
+    image.tag: test
+    imagePullSecrets:
+    - name: registry-auth
+    ateIdpServer.resources.requests.memory: 64Mi
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --issuer=https://custom-idp.custom-system.svc
+  - equal:
+      path: spec.template.spec.serviceAccountName
+      value: custom-ate-idp-server
+  - equal:
+      path: spec.template.spec.containers[0].image
+      value: mirror.example/agent-substrate/substrate/ate-idp-server:test
+  - equal:
+      path: spec.template.spec.containers[0].resources.requests.memory
+      value: 64Mi
+  - contains:
+      path: spec.template.spec.imagePullSecrets
+      content:
+        name: registry-auth
+  - contains:
+      path: spec.template.spec.volumes
+      content:
+        name: actor-id-jwt-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-jwt-pool
+              items:
+              - key: pool
+                path: pool.json
+  - contains:
+      path: spec.template.spec.volumes
+      content:
+        name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+- it: does not grant the discovery server a Kubernetes API token
+  template: ate-idp-server.yaml
+  documentSelector:
+    path: kind
+    value: ServiceAccount
+  asserts:
+  - equal:
+      path: automountServiceAccountToken
+      value: false
+- it: exposes the release discovery service on HTTPS
+  template: ate-idp-server.yaml
+  documentSelector:
+    path: kind
+    value: Service
+  asserts:
+  - equal:
+      path: metadata.name
+      value: custom-idp
+  - equal:
+      path: metadata.namespace
+      value: custom-system
+  - equal:
+      path: spec.ports
+      value:
+      - name: https
+        port: 443
+        targetPort: https
+        appProtocol: https
+- it: defaults the actor issuer to the release discovery service
+  template: ate-api-server-envvars.yaml
+  asserts:
+  - equal:
+      path: data.ATE_API_ACTOR_JWT_ISSUER
+      value: https://custom-idp.custom-system.svc
+- it: preserves an externally configured actor issuer
+  template: ate-api-server-envvars.yaml
+  set:
+    ateApi.actorJWTIssuer: https://actors.example
+  asserts:
+  - equal:
+      path: data.ATE_API_ACTOR_JWT_ISSUER
+      value: https://actors.example
+- it: serves discovery for the externally configured issuer
+  template: ate-idp-server.yaml
+  set:
+    ateApi.actorJWTIssuer: https://actors.example
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --issuer=https://actors.example
+- it: admits public HTTPS discovery through the default ingress deny
+  template: ate-system-networkpolicies.yaml
+  documentSelector:
+    path: metadata.name
+    value: custom-ate-idp-server
+  asserts:
+  - equal:
+      path: spec.podSelector.matchLabels.app
+      value: ate-idp-server
+  - equal:
+      path: spec.ingress
+      value:
+      - ports:
+        - protocol: TCP
+          port: https

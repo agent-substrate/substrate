@@ -1,0 +1,372 @@
+{{/*
+Copyright 2026 The Agent Substrate Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- $readWriteConnectionStringSecretRef := .Values.postgres.readWriteConnectionStringSecretRef -}}
+{{- $ownerConnectionStringSecretRef := .Values.postgres.ownerConnectionStringSecretRef -}}
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get"]
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools", "csidriverconfigs"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "watch", "list"]
+# Secret reads for env source resolution are intentionally NOT granted
+# cluster-wide here. Each demo / tenant is responsible for granting
+# ate-api-server read access only to the specific Secrets referenced by its
+# ActorTemplates (e.g. via a namespace-scoped Role + RoleBinding using
+# resourceNames).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.ateApi.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+  template:
+    metadata:
+      labels:
+        app: ate-api-server
+        {{- with .Values.ateApi.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/api-config: {{ .Values.ateApi.logLevel | sha256sum }}
+        checksum/api-envvars: {{ include (print $.Template.BasePath "/ate-api-server-envvars.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+      terminationGracePeriodSeconds: 40
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
+      initContainers:
+      - name: objectstore-plugin
+        image: {{ with .Values.objectStorePlugin.image }}{{ include "substrate.thirdPartyImage" (list . $) }}{{ else }}{{ include "substrate.componentImage" (list "objectstore-plugin" .) }}{{ end }}
+        restartPolicy: Always
+        args:
+        {{- with .Values.objectStorePlugin.control.args }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        - control
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
+        - --socket=/run/objectstore-plugin/control.sock
+        - --exchange-listen=:8445
+        - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
+        - '--ateapi-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
+        {{- end }}
+        ports:
+        - name: exchange
+          containerPort: 8445
+        startupProbe:
+        {{- with .Values.objectStorePlugin.control.startupProbe }}
+          {{- toYaml . | nindent 10 }}
+        {{- else }}
+          exec:
+            command:
+            - /ko-app/objectstore-plugin
+            - healthcheck
+            - --socket=/run/objectstore-plugin/control.sock
+          periodSeconds: 2
+          failureThreshold: 30
+        {{- end }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: [ALL]
+        resources:
+{{ toYaml .Values.objectStorePlugin.control.resources | indent 10 }}
+        env:
+        - name: ATE_API_ACTOR_JWT_ISSUER
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+              key: ATE_API_ACTOR_JWT_ISSUER
+        - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+              key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+{{- with .Values.objectStorePlugin.extraEnv }}
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with include "substrate.otel.env" . }}
+{{- . | trim | nindent 8 }}
+{{- end }}
+{{- with .Values.objectStorePlugin.credentialsSecret }}
+        envFrom:
+        - secretRef:
+            name: {{ . }}
+{{- end }}
+        volumeMounts:
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
+        - { name: servicedns, mountPath: /run/servicedns.podcert.ate.dev, readOnly: true }
+        - { name: podidentity, mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
+        {{- with .Values.objectStorePlugin.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+      - name: ate-api-server
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            add: [NET_BIND_SERVICE]
+            drop: [ALL]
+        image: {{ include "substrate.componentImage" (list "ateapi" .) }}
+        resources:
+{{ toYaml .Values.ateApi.resources | indent 10 }}
+        args:
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
+        - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
+        - --snapshot-location=@env
+        - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+        - {{ printf "--authz-bootstrap-owners=%s" (join "," (.Values.ateApi.authorization.bootstrapOwners | default (list (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "substrate.fullname" (list "ate-client" .)))))) | quote }}
+        - "--authentication-config=/etc/ateapi/authentication/authentication.yaml"
+        - "--postgres-read-write-connection-string=@env"
+        - "--postgres-owner-connection-string=@env"
+        - {{ printf "--postgres-read-write-role=%s" .Values.postgres.readWriteRole | quote }}
+        - {{ printf "--postgres-owner-role=%s" .Values.postgres.ownerRole | quote }}
+        - "--postgres-schema=@env"
+        - "--actor-jwt-issuer=@env"
+        - "--actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json"
+        - "--actor-id-ca-pool=/run/actor-id-ca-pool/pool.json"
+        - "--default-egress-gateway-address={{ include "substrate.fullname" (list "atenet-egress" .) }}.{{ .Release.Namespace }}.svc:443"
+        - '--atelet-service-account={{ include "substrate.fullname" (list "atelet" .) }}'
+        - '--controller-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-controller" .) }}'
+        - '--api-server-sidecar-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-api-server" .) }}'
+        - '--egress-gateway-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "atenet-egress" .) }}'
+        - '--ingress-router-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "atenet-router" .) }}'
+        - "--atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        - "--pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+        - "--drain-delay=13s"
+        - "--drain-timeout=15s"
+{{- with .Values.ateApi.extraArgs }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+        env:
+        {{- include "substrate.otel.resourceEnv" . | nindent 8 }}
+        - name: ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "substrate.postgres.readWriteSecretName" . | quote }}
+              key: {{ get $readWriteConnectionStringSecretRef "key" | default "readWriteConnectionString" | quote }}
+        - name: ATE_API_POSTGRES_OWNER_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "substrate.postgres.ownerSecretName" . | quote }}
+              key: {{ get $ownerConnectionStringSecretRef "key" | default "ownerConnectionString" | quote }}
+{{- with include "substrate.otel.env" . }}
+{{- . | trim | nindent 8 }}
+{{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ .Values.ateApiServerEnvVarsConfigMap }}
+            optional: true
+        volumeMounts:
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
+        - { name: servicedns,          mountPath: /run/servicedns.podcert.ate.dev }
+        - { name: actor-id-jwt-pool,   mountPath: /run/actor-id-jwt-pool }
+        - { name: actor-id-ca-pool,    mountPath: /run/actor-id-ca-pool, readOnly: true }
+        - { name: podidentity,         mountPath: /run/podidentity.podcert.ate.dev, readOnly: true }
+{{- if .Values.postgres.clientCertificates.enabled }}
+        - { name: postgres, mountPath: /run/postgres.podcert.ate.dev, readOnly: true }
+{{- end }}
+        - { name: api-config, mountPath: /run/apiconfig.ate.dev, readOnly: true }
+        - { name: authentication-config, mountPath: /etc/ateapi/authentication, readOnly: true }
+        # Server CA of an external PostgreSQL, for connection strings with
+        # sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem.
+        # Empty unless the postgres-server-ca Secret exists.
+        - { name: postgres-server-ca, mountPath: /run/postgres-server-ca, readOnly: true }
+        ports:
+        - containerPort: 443
+        - name: prometheus
+          containerPort: 9090
+        - name: health
+          containerPort: 9091
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          periodSeconds: 5
+          failureThreshold: 24
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: objectstore-plugin
+        emptyDir: {}
+      {{- with .Values.objectStorePlugin.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: actor-id-jwt-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-jwt-pool
+              items:
+              - { key: pool, path: pool.json }
+      - name: actor-id-ca-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-ca-pool
+              items:
+              - { key: pool, path: pool.json }
+      - name: api-config
+        configMap:
+          name: {{ include "substrate.fullname" (list "ate-api-config" .) }}
+      - name: authentication-config
+        configMap:
+          name: ate-api-authentication
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+{{- if .Values.postgres.clientCertificates.enabled }}
+      - name: postgres
+        projected:
+          sources:
+          - podCertificate:
+              signerName: postgres.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: substrate_owner_user.pem
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_owner_user
+          - podCertificate:
+              signerName: postgres.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: substrate_readwrite_user.pem
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_readwrite_user
+{{- end }}
+      - name: postgres-server-ca
+        secret:
+          secretName: postgres-server-ca
+          optional: true
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "substrate.fullname" (list "ate-api-server" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "substrate.fullname" (list "api" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
+  selector:
+    app: ate-api-server
+  ports:
+  - name: grpc
+    protocol: TCP
+    port: 443
+    targetPort: 443
+  - name: exchange
+    protocol: TCP
+    port: 8445
+    targetPort: exchange

@@ -1,0 +1,588 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Control plane integration
+templates:
+- ate-api-server.yaml
+- ate-api-server-envvars.yaml
+- ate-api-config.yaml
+- ate-controller.yaml
+- atenet-router.yaml
+- atenet-egress.yaml
+- role.yaml
+- k8s-credential-provider.yaml
+- ate-system-networkpolicies.yaml
+release:
+  name: custom
+  namespace: custom-system
+# atenetDataPlane is required. Tests of agentgateway set it themselves.
+set:
+  atenetDataPlane: envoy
+  ateApi.snapshotLocation: gs://snapshots/
+tests:
+- it: probes the API health listener and resolves component identities
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].ports
+      content:
+        name: health
+        containerPort: 9091
+  - equal:
+      path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+      value: health
+  - equal:
+      path: spec.template.spec.containers[0].startupProbe.httpGet.port
+      value: health
+  - equal:
+      path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+      value: health
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --controller-spiffe-id=spiffe://cluster.local/ns/custom-system/sa/custom-ate-controller
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --egress-gateway-spiffe-id=spiffe://cluster.local/ns/custom-system/sa/custom-atenet-egress
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --ingress-router-spiffe-id=spiffe://cluster.local/ns/custom-system/sa/custom-atenet-router
+- it: probes the credential provider on its health listener
+  template: k8s-credential-provider.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].ports
+      content:
+        name: health
+        containerPort: 9091
+  - equal:
+      path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+      value: health
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --status-address=127.0.0.1:4040
+  - notContains:
+      path: spec.template.spec.containers[0].ports
+      content:
+        name: statusz
+        containerPort: 4040
+- it: runs the credential provider as the non-root user of its image
+  template: k8s-credential-provider.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - equal:
+      path: spec.template.spec.securityContext
+      value:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+- it: admits the egress gateway pods to the credential provider
+  template: k8s-credential-provider.yaml
+  documentSelector:
+    path: kind
+    value: NetworkPolicy
+  asserts:
+  - equal:
+      path: spec.podSelector.matchLabels.app
+      value: custom-k8s-credential-provider
+  - contains:
+      path: spec.ingress[0].from
+      content:
+        podSelector:
+          matchLabels:
+            app: atenet-egress
+- it: stops OTLP push without an endpoint but keeps the scraped metrics
+  template: ate-controller.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_TRACES_EXPORTER
+        value: none
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_METRICS_EXPORTER
+        value: prometheus
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_LOGS_EXPORTER
+        value: none
+- it: stops the credential provider's OTLP push without an endpoint
+  template: k8s-credential-provider.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_TRACES_EXPORTER
+        value: none
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_METRICS_EXPORTER
+        value: prometheus
+- it: exports the credential provider's telemetry to the configured endpoint
+  template: k8s-credential-provider.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  set:
+    otel.endpoint: http://collector:4317
+    otel.metrics.enabled: false
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://collector:4317
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_METRICS_EXPORTER
+        value: none
+  - notContains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: OTEL_TRACES_EXPORTER
+        value: none
+- it: denies ingress by default in the release namespace
+  template: ate-system-networkpolicies.yaml
+  documentSelector:
+    path: metadata.name
+    value: custom-default-deny-ingress
+  asserts:
+  - equal:
+      path: metadata.namespace
+      value: custom-system
+  - equal:
+      path: spec.podSelector
+      value: {}
+  - equal:
+      path: spec.policyTypes
+      value: [Ingress]
+  - notExists:
+      path: spec.ingress
+- it: permits agentgateway metrics but keeps credential provider status private
+  template: ate-system-networkpolicies.yaml
+  set:
+    atenetDataPlane: agentgateway
+  documentSelector:
+    path: metadata.name
+    value: custom-ate-system-observability
+  asserts:
+  - contains:
+      path: spec.ingress[0].ports
+      content:
+        protocol: TCP
+        port: gw-metrics
+  - contains:
+      path: spec.podSelector.matchExpressions
+      content:
+        key: app
+        operator: NotIn
+        values: [custom-k8s-credential-provider]
+  - notContains:
+      path: spec.ingress[0].ports
+      content:
+        protocol: TCP
+        port: statusz
+- it: supplies the required API config and bootstraps the release client
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --authz-bootstrap-owners=system:serviceaccount:custom-system:custom-ate-client
+  - contains:
+      path: spec.template.spec.containers[0].volumeMounts
+      content:
+        name: api-config
+        mountPath: /run/apiconfig.ate.dev
+        readOnly: true
+  - contains:
+      path: spec.template.spec.volumes
+      content:
+        name: api-config
+        configMap:
+          name: custom-ate-api-config
+- it: configures operator ownership
+  template: ate-api-server.yaml
+  set:
+    ateApi.authorization.bootstrapOwners:
+    - system:serviceaccount:operators:admin
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: --authz-bootstrap-owners=system:serviceaccount:operators:admin
+- it: configures API logging in textproto
+  template: ate-api-config.yaml
+  set:
+    ateApi.logLevel: debug
+  asserts:
+  - equal:
+      path: metadata.name
+      value: custom-ate-api-config
+  - equal:
+      path: data["apiconfig.textproto"]
+      value: |
+        logging: { level: "debug" }
+- it: rejects an invalid API log level
+  template: ate-api-config.yaml
+  set:
+    ateApi.logLevel: verbose
+  asserts:
+  - failedTemplate:
+      errorMessage: ateApi.logLevel must be debug, info, warn, or error
+- it: lets the controller provision worker service accounts
+  template: role.yaml
+  documentSelector:
+    path: kind
+    value: ClusterRole
+  asserts:
+  - contains:
+      path: rules
+      content:
+        apiGroups: [""]
+        resources: [serviceaccounts]
+        verbs: [create, patch]
+
+- it: retains the controller sandbox configuration permissions
+  template: role.yaml
+  documentSelector:
+    path: kind
+    value: ClusterRole
+  asserts:
+  - contains:
+      path: rules
+      content:
+        apiGroups: [ate.dev]
+        resources: [sandboxconfigs]
+        verbs: [get, list, patch, watch]
+  - notContains:
+      path: rules
+      content:
+        apiGroups: [""]
+        resources: [secrets]
+        verbs: [get, list, watch]
+- it: limits controller secret reads to the MITM CA pool in the release namespace
+  template: role.yaml
+  documentSelector:
+    path: kind
+    value: Role
+  asserts:
+  - equal:
+      path: metadata.namespace
+      value: custom-system
+  - contains:
+      path: rules
+      content:
+        apiGroups: [""]
+        resourceNames: [egress-mitm-ca-pool]
+        resources: [secrets]
+        verbs: [get, list, watch]
+- it: grants the controller its namespaced permissions
+  template: ate-controller.yaml
+  documentSelector:
+    path: kind
+    value: RoleBinding
+  asserts:
+  - equal:
+      path: metadata.namespace
+      value: custom-system
+  - equal:
+      path: roleRef
+      value:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: custom-ate-controller
+  - equal:
+      path: subjects
+      value:
+      - kind: ServiceAccount
+        name: custom-ate-controller
+        namespace: custom-system
+- it: limits API configuration reads to pools and CSI drivers
+  template: ate-api-server.yaml
+  documentSelector:
+    path: kind
+    value: ClusterRole
+  asserts:
+  - equal:
+      path: rules[2]
+      value:
+        apiGroups: [ate.dev]
+        resources: [workerpools, csidriverconfigs]
+        verbs: [get, watch, list]
+
+- it: requires a trusted and explicitly allowed router client
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'source.spiffeId in \[\]'
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'root: /run/podidentity.podcert.ate.dev/trust-bundle.pem'
+  - notMatchRegex:
+      path: data["config.yaml"]
+      pattern: 'port: 808[01]'
+- it: allows the configured router client identities
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetRouter.ingressAllowedSPIFFEIDs:
+    - spiffe://cluster.local/ns/client/sa/router-client
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'source.spiffeId in \["spiffe://cluster.local/ns/client/sa/router-client"\]'
+- it: defaults router parking and API request timeouts to sixty seconds
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'requestParking:\n\s+budget: "60s"'
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'policies:\n\s+http:\n\s+requestTimeout: "60s"'
+- it: configures the router request parking budget
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetRouter.requestParking.budget: 30s
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'requestParking:\n\s+budget: "30s"'
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'policies:\n\s+http:\n\s+requestTimeout: "60s"'
+- it: configures the router API request timeout independently
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetRouter.requestTimeout: 2m
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'requestParking:\n\s+budget: "60s"'
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'policies:\n\s+http:\n\s+requestTimeout: "2m"'
+- it: configures both router timeouts
+  template: atenet-router.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetRouter.requestParking.budget: 90s
+    atenetRouter.requestTimeout: 45s
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'requestParking:\n\s+budget: "90s"'
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'policies:\n\s+http:\n\s+requestTimeout: "45s"'
+- it: defaults the egress proxy log filter to info
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: RUST_LOG
+        value: info
+- it: configures the egress proxy log filter
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.agentgateway.logLevel: debug
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: RUST_LOG
+        value: debug
+- it: preserves module filters in the egress proxy log filter
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.agentgateway.logLevel: "info,agentgateway=debug"
+  documentSelector:
+    path: kind
+    value: Deployment
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: RUST_LOG
+        value: "info,agentgateway=debug"
+- it: routes k8s.io credentials to the bundled provider on both listeners
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: '(?s)credentialProviders:\n\s+- uriAuthority: "?k8s.io"?\n\s+target:\n\s+host: "?custom-k8s-credential-provider.custom-system.svc:50051"?.*credentialProviders:\n\s+- uriAuthority: "?k8s.io"?'
+- it: routes credentials only to extra providers when the bundled one is off
+  templates:
+  - atenet-egress.yaml
+  - k8s-credential-provider.yaml
+  set:
+    atenetDataPlane: agentgateway
+    credentialProvider.enabled: false
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc:50051
+  asserts:
+  - hasDocuments:
+      count: 0
+    template: k8s-credential-provider.yaml
+  - notMatchRegex:
+      path: data["config.yaml"]
+      pattern: 'k8s.io'
+    template: atenet-egress.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: 'uriAuthority: "vault.example.com"\n\s+target:\n\s+host: "vault-provider.vault.svc:50051"'
+    template: atenet-egress.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+- it: configures no credential providers when every provider is off
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    credentialProvider.enabled: false
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - notMatchRegex:
+      path: data["config.yaml"]
+      pattern: credentialProviders
+- it: rejects an extra provider named k8s.io
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.extraCredentialProviders:
+    - name: k8s.io
+      address: a.b.svc:50051
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetEgress.extraCredentialProviders: k8s.io is the bundled provider; set credentialProvider.enabled instead"
+- it: rejects an extra provider without a host:port address
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetEgress.extraCredentialProviders: vault.example.com needs an address as host:port"
+- it: passes an extra provider's cacheTtl to both listeners
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc:50051
+      cacheTtl: 0s
+  documentSelector:
+    path: kind
+    value: ConfigMap
+  asserts:
+  - matchRegex:
+      path: data["config.yaml"]
+      pattern: '(?s)uriAuthority: "vault.example.com"\n\s+cacheTtl: "0s"\n\s+target:.*uriAuthority: "vault.example.com"\n\s+cacheTtl: "0s"\n\s+target:'
+- it: rejects an extra provider with a misspelled key
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc:50051
+      cacheTTL: 0s
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetEgress.extraCredentialProviders: vault.example.com has unknown keys cacheTTL; allowed keys are name, address and cacheTtl"
+- it: rejects an extra provider cacheTtl that is not a duration
+  template: atenet-egress.yaml
+  set:
+    atenetDataPlane: agentgateway
+    atenetEgress.extraCredentialProviders:
+    - name: vault.example.com
+      address: vault-provider.vault.svc:50051
+      cacheTtl: 5 minutes
+  asserts:
+  - failedTemplate:
+      errorMessage: "atenetEgress.extraCredentialProviders: vault.example.com needs cacheTtl in whole ns, us, ms, s, m or h, like 30s or 0s"

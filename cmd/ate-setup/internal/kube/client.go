@@ -45,6 +45,11 @@ type Client struct {
 	// mapper is held as the concrete deferred mapper, not as meta.RESTMapper,
 	// because only the concrete type exposes Reset. See InvalidateDiscovery.
 	mapper *restmapper.DeferredDiscoveryRESTMapper
+
+	// APIServerOnly is for a cluster that runs only an API server, such as
+	// envtest. No controller or pod runs there, so every wait succeeds at
+	// once and Exec does nothing.
+	APIServerOnly bool
 }
 
 // New builds a Client for the given kubeconfig and context. An empty context

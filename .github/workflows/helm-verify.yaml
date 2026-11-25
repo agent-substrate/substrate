@@ -1,0 +1,41 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: helm-verify
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  helm-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v4.3.2 # As hack/tools/helm.
+      # atenetDataPlane and ateApi.snapshotLocation are required in the
+      # substrate chart, and the other charts ignore them.
+      - name: Lint the charts with the envoy data plane
+        run: helm lint --set atenetDataPlane=envoy --set ateApi.snapshotLocation=gs://ate-snapshots/ charts/substrate charts/substrate-crds charts/substrate-podcert charts/substrate-atelet
+      - name: Lint the substrate chart with the agentgateway data plane
+        run: helm lint --set atenetDataPlane=agentgateway --set ateApi.snapshotLocation=gs://ate-snapshots/ charts/substrate
+      - name: Install helm-unittest
+        run: .github/scripts/helm-verify/install-helm-unittest.sh
+      - name: Run the chart unit tests
+        run: helm unittest charts/substrate charts/substrate-crds charts/substrate-podcert charts/substrate-atelet

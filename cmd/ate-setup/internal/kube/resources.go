@@ -142,7 +142,7 @@ func (c *Client) DeleteDeploymentAndWait(ctx context.Context, namespace, name st
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("while deleting deployment %s/%s: %w", namespace, name, err)
 	}
-	err = poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+	err = c.poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		dep, err := c.GetDeployment(ctx, namespace, name)
 		return dep == nil, err
 	})

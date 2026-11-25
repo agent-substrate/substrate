@@ -279,6 +279,15 @@ type dynamicResource interface {
 // variable so that tests of the retry behavior do not have to sleep for it.
 var pollInterval = 2 * time.Second
 
+// poll is the package poll, except that it succeeds at once on an
+// APIServerOnly client.
+func (c *Client) poll(ctx context.Context, timeout time.Duration, check func(context.Context) (bool, error)) error {
+	if c.APIServerOnly {
+		return nil
+	}
+	return poll(ctx, timeout, check)
+}
+
 // poll runs check until it reports done, the timeout expires, or ctx is
 // cancelled. Returning (false, nil) means "not ready yet".
 //

@@ -1,0 +1,25 @@
+{{/*
+Copyright 2026 The Agent Substrate Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- if .Values.sandboxConfigs.microvm.enabled }}
+{{- $bucket := .Values.sandboxConfigs.microvm.assetBucket }}
+{{- if not (regexMatch "^(s3|gs)://[^/]+$" $bucket) }}
+{{- fail "sandboxConfigs.microvm.assetBucket must be s3://<bucket> or gs://<bucket> when sandboxConfigs.microvm.enabled" }}
+{{- end }}
+{{- $url := splitList "://" $bucket }}
+{{- /* files/sandboxconfig-microvm.yaml.tmpl is manifests/ate-install/sandboxconfig-microvm.yaml.tmpl, copied by hack/update/chart-files.sh. */}}
+{{ .Files.Get "files/sandboxconfig-microvm.yaml.tmpl" | replace "${BUCKET_SCHEME}" (index $url 0) | replace "${ASSET_BUCKET_NAME}" (index $url 1) }}
+{{- end }}

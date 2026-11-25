@@ -1,0 +1,415 @@
+{{/*
+Copyright 2026 The Agent Substrate Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- if and .Values.atelet.imageCredentialProviderConfig .Values.atelet.imageCredentialProviderConfigYAML }}
+{{- fail "set only one of atelet.imageCredentialProviderConfig and atelet.imageCredentialProviderConfigYAML" }}
+{{- end }}
+{{- $credentialProviderConfig := or .Values.atelet.imageCredentialProviderConfig .Values.atelet.imageCredentialProviderConfigYAML }}
+{{- if ne (empty $credentialProviderConfig) (empty .Values.atelet.imageCredentialProviderBinDir) }}
+{{- fail "atelet.imageCredentialProviderConfig (or atelet.imageCredentialProviderConfigYAML) and atelet.imageCredentialProviderBinDir must be set together" }}
+{{- end }}
+
+# atelet
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.atelet.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- if .Values.atelet.imageCredentialProviderConfigYAML }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-image-credential-provider" .) }}
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    {{- .Values.atelet.imageCredentialProviderConfigYAML | nindent 4 }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["ate.dev"]
+  resources: ["csidriverconfigs"]
+  verbs: ["get", "list", "watch"]
+# SandboxConfigs are watched to pre-download sandbox assets into the node's
+# cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go),
+# and to write the runtimes of the configs local workers use to each worker's
+# sandbox runtimes file (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["ate.dev"]
+  resources: ["sandboxconfigs"]
+  verbs: ["get", "list", "watch"]
+# WorkerPools are watched to find the SandboxConfig each local worker's pool
+# uses, whose versions atelet writes to the worker's sandbox runtimes file
+# (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch"]
+# Sync failures are reported as Warning Events on the worker pod
+# (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
+# resolved on the node: atelet reads them through an informer and projects
+# the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["clustertrustbundles"]
+  verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-endpointslices" .) }}
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-endpointslices" .) }}
+  namespace: {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "substrate.fullname" (list "atelet-endpointslices" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+# Admit critical atelet pods on clusters that restrict critical priorities.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet-critical-pods" .) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  hard:
+    pods: 1G
+  scopeSelector:
+    matchExpressions:
+    - scopeName: PriorityClass
+      operator: In
+      values: ["system-node-critical", "system-cluster-critical"]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "substrate.fullname" (list "atelet" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: atelet
+spec:
+  selector:
+    matchLabels:
+      app: atelet
+  template:
+    metadata:
+      labels:
+        app: atelet
+        {{- with .Values.atelet.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: {{ include "substrate.fullname" (list "atelet" .) }}
+      priorityClassName: system-cluster-critical
+      # Covers atelet's default --drain-timeout (5m), plus slack for the forced
+      # stop and the telemetry flush. Checkpoint and Restore stream multi-GiB
+      # snapshots, and a kill mid-upload crashes the actor.
+      terminationGracePeriodSeconds: 330
+      {{- with .Values.atelet.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Run on nodes reserved for any WorkerPool sandbox class.
+      tolerations:
+      - key: ate.dev/sandboxClass
+        operator: Exists
+        effect: NoSchedule
+      # GKE reserves ComputeClass nodes with this taint.
+      - key: cloud.google.com/compute-class
+        operator: Exists
+        effect: NoSchedule
+      {{- with include "substrate.imagePullSecrets" . }}{{- . | nindent 6 }}{{- end }}
+      initContainers:
+      - name: objectstore-plugin
+        image: {{ with .Values.objectStorePlugin.image }}{{ include "substrate.thirdPartyImage" (list . $) }}{{ else }}{{ include "substrate.componentImage" (list "objectstore-plugin" .) }}{{ end }}
+        restartPolicy: Always
+        args:
+        {{- with .Values.objectStorePlugin.node.args }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        - node
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
+        - --socket=/run/objectstore-plugin/node.sock
+        - --root=/var/lib/ate
+        - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+        - --asset-staging-capacity=8Gi
+        - '--exchange-address={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:8445'
+        - '--exchange-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
+        {{- end }}
+        startupProbe:
+        {{- with .Values.objectStorePlugin.node.startupProbe }}
+          {{- toYaml . | nindent 10 }}
+        {{- else }}
+          exec:
+            command:
+            - /ko-app/objectstore-plugin
+            - healthcheck
+            - --socket=/run/objectstore-plugin/node.sock
+          periodSeconds: 2
+          failureThreshold: 30
+        {{- end }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsUser: 0
+          runAsGroup: 0
+          capabilities:
+            drop: [ALL]
+        resources:
+{{ toYaml .Values.objectStorePlugin.node.resources | indent 10 }}
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+{{- with .Values.objectStorePlugin.extraEnv }}
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with include "substrate.otel.env" . }}
+{{- . | trim | nindent 8 }}
+{{- end }}
+{{- with .Values.objectStorePlugin.credentialsSecret }}
+        envFrom:
+        - secretRef:
+            name: {{ . }}
+{{- end }}
+        volumeMounts:
+        - name: ate-base
+          mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
+        - name: asset-staging
+          mountPath: /var/lib/objectstore-plugin/asset-staging
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        {{- with .Values.objectStorePlugin.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+      - name: atelet
+        image: {{ include "substrate.componentImage" (list "atelet" .) }}
+        args:
+        - {{ printf "--preview=%s" (join "," .Values.preview) | quote }}
+        - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
+{{- if $credentialProviderConfig }}
+        - --image-credential-provider-config=/run/image-credential-provider/config.yaml
+        - --image-credential-provider-bin-dir=/run/image-credential-provider/bin
+{{- end }}
+        - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+        - '--herder-allowed-spiffe-id=spiffe://cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "substrate.fullname" (list "ate-api-server" .) }}'
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        - '--ateapi-address=k8s:///{{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc:443'
+        - '--ateapi-server-name={{ include "substrate.fullname" (list "api" .) }}.{{ .Release.Namespace }}.svc'
+{{- with .Values.atelet.extraArgs }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsUser: 0
+          runAsGroup: 0
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FOWNER
+            - FSETID
+        resources:
+{{ toYaml .Values.atelet.resources | indent 10 }}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
+{{- with include "substrate.otel.env" . }}
+{{- . | trim | nindent 8 }}
+{{- end }}
+{{- with .Values.atelet.extraEnv }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+        ports:
+        - name: grpc
+          containerPort: 21998
+        - name: prometheus
+          containerPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 9091
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
+        - name: ate-base
+          mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: kubelet-plugins
+          mountPath: /var/lib/kubelet/plugins
+        - name: device-plugins
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: host-dev
+          mountPath: /host/dev
+          readOnly: true
+{{- if $credentialProviderConfig }}
+        - name: image-credential-provider-bin
+          mountPath: /run/image-credential-provider/bin
+          readOnly: true
+        - name: image-credential-provider-config
+          mountPath: /run/image-credential-provider/config.yaml
+{{- if .Values.atelet.imageCredentialProviderConfigYAML }}
+          subPath: config.yaml
+{{- end }}
+          readOnly: true
+{{- end }}
+      volumes:
+      - name: objectstore-plugin
+        emptyDir: {}
+      {{- with .Values.objectStorePlugin.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      # --asset-staging-capacity bounds this volume.
+      - name: asset-staging
+        emptyDir: {}
+      - name: ate-base
+        hostPath:
+          path: /var/lib/ate
+          type: DirectoryOrCreate
+      - name: kubelet-plugins
+        hostPath:
+          path: /var/lib/kubelet/plugins
+          type: DirectoryOrCreate
+      - name: device-plugins
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: DirectoryOrCreate
+      - name: host-dev
+        hostPath:
+          path: /dev
+          type: Directory
+{{- if $credentialProviderConfig }}
+      - name: image-credential-provider-bin
+        hostPath:
+          path: {{ .Values.atelet.imageCredentialProviderBinDir | quote }}
+          type: Directory
+      - name: image-credential-provider-config
+{{- if .Values.atelet.imageCredentialProviderConfigYAML }}
+        configMap:
+          name: {{ include "substrate.fullname" (list "atelet-image-credential-provider" .) }}
+{{- else }}
+        hostPath:
+          path: {{ .Values.atelet.imageCredentialProviderConfig | quote }}
+          type: File
+{{- end }}
+{{- end }}
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem

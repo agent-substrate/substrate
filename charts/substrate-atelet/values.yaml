@@ -1,0 +1,128 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for the substrate-atelet chart.
+#
+# Most keys have the same paths and defaults as in the substrate chart.
+
+# Release name of the substrate chart this atelet serves. Install this chart in
+# that release's namespace. Object names follow the substrate release, so
+# atelet keeps the names the substrate release references.
+substrateReleaseName: substrate
+
+# Preview gates for atelet and the object-store plugin. Match the substrate
+# release's preview gates.
+preview: []
+
+# atelet daemonset overrides.
+# extraArgs / extraEnv are appended verbatim for installer-specific knobs
+# (e.g. registry replacement for kind).
+atelet:
+  # Host paths for the node's kubelet credential provider. Set both to enable
+  # private registry authentication (GKE: /etc/srv/kubernetes/cri_auth_config.yaml
+  # and /home/kubernetes/bin). Leave empty on nodes without a provider, like Kind.
+  imageCredentialProviderConfig: ""
+  # The config itself, rendered into a ConfigMap, for nodes whose image owns
+  # the kubelet's copy (EKS) and for a provider environment that has to differ
+  # from the kubelet's. Set this or imageCredentialProviderConfig, not both;
+  # either one still needs the bin directory.
+  imageCredentialProviderConfigYAML: ""
+  imageCredentialProviderBinDir: ""
+  # Restricts atelet to matching nodes. Every node that runs WorkerPool pods
+  # needs an atelet, so cover each pool's nodeSelector here.
+  nodeSelector: {}
+  # Annotations on the atelet ServiceAccount, for workload identity such as
+  # EKS IAM roles for service accounts.
+  serviceAccount:
+    annotations: {}
+  # Labels added to the atelet pods, for workload identity such as Azure
+  # Workload Identity.
+  podLabels: {}
+  extraArgs: []
+  extraEnv: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+# The object-store plugin, a sidecar of atelet. The chart does not model the
+# object store: configure it through the plugin's environment. Use the same
+# credentialsSecret and extraEnv as the substrate release.
+objectStorePlugin:
+  # Image of the plugin, as a full reference. Empty uses the in-tree
+  # objectstore-plugin component image. global.imageRegistry replaces the
+  # registry of the reference. Another plugin also needs its own args and
+  # startupProbe.
+  image: ""
+  # Secret whose keys the plugin gets as environment variables, such as
+  # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Empty adds none.
+  credentialsSecret: ""
+  # Environment of the plugin. ATE_STORAGE_BACKEND selects the store: gcs, the
+  # default, or s3. The S3 backend reads the AWS SDK settings, such as
+  # AWS_REGION, AWS_ENDPOINT_URL and AWS_S3_USE_PATH_STYLE.
+  extraEnv: []
+  # Volumes added to the pod, and mounts added to the plugin container.
+  extraVolumes: []
+  extraVolumeMounts: []
+  # The sidecar in the atelet pods. It must serve the objectstore.v1
+  # NodeProvider and AssetProvider APIs on /run/objectstore-plugin/node.sock.
+  node:
+    # Arguments of the plugin. Empty uses the in-tree plugin's arguments.
+    args: []
+    # Startup probe of the plugin. Empty uses the in-tree plugin's probe.
+    startupProbe: {}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+
+# OTLP export, following the OpenTelemetry SDK environment variable spec.
+# endpoint applies to every signal; a signal's own endpoint overrides it.
+# A signal exports only when it is enabled and resolves to an endpoint.
+otel:
+  endpoint: ""
+  traces:
+    enabled: true
+    endpoint: ""
+    samplingRatio: 0.01
+  metrics:
+    enabled: true
+    endpoint: ""
+  logs:
+    enabled: true
+    endpoint: ""
+
+# Values under `global` are visible to this chart and to every subchart.
+global:
+  # -- Mirror registry that overrides where every image is pulled from. It wins
+  # over image.registry. Repository paths are preserved.
+  imageRegistry: ""
+  # -- Pull secrets merged (union) into each pod's own imagePullSecrets list.
+  imagePullSecrets: []
+  # -- Fallback imagePullPolicy where a container does not set one.
+  imagePullPolicy: ""
+
+# Pull secrets for every pod this chart renders. Merged with global.imagePullSecrets.
+imagePullSecrets: []
+
+image:
+  # Registry host for the component images, and nothing else. A path inside
+  # `registry` fails the render.
+  registry: ghcr.io
+  # Image path prefix under the registry, ahead of each component name.
+  repository: agent-substrate/substrate
+  tag: ""
