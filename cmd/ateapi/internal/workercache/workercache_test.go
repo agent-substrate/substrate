@@ -39,6 +39,12 @@ func TestCache_NotReadyBeforeStart(t *testing.T) {
 	if _, err := c.Worker(workerName("ns", "pod")); err == nil {
 		t.Fatal("expected error from Worker before Start, got nil")
 	}
+	if _, err := c.WorkersByNode("node-a"); err == nil {
+		t.Fatal("expected error from WorkersByNode before Start, got nil")
+	}
+	if _, err := c.WorkersByNode(""); err == nil {
+		t.Fatal("expected error from WorkersByNode(\"\") before Start, got nil")
+	}
 }
 
 func TestCache_SyncsOnStart(t *testing.T) {
@@ -606,5 +612,135 @@ func TestCache_AddHandler_SeesRelistChanges(t *testing.T) {
 	}
 	if diff := cmp.Diff([]int64{1}, h.versions(workerName("ns", "pod3"))); diff != "" {
 		t.Errorf("pod3 versions (-want +got):\n%s", diff)
+	}
+}
+
+func TestCache_WorkersByNode(t *testing.T) {
+	w1 := makeWorker("ns", "pod1", 1)
+	w1.NodeName = "node-a"
+	w2 := makeWorker("ns", "pod2", 1)
+	w2.NodeName = "node-b"
+
+	fs := newFakeStore(w1, w2)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	got, err := c.WorkersByNode("")
+	if err != nil || got != nil {
+		t.Fatalf("WorkersByNode(\"\") = %v, %v, want nil, nil", got, err)
+	}
+
+	got, err = c.WorkersByNode("node-a")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-a): %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker{w1}, got, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Fatalf("WorkersByNode(node-a) (-want +got):\n%s", diff)
+	}
+
+	// Update pod1 in place on node-a without duplicating or leaving a stale entry.
+	w1Updated := makeWorker("ns", "pod1", 2)
+	w1Updated.NodeName = "node-a"
+	w1Updated.Status.Allocated = &ateapi.WorkerResources{Actors: 1}
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: w1Updated})
+	eventually(t, func() bool {
+		a, errA := c.WorkersByNode("node-a")
+		return errA == nil && len(a) == 1 && a[0].GetStatus().GetAllocated().GetActors() == 1
+	}, 2*time.Second)
+
+	got, err = c.WorkersByNode("node-a")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-a) after update: %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker{w1Updated}, got, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Fatalf("WorkersByNode(node-a) after update (-want +got):\n%s", diff)
+	}
+
+	// Move pod1 to node-b via update event.
+	w1Moved := makeWorker("ns", "pod1", 3)
+	w1Moved.NodeName = "node-b"
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: w1Moved})
+	eventually(t, func() bool {
+		b, errB := c.WorkersByNode("node-b")
+		a, errA := c.WorkersByNode("node-a")
+		return errB == nil && errA == nil && len(b) == 2 && len(a) == 0
+	}, 2*time.Second)
+
+	got, err = c.WorkersByNode("node-b")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-b) after move: %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker{w1Moved, w2}, got, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Fatalf("WorkersByNode(node-b) after move (-want +got):\n%s", diff)
+	}
+
+	c.Forget(workerName("ns", "pod1"))
+	got, err = c.WorkersByNode("node-b")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-b) after Forget: %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker{w2}, got, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Fatalf("WorkersByNode(node-b) after Forget (-want +got):\n%s", diff)
+	}
+
+	// Delete events carry only the worker name.
+	fs.send(store.WorkerEvent{
+		Type:   store.WorkerEventDeleted,
+		Worker: &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: workerName("ns", "pod2")}},
+	})
+	eventually(t, func() bool {
+		b, err := c.WorkersByNode("node-b")
+		return err == nil && len(b) == 0
+	}, 2*time.Second)
+}
+
+func TestCache_WorkersByNode_Relist(t *testing.T) {
+	w1 := makeWorker("ns", "pod1", 1)
+	w1.NodeName = "node-a"
+	w2 := makeWorker("ns", "pod2", 1)
+	w2.NodeName = "node-b"
+
+	fs := newFakeStore(w1, w2)
+	c := workercache.New(fs, 10*time.Millisecond)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Update the store directly without sending watch events, dropping w1 and
+	// adding a missed w3 on a new node.
+	w3 := makeWorker("ns", "pod3", 1)
+	w3.NodeName = "node-c"
+	fs.setWorkers(w2, w3)
+
+	eventually(t, func() bool {
+		a, errA := c.WorkersByNode("node-a")
+		cWorkers, errC := c.WorkersByNode("node-c")
+		return errA == nil && len(a) == 0 && errC == nil && len(cWorkers) == 1
+	}, 2*time.Second)
+
+	gotA, err := c.WorkersByNode("node-a")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-a): %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker(nil), gotA, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Errorf("WorkersByNode(node-a) after relist (-want +got):\n%s", diff)
+	}
+
+	gotB, err := c.WorkersByNode("node-b")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-b): %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker{w2}, gotB, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Errorf("WorkersByNode(node-b) after relist (-want +got):\n%s", diff)
+	}
+
+	gotC, err := c.WorkersByNode("node-c")
+	if err != nil {
+		t.Fatalf("WorkersByNode(node-c): %v", err)
+	}
+	if diff := cmp.Diff([]*ateapi.Worker{w3}, gotC, protocmp.Transform(), workerSortOpt); diff != "" {
+		t.Errorf("WorkersByNode(node-c) after relist (-want +got):\n%s", diff)
 	}
 }
