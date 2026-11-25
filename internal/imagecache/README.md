@@ -187,10 +187,12 @@ extraction. The microVM path is nearly untouched: it bind-mounts the (now
 overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
 keeps building its own tmpfs upper, as before.
 
-**Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
-an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes
-it — called from the checkpoint cleanup path in ateworker-gvisor and
-`teardownActor` in ateworker-microvm.
+**Teardown**: `UnmountBundlesUnder(bundleDir)` lazily detaches the rootfs and
+image volume mounts in each of an actor's bundles (checked with `statx`
+`STATX_ATTR_MOUNT_ROOT`) before atelet wipes them. ateworker-gvisor calls it
+on the `RunWorkload` and `RestoreWorkload` failure paths and in
+`terminateWorkload`; ateworker-microvm calls it in `coldBootActor`,
+`cleanupFailedRestoreRootfs` and `teardownActor`.
 
 ## Garbage collection
 
@@ -299,9 +301,8 @@ restructuring.
 - Portable unit tests (run everywhere, including macOS): the unpack security
   suite (traversal, symlink/hardlink escape, whiteout capture, later-entry-
   wins, read-only dirs, missing parents), spec round-trips, overlay option
-  assembly (including duplicate-layer dedup), mountinfo parsing, ref
-  rewriting, options. End-to-end pull tests run against an in-memory
-  registry (`pkg/registry`).
+  assembly (including duplicate-layer dedup), ref rewriting, options.
+  End-to-end pull tests run against an in-memory registry (`pkg/registry`).
 - Linux-tagged tests (`bundle_linux_test.go`): unprivileged ones cover
   escape rejection and specless/zero-layer compose; root-gated ones execute
   the real `mknod`/xattr materialization and a full mount → write-isolation

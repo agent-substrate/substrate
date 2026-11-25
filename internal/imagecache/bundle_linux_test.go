@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -508,5 +509,302 @@ func testSetupBundleRootfsRepairsWhiteoutParentUnderSetgidDir(t *testing.T) {
 	assertOwner(t, filepath.Join(rootfs, "srv/shared/docs"), 1000, 1000, os.ModeDir|os.ModeSetgid|0o770)
 	if _, err := os.Lstat(filepath.Join(rootfs, "srv/shared/docs/old")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("whited-out srv/shared/docs/old: Lstat error %v, want ErrNotExist", err)
+	}
+}
+
+// fakeMounts fakes mounts on a real directory tree, keyed by absolute path.
+type fakeMounts struct {
+	// mounted counts the mounts stacked at each path.
+	mounted map[string]int
+	// statErr is returned by statx for each path until its last mount is
+	// detached.
+	statErr map[string]error
+}
+
+// sys returns a mountSys that runs the real statx and then applies f.
+func (f *fakeMounts) sys(t *testing.T) mountSys {
+	return mountSys{
+		statx: func(dirfd int, path string) (unix.Statx_t, error) {
+			if dirfd != unix.AT_FDCWD {
+				dir, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", dirfd))
+				if err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(dir, path)
+			}
+			if err := f.statErr[path]; err != nil {
+				return unix.Statx_t{}, err
+			}
+			sx, err := statxAt(unix.AT_FDCWD, path)
+			if f.mounted[path] > 0 {
+				sx.Attributes |= unix.STATX_ATTR_MOUNT_ROOT
+			}
+			return sx, err
+		},
+		unmount: func(target string, flags int) error {
+			if flags != unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW {
+				t.Errorf("unmount(%q) flags = %#x, want MNT_DETACH|UMOUNT_NOFOLLOW", target, flags)
+			}
+			if f.mounted[target] == 0 {
+				return unix.EINVAL
+			}
+			if f.mounted[target]--; f.mounted[target] == 0 {
+				delete(f.statErr, target)
+			}
+			return nil
+		},
+	}
+}
+
+func TestUnmount_DirArgument(t *testing.T) {
+	for _, unmount := range []func(string) error{UnmountAllUnder, UnmountBundlesUnder} {
+		for _, dir := range []string{"", ".", "bundles"} {
+			if err := unmount(dir); err == nil {
+				t.Errorf("unmount(%q) = nil, want error for a relative dir", dir)
+			}
+		}
+		if err := unmount(filepath.Join(t.TempDir(), "missing")); err != nil {
+			t.Errorf("unmount(missing dir) = %v, want nil", err)
+		}
+	}
+}
+
+func TestUnmount_FakeMounts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		find    func(string, mountSys) ([]mountPoint, error)
+		mounted map[string]int   // relative path -> stacked mounts
+		statErr map[string]error // relative path -> statx error
+		// left are the mounts that must remain; all others must be detached.
+		left    map[string]int
+		wantErr []error
+		wantMsg string
+	}{{
+		name:    "bad entry, walk",
+		find:    mountPointsUnder,
+		mounted: map[string]int{"a/rootfs": 1, "b/rootfs": 1},
+		statErr: map[string]error{"a/volumes/bad": unix.EACCES},
+		wantErr: []error{unix.EACCES},
+	}, {
+		name:    "bad entry, bundles",
+		find:    bundleMountPoints,
+		mounted: map[string]int{"a/rootfs": 1, "b/rootfs": 1},
+		statErr: map[string]error{"a/volumes/bad": unix.EACCES},
+		wantErr: []error{unix.EACCES},
+	}, {
+		// The dead mount is detached. other/rootfs is not a mount, so its
+		// statx error is returned.
+		name:    "dead mount, walk",
+		find:    mountPointsUnder,
+		mounted: map[string]int{"main/volumes/fuse": 1},
+		statErr: map[string]error{"main/volumes/fuse": unix.ENOTCONN, "other/rootfs": unix.EIO},
+		wantErr: []error{unix.EIO},
+	}, {
+		name:    "dead mount, bundles",
+		find:    bundleMountPoints,
+		mounted: map[string]int{"main/volumes/fuse": 1},
+		statErr: map[string]error{"main/volumes/fuse": unix.ENOTCONN, "other/rootfs": unix.EIO},
+		wantErr: []error{unix.EIO},
+	}, {
+		name:    "gives up after max passes",
+		find:    bundleMountPoints,
+		mounted: map[string]int{"main/rootfs": maxUnmountPasses + 1},
+		left:    map[string]int{"main/rootfs": 1},
+		wantMsg: "mounts remain",
+	}, {
+		// Only rootfs and volumes/* of each container are checked, also for
+		// containers named like bundle subdirs. link is a symlink to main.
+		name: "bundles checks only bundle mounts",
+		find: bundleMountPoints,
+		mounted: map[string]int{
+			"main/rootfs": 1, "main/volumes/agent": 1, "upper/rootfs": 1, "volumes/volumes/data": 1,
+			"main/upper": 1, "main/other": 1, "plain/rootfs/inner": 1, "link/rootfs": 1,
+		},
+		left: map[string]int{"main/upper": 1, "main/other": 1, "plain/rootfs/inner": 1, "link/rootfs": 1},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(root, "main"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("main", filepath.Join(root, "link")); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeMounts{mounted: map[string]int{}, statErr: map[string]error{}}
+			for rel, n := range tc.mounted {
+				f.mounted[filepath.Join(root, rel)] = n
+			}
+			for rel, e := range tc.statErr {
+				f.statErr[filepath.Join(root, rel)] = e
+			}
+			for _, m := range []map[string]int{tc.mounted, tc.left} {
+				for rel := range m {
+					if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			for rel := range tc.statErr {
+				if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			err = unmountAllUnder(root, f.sys(t), tc.find)
+			for _, want := range tc.wantErr {
+				if !errors.Is(err, want) {
+					t.Errorf("unmountAllUnder = %v, want %v", err, want)
+				}
+			}
+			if tc.wantMsg != "" && (err == nil || !strings.Contains(err.Error(), tc.wantMsg)) {
+				t.Errorf("unmountAllUnder = %v, want %q", err, tc.wantMsg)
+			}
+			if tc.wantErr == nil && tc.wantMsg == "" && err != nil {
+				t.Errorf("unmountAllUnder = %v, want nil", err)
+			}
+			for rel, e := range tc.statErr {
+				if tc.mounted[rel] > 0 && tc.left[rel] == 0 && errors.Is(err, e) {
+					t.Errorf("unmountAllUnder = %v, want no error for detached %s", err, rel)
+				}
+			}
+			for rel := range tc.mounted {
+				if got := f.mounted[filepath.Join(root, rel)]; got != tc.left[rel] {
+					t.Errorf("%s: %d mounts left, want %d", rel, got, tc.left[rel])
+				}
+			}
+		})
+	}
+}
+
+func TestSetupBundleRootfs_MultiBundleUnmount(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+
+	rootLayer := t.TempDir()
+	writeLayer(t, rootLayer, map[string]string{"root.txt": "root"}, nil)
+	volLayer1 := t.TempDir()
+	writeLayer(t, volLayer1, map[string]string{"vol1.txt": "vol1"}, nil)
+	volLayer2 := t.TempDir()
+	writeLayer(t, volLayer2, map[string]string{"vol.txt": "vol"}, nil)
+
+	// Containers and volumes named after bundle subdirs must still be found.
+	bundlesDir := filepath.Join(t.TempDir(), "bundles")
+	t.Cleanup(func() { _ = UnmountBundlesUnder(bundlesDir) })
+	var want []string
+	for _, c := range []string{"main", "upper", "rootfs", "volumes"} {
+		b := filepath.Join(bundlesDir, c)
+		if err := os.MkdirAll(b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		spec := &OverlaySpec{Layers: []string{rootLayer}}
+		want = append(want, filepath.Join(b, "rootfs"))
+		if c == "main" {
+			for _, v := range []string{"agent", "upper"} {
+				spec.ImageVolumes = append(spec.ImageVolumes, ImageVolumeOverlay{Name: v, Layers: []string{volLayer1, volLayer2}})
+				want = append(want, ImageVolumeMountPath(b, v))
+			}
+		}
+		if err := WriteSpec(b, spec); err != nil {
+			t.Fatalf("WriteSpec(%q): %v", b, err)
+		}
+		if err := SetupBundleRootfs(b); err != nil {
+			t.Fatalf("SetupBundleRootfs(%q): %v", b, err)
+		}
+	}
+	slices.Sort(want)
+
+	points, err := bundleMountPoints(bundlesDir, hostMountSys())
+	if err != nil {
+		t.Fatalf("bundleMountPoints(bundlesDir): %v", err)
+	}
+	if got := mountPaths(points); !slices.Equal(got, want) {
+		t.Fatalf("bundleMountPoints(bundlesDir) = %q, want %q", got, want)
+	}
+	if err := UnmountBundlesUnder(bundlesDir); err != nil {
+		t.Fatalf("UnmountBundlesUnder(bundlesDir): %v", err)
+	}
+	if points, err := mountPointsUnder(bundlesDir, hostMountSys()); err != nil || len(points) != 0 {
+		t.Errorf("after UnmountBundlesUnder: mounts %q, err %v; want none", mountPaths(points), err)
+	}
+}
+
+func TestUnmount_RealMounts(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+	// mount attaches a tmpfs at dir/rel, or binds dir/src there if src is set.
+	mount := func(t *testing.T, dir, rel, src string) {
+		target := filepath.Join(dir, rel)
+		var err error
+		if src == "" {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			err = unix.Mount("tmpfs", target, "tmpfs", 0, "")
+		} else {
+			for _, f := range []string{filepath.Join(dir, src), target} {
+				if err := os.WriteFile(f, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = unix.Mount(filepath.Join(dir, src), target, "", unix.MS_BIND, "")
+		}
+		if err != nil {
+			t.Fatalf("mount at %q: %v", target, err)
+		}
+		t.Cleanup(func() { _ = unix.Unmount(target, unix.MNT_DETACH) })
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		// found are the mounts the first walk lists, relative to dir.
+		found []string
+		// unmount runs after the walk, if set. No mount may remain after it.
+		unmount func(string) error
+	}{{
+		name: "stacked",
+		setup: func(t *testing.T, dir string) {
+			for range 3 {
+				mount(t, dir, "main/rootfs", "")
+			}
+		},
+		found:   []string{"main/rootfs"},
+		unmount: UnmountBundlesUnder,
+	}, {
+		// The mount over a hides the mount at a/b from the first walk.
+		name: "shadowed",
+		setup: func(t *testing.T, dir string) {
+			mount(t, dir, "a/b", "")
+			mount(t, dir, "a", "")
+		},
+		found:   []string{"a"},
+		unmount: UnmountAllUnder,
+	}, {
+		// runsc leaves a bind-mounted file in its state dir.
+		name:  "file bind mount",
+		setup: func(t *testing.T, dir string) { mount(t, dir, "null-netns", "netns") },
+		found: []string{"null-netns"},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.setup(t, dir)
+			points, err := mountPointsUnder(dir, hostMountSys())
+			var want []string
+			for _, rel := range tc.found {
+				want = append(want, filepath.Join(dir, rel))
+			}
+			if got := mountPaths(points); err != nil || !slices.Equal(got, want) {
+				t.Fatalf("mountPointsUnder = %q, %v; want %q", got, err, want)
+			}
+			if tc.unmount == nil {
+				return
+			}
+			if err := tc.unmount(dir); err != nil {
+				t.Fatalf("unmount: %v", err)
+			}
+			if points, err := mountPointsUnder(dir, hostMountSys()); err != nil || len(points) != 0 {
+				t.Errorf("after unmount: mounts %q, err %v; want none", mountPaths(points), err)
+			}
+		})
 	}
 }

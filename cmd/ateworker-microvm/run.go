@@ -417,7 +417,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
+			if err := imagecache.UnmountBundlesUnder(p.actorDirs.GetOciBundleDir()); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
 			}
 		}

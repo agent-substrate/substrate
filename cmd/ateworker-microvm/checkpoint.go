@@ -514,7 +514,7 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 
 	// Detach the bundle rootfs overlays composed in buildActorContainers, so
 	// atelet's bundle wipe doesn't strand live mounts in this namespace.
-	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
+	if err := imagecache.UnmountBundlesUnder(actorDirs.GetOciBundleDir()); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 		}
