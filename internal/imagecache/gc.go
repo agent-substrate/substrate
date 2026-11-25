@@ -167,11 +167,11 @@ func (s *Store) InUse() (RootSet, error) {
 }
 
 // addSpecRoots roots one bundle spec's image digests (including image volume
-// images), layers, and exact layer-set signatures.
+// images), Store layers, and exact layer-set signatures.
 func addSpecRoots(rs *RootSet, spec *OverlaySpec, bundle string, dbg bool) {
-	addImageRoots(rs, spec.ImageDigest, spec.Layers, bundle, dbg)
+	addImageRoots(rs, spec.ImageDigest, spec.StoreLayers, bundle, dbg)
 	for _, vol := range spec.ImageVolumes {
-		addImageRoots(rs, vol.ImageDigest, vol.Layers, bundle+"/volumes/"+vol.Name, dbg)
+		addImageRoots(rs, vol.ImageDigest, vol.StoreLayers, bundle+"/volumes/"+vol.Name, dbg)
 	}
 }
 

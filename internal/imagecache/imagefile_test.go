@@ -125,3 +125,21 @@ func TestImageReadFile_BoundsSize(t *testing.T) {
 		t.Errorf("ReadFile(big) err = %v, want a size error", err)
 	}
 }
+
+// ReadFile reads an image provider's rootfs as a plain directory.
+func TestImageReadFile_ProviderRootfs(t *testing.T) {
+	rootfs := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(rootfs, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootfs, "etc/passwd"), []byte("root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	img := &Image{ProviderRootfs: rootfs}
+	if got, err := img.ReadFile("/etc/passwd"); err != nil || string(got) != "root" {
+		t.Errorf("ReadFile(/etc/passwd) = %q, %v; want %q", got, err, "root")
+	}
+	if _, err := img.ReadFile("etc/group"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ReadFile(etc/group) err = %v, want fs.ErrNotExist", err)
+	}
+}
