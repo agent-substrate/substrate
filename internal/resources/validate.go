@@ -17,6 +17,7 @@ package resources
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/distribution/reference"
 	"go.ate.dev/substrate/internal/apierror"
@@ -561,6 +563,55 @@ func ValidateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
 // revision of the limit does not turn compliant drivers away. It is a
 // guardrail against unbounded input, not a contract drivers are held to.
 const csiMapMaxBytes = 40 * 1024
+
+// csiUserFieldMaxBytes is the CSI spec's 4 KiB limit for user-supplied
+// CreateVolume parameters and VolumeCapability.Mount.MountFlags.
+const csiUserFieldMaxBytes = 4 * 1024
+
+// ValidateCSIParameters checks a user-supplied CSI CreateVolume parameter map:
+// no NUL bytes in keys or values, and at most 4 KiB in total across all keys
+// and values.
+func ValidateCSIParameters(fldPath *field.Path, m map[string]string) field.ErrorList {
+	var errs field.ErrorList
+	size := 0
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		v := m[k]
+		if strings.IndexByte(k, 0) >= 0 {
+			errs = append(errs, field.Invalid(fldPath.Key(k), k, "must not contain NUL bytes"))
+		}
+		if strings.IndexByte(v, 0) >= 0 {
+			errs = append(errs, field.Invalid(fldPath.Key(k), v, "must not contain NUL bytes"))
+		}
+		size += len(k) + len(v)
+	}
+	if size > csiUserFieldMaxBytes {
+		errs = append(errs, field.TooLong(fldPath, nil, csiUserFieldMaxBytes))
+	}
+	return errs
+}
+
+// ValidateMountOptions checks CSI VolumeCapability.Mount.MountFlags: at most
+// 4 KiB in total, with no control characters or surrounding whitespace.
+func ValidateMountOptions(fldPath *field.Path, options []string) field.ErrorList {
+	var errs field.ErrorList
+	size := 0
+	for i, opt := range options {
+		if strings.TrimSpace(opt) != opt {
+			errs = append(errs, field.Invalid(fldPath.Index(i), opt, "must not have leading or trailing whitespace"))
+		}
+		for _, r := range opt {
+			if unicode.IsControl(r) {
+				errs = append(errs, field.Invalid(fldPath.Index(i), opt, "must not contain control characters"))
+				break
+			}
+		}
+		size += len(opt)
+	}
+	if size > csiUserFieldMaxBytes {
+		errs = append(errs, field.TooLong(fldPath, nil, csiUserFieldMaxBytes))
+	}
+	return errs
+}
 
 // ValidateCSIMap bounds a map a CSI driver produced (a volume or publish
 // context) at csiMapMaxBytes, counting keys and values. The entries are the

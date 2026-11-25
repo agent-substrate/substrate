@@ -2377,14 +2377,17 @@ type ExternalVolumeSource struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	PublishContext map[string]string `protobuf:"bytes,4,rep,name=publish_context,json=publishContext,proto3" json:"publish_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// mount_options from the volume's class, passed to the CSI driver as
-	// VolumeCapability.Mount.MountFlags at mount time.
+	// `mount_options` from the volume's class, passed to the CSI driver as
+	// `VolumeCapability.Mount.MountFlags` at mount time: at most 32 options of
+	// 1 to 256 bytes each, 4 KiB in total, with no control characters or
+	// surrounding whitespace.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:minLength=1
-	// +k8s:eachVal=+k8s:maxLength=256
+	// +k8s:eachVal=+k8s:maxBytes=256
+	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for mount_flags; no control characters or surrounding whitespace
 	MountOptions  []string `protobuf:"bytes,5,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

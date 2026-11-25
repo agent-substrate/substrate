@@ -1135,14 +1135,17 @@ type ExternalVolumeStatus struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// mount_options from the volume's class, passed to the CSI driver as
-	// VolumeCapability.Mount.MountFlags at mount time.
+	// `mount_options` from the volume's class, passed to the CSI driver as
+	// `VolumeCapability.Mount.MountFlags` at mount time: at most 32 options of
+	// 1 to 256 bytes each, 4 KiB in total, with no control characters or
+	// surrounding whitespace.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:minLength=1
-	// +k8s:eachVal=+k8s:maxLength=256
+	// +k8s:eachVal=+k8s:maxBytes=256
+	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for mount_flags; no control characters or surrounding whitespace
 	MountOptions  []string `protobuf:"bytes,6,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4033,17 +4036,17 @@ type ExternalVolumeTemplate struct {
 	// +k8s:required
 	// +k8s:minimum=1
 	CapacityBytes int64 `protobuf:"varint,1,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
-	// storage_class_name names the cluster-scoped Kubernetes StorageClass to
-	// create the volume from. Prefer external_volume_class.
+	// `storage_class_name` names the cluster-scoped Kubernetes StorageClass to
+	// create the volume from. Prefer `external_volume_class`.
 	//
-	// Exactly one of storage_class_name and external_volume_class must be set.
+	// Exactly one of `storage_class_name` and `external_volume_class` must be set.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
 	// +k8s:format=k8s-long-name
 	StorageClassName string `protobuf:"bytes,2,opt,name=storage_class_name,json=storageClassName,proto3" json:"storage_class_name,omitempty"`
-	// external_volume_class names the ExternalVolumeClass to create the volume
-	// from. atespace must be empty.
+	// `external_volume_class` names the ExternalVolumeClass to create the volume
+	// from. `atespace` must be empty.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
@@ -4106,7 +4109,7 @@ func (x *ExternalVolumeTemplate) GetExternalVolumeClass() *ObjectRef {
 
 // ExternalVolumeClass names the CSI driver that provisions external volumes
 // and the parameters for its CreateVolume call. Global-scoped and immutable:
-// metadata.atespace must be empty.
+// `metadata.atespace` must be empty.
 type ExternalVolumeClass struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
@@ -4114,30 +4117,39 @@ type ExternalVolumeClass struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:forbidden
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// driver_name is the CSI driver that provisions the volumes, e.g.
-	// "nfs.csi.k8s.io". It is a DNS subdomain, optionally prefixed with
-	// "substrate.io/".
+	// `driver_name` is the CSI driver that provisions the volumes, e.g.
+	// "nfs.csi.k8s.io": a DNS-1123 subdomain of at most 63 characters, as the
+	// CSI spec requires.
+	//
+	// (-- Internal volume plugins carry a `substrate.io/` prefix. --)
 	//
 	// +k8s:required
 	// +k8s:maxLength=63
 	// +k8s:format=ate-volume-type-name
 	DriverName string `protobuf:"bytes,2,opt,name=driver_name,json=driverName,proto3" json:"driver_name,omitempty"`
-	// parameters are passed unchanged to the driver's CreateVolume call. The
-	// driver defines their keys and values, so they are only bounded in size.
+	// `parameters` are passed unchanged to the driver's CSI CreateVolume call.
+	// Keys and values are the driver's own, so the map is only bounded: at most
+	// 32 entries, keys of 1 to 128 bytes, values of at most 256 bytes, 4 KiB in
+	// total, and no NUL bytes.
 	//
 	// +k8s:optional
 	// +k8s:maxProperties=32
-	// +k8s:eachKey=+k8s:maxLength=128
-	// +k8s:eachVal=+k8s:maxLength=256
+	// +k8s:eachKey=+k8s:minLength=1
+	// +k8s:eachKey=+k8s:maxBytes=128
+	// +k8s:eachVal=+k8s:maxBytes=256
+	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields; no NUL bytes
 	Parameters map[string]string `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// mount_options are passed to the CSI driver as
-	// VolumeCapability.Mount.MountFlags at mount time.
+	// `mount_options` are passed to the CSI driver as
+	// `VolumeCapability.Mount.MountFlags` at mount time: at most 32 options of
+	// 1 to 256 bytes each, 4 KiB in total, with no control characters or
+	// surrounding whitespace.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:minLength=1
-	// +k8s:eachVal=+k8s:maxLength=256
+	// +k8s:eachVal=+k8s:maxBytes=256
+	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for mount_flags; no control characters or surrounding whitespace
 	MountOptions  []string `protobuf:"bytes,4,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

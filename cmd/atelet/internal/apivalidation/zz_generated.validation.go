@@ -1433,6 +1433,10 @@ func Validate_ExternalVolumeSource(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_ExternalVolumeSource_MountOptions(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
 					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
@@ -1441,7 +1445,7 @@ func Validate_ExternalVolumeSource(
 			}
 			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+					return validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 256)
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}

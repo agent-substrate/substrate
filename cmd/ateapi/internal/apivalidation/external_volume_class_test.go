@@ -60,15 +60,71 @@ func TestValidateCreateExternalVolumeClassRequest(t *testing.T) {
 		want:            field.ErrorList{field.Forbidden(evc, "")},
 		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("driver_name"), "", 63).WithOrigin("maxLength")},
 	}, {
+		name:            "32 parameters (at bound)",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = selectorLabelsOfSize(32) },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
 		name:            "too many parameters",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = selectorLabelsOfSize(33) },
 		want:            field.ErrorList{field.Forbidden(evc, "")},
 		wantWithPreview: field.ErrorList{field.TooMany(evc.Child("parameters"), 33, 32).WithOrigin("maxProperties")},
 	}, {
-		name:            "too-long parameter value",
+		name:            "empty parameter key",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{"": "v"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooShort(evc.Child("parameters"), "", 1).WithOrigin("minLength")},
+	}, {
+		name:            "128-byte parameter key (at bound)",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{strings.Repeat("k", 128): "v"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
+		name:            "129-byte parameter key",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{strings.Repeat("k", 129): "v"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("parameters"), "", 128).WithOrigin("maxBytes")},
+	}, {
+		name:            "multi-byte parameter key over 128 bytes (65 runes, 130 bytes)",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{strings.Repeat("é", 65): "v"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("parameters"), "", 128).WithOrigin("maxBytes")},
+	}, {
+		name:            "256-byte parameter value (at bound)",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{"k": strings.Repeat("v", 256)} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
+		name:            "257-byte parameter value",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{"k": strings.Repeat("v", 257)} },
 		want:            field.ErrorList{field.Forbidden(evc, "")},
-		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("parameters").Key("k"), "", 256).WithOrigin("maxLength")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("parameters").Key("k"), "", 256).WithOrigin("maxBytes")},
+	}, {
+		name: "4096-byte parameters total (at bound)",
+		mutate: func(c *ateapi.ExternalVolumeClass) {
+			c.Parameters = make(map[string]string, 16)
+			for i := range 16 {
+				c.Parameters[strings.Repeat("a", 3)+string(rune('a'+i))] = strings.Repeat("v", 252)
+			}
+		},
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
+		name: "4097-byte parameters total",
+		mutate: func(c *ateapi.ExternalVolumeClass) {
+			c.Parameters = make(map[string]string, 17)
+			for i := range 16 {
+				c.Parameters[strings.Repeat("a", 3)+string(rune('a'+i))] = strings.Repeat("v", 252)
+			}
+			c.Parameters["z"] = ""
+		},
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("parameters"), nil, 4096)},
+	}, {
+		name:            "parameter value with NUL byte",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{"k": "v\x00x"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(evc.Child("parameters").Key("k"), nil, "")},
 	}, {
 		name:            "valid mount_options",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{"nfsvers=4.1", "noatime"} },
@@ -80,15 +136,54 @@ func TestValidateCreateExternalVolumeClassRequest(t *testing.T) {
 		want:            field.ErrorList{field.Forbidden(evc, "")},
 		wantWithPreview: field.ErrorList{field.TooShort(evc.Child("mount_options").Index(0), "", 1).WithOrigin("minLength")},
 	}, {
-		name:            "too-long mount_options item",
+		name:            "256-byte mount_options item (at bound)",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{strings.Repeat("a", 256)} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
+		name:            "257-byte mount_options item",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{strings.Repeat("a", 257)} },
 		want:            field.ErrorList{field.Forbidden(evc, "")},
-		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("mount_options").Index(0), "", 256).WithOrigin("maxLength")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("mount_options").Index(0), "", 256).WithOrigin("maxBytes")},
+	}, {
+		name:            "multi-byte mount_options item over 256 bytes",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{strings.Repeat("é", 129)} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("mount_options").Index(0), "", 256).WithOrigin("maxBytes")},
+	}, {
+		name:            "32 mount_options (at bound)",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = slices.Repeat([]string{"ro"}, 32) },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
 	}, {
 		name:            "too many mount_options",
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = slices.Repeat([]string{"ro"}, 33) },
 		want:            field.ErrorList{field.Forbidden(evc, "")},
 		wantWithPreview: field.ErrorList{field.TooMany(evc.Child("mount_options"), 33, 32).WithOrigin("maxItems")},
+	}, {
+		name: "4096-byte mount_options total (at bound)",
+		mutate: func(c *ateapi.ExternalVolumeClass) {
+			c.MountOptions = slices.Repeat([]string{strings.Repeat("a", 256)}, 16)
+		},
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
+		name: "4097-byte mount_options total",
+		mutate: func(c *ateapi.ExternalVolumeClass) {
+			c.MountOptions = append(slices.Repeat([]string{strings.Repeat("a", 256)}, 16), "x")
+		},
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("mount_options"), nil, 4096)},
+	}, {
+		name:            "mount_options with control character",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{"ro\x00"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(evc.Child("mount_options").Index(0), nil, "")},
+	}, {
+		name:            "mount_options with surrounding whitespace",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{" ro"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.Invalid(evc.Child("mount_options").Index(0), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

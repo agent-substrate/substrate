@@ -4191,15 +4191,25 @@ func Validate_ExternalVolumeClass(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_ExternalVolumeClass_Parameters(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 128)
+					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 128)
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+					return validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 256)
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}
@@ -4235,6 +4245,10 @@ func Validate_ExternalVolumeClass(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_ExternalVolumeClass_MountOptions(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
 					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
@@ -4243,7 +4257,7 @@ func Validate_ExternalVolumeClass(
 			}
 			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+					return validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 256)
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}
@@ -4489,6 +4503,10 @@ func Validate_ExternalVolumeStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_ExternalVolumeStatus_MountOptions(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
 					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
@@ -4497,7 +4515,7 @@ func Validate_ExternalVolumeStatus(
 			}
 			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+					return validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 256)
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}

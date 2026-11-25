@@ -962,13 +962,42 @@ func TestValidateExternalVolume(t *testing.T) {
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{""} }),
 		want: field.ErrorList{field.TooShort(field.NewPath("mount_options").Index(0), "", 1).WithOrigin("minLength")},
 	}, {
-		name: "too-long mount_options item",
+		name: "256-byte mount_options item (at bound)",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{strings.Repeat("a", 256)} }),
+	}, {
+		name: "257-byte mount_options item",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{strings.Repeat("a", 257)} }),
-		want: field.ErrorList{field.TooLong(field.NewPath("mount_options").Index(0), "", 256).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(field.NewPath("mount_options").Index(0), "", 256).WithOrigin("maxBytes")},
+	}, {
+		name: "multi-byte mount_options item over 256 bytes",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{strings.Repeat("é", 129)} }),
+		want: field.ErrorList{field.TooLong(field.NewPath("mount_options").Index(0), "", 256).WithOrigin("maxBytes")},
+	}, {
+		name: "32 mount_options (at bound)",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = slices.Repeat([]string{"ro"}, 32) }),
 	}, {
 		name: "too many mount_options",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = slices.Repeat([]string{"ro"}, 33) }),
 		want: field.ErrorList{field.TooMany(field.NewPath("mount_options"), 33, 32).WithOrigin("maxItems")},
+	}, {
+		name: "4096-byte mount_options total (at bound)",
+		obj: valid(func(v *ateapi.ExternalVolumeStatus) {
+			v.MountOptions = slices.Repeat([]string{strings.Repeat("a", 256)}, 16)
+		}),
+	}, {
+		name: "4097-byte mount_options total",
+		obj: valid(func(v *ateapi.ExternalVolumeStatus) {
+			v.MountOptions = append(slices.Repeat([]string{strings.Repeat("a", 256)}, 16), "x")
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("mount_options"), nil, 4096)},
+	}, {
+		name: "mount_options with control character",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{"ro\x00"} }),
+		want: field.ErrorList{field.Invalid(field.NewPath("mount_options").Index(0), nil, "")},
+	}, {
+		name: "mount_options with surrounding whitespace",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{"ro "} }),
+		want: field.ErrorList{field.Invalid(field.NewPath("mount_options").Index(0), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
