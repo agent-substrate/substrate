@@ -13,7 +13,9 @@ description: >
 Deploy the Agent Substrate control plane and the stateful **Counter** sample application on a local [kind](https://kind.sigs.k8s.io/) cluster.
 
 > [!NOTE]
-> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go). A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
+> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go).
+> The source install below requires Docker Buildx. Run `docker buildx version` to check that it is available.
+> A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
 ## 1. Clone the repository
 
@@ -90,7 +92,23 @@ With `kubectl ate proxy actor` running in your first terminal, open a **second t
 curl -X POST -i http://localhost:8000/
 ```
 
-Run the `curl` command several times—each request routes to `my-counter-1` and increments its stateful in-memory counter. When the actor becomes idle, Substrate checkpoints its memory and filesystem state to storage and releases the worker Pod; the next `curl` request automatically resumes the actor in under 500ms with its counter state intact.
+Run the `curl` command several times. Each request routes to `my-counter-1` and increments its in-memory counter.
+
+Suspend the actor explicitly to save its memory and filesystem state and release its worker capacity:
+
+```bash
+kubectl ate suspend actor my-counter-1 -a ate-demo-counter
+kubectl ate get actor my-counter-1 -a ate-demo-counter
+```
+
+The suspend command returns after the actor reaches `SUSPENDED`; its snapshot
+upload continues in the background. Send another request to resume it:
+
+```bash
+curl -X POST -i http://localhost:8000/
+```
+
+The counter continues from its saved value.
 
 > [!TIP]
 > **Running on Google Kubernetes Engine (GKE)?** Follow the official [GKE Installation Guide](https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate).
