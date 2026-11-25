@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 const gpuResourceName = corev1.ResourceName("nvidia.com/gpu")
@@ -119,6 +120,19 @@ func TestWorkerPoolValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "spec.sandboxClasses[0].name: Unsupported value",
+	}, {
+		name: "microvm pool allows privileged actors",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM, AllowPrivilegedActors: ptr.To(true)}}
+		},
+		wantErr: false,
+	}, {
+		name: "gvisor pool cannot allow privileged actors",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassGvisor, AllowPrivilegedActors: ptr.To(true)}}
+		},
+		wantErr: true,
+		errMsg:  "allowPrivilegedActors requires the microvm sandbox class",
 	}, {
 		name: "sandboxClass with configRef",
 		mutate: func(wp *WorkerPool) {

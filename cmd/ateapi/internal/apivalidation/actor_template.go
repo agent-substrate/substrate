@@ -163,3 +163,9 @@ func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, f
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return resources.ValidateDropCapabilities(fldPath, value)
 }
+
+// ValidateCustom_Container_SecurityContext rejects capabilities next to
+// privileged: a privileged container gets every capability.
+func ValidateCustom_Container_SecurityContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.SecurityContext) field.ErrorList {
+	return resources.ValidatePrivilegedSecurityContext(fldPath, value.GetPrivileged(), value.GetCapabilities().GetAdd(), value.GetCapabilities().GetDrop())
+}

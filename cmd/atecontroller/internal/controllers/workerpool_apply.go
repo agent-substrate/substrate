@@ -24,6 +24,7 @@ import (
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	"k8s.io/utils/ptr"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/deviceplugin"
@@ -160,6 +161,9 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 	}
 	previewArg := "--preview=" + strings.Join(enabledGates, ",")
 	args = append(args, previewArg)
+	if allowsPrivilegedActors(wp) {
+		args = append(args, "--allow-privileged-actors")
+	}
 
 	containerAC := corev1ac.Container().
 		WithName("worker").
@@ -697,4 +701,17 @@ func nodeSelectorRequirementToApply(req *corev1.NodeSelectorRequirement) *corev1
 		ac.WithValues(req.Values...)
 	}
 	return ac
+}
+
+// allowsPrivilegedActors reports whether the pool opts its microvm workers in
+// to privileged actors. The CRD rejects the field on other classes; this
+// checks the class again so a stale or hand-edited object cannot pass the
+// flag to a gVisor worker.
+func allowsPrivilegedActors(wp *atev1.WorkerPool) bool {
+	for _, c := range wp.Spec.SandboxClasses {
+		if c.Name == atev1.SandboxClassMicroVM && ptr.Deref(c.AllowPrivilegedActors, false) {
+			return true
+		}
+	}
+	return false
 }

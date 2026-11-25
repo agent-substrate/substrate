@@ -888,7 +888,12 @@ type ContainerSpec struct {
 	// /etc/passwd and /etc/group. Unset is root.
 	User *ProcessUser `protobuf:"bytes,5,opt,name=user,proto3" json:"user,omitempty"`
 	// cwd is the process working directory, the image's WORKDIR. Empty is "/".
-	Cwd           string `protobuf:"bytes,6,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Cwd string `protobuf:"bytes,6,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	// privileged is the template's securityContext.privileged. capabilities
+	// then hold the full set. Only a microvm worker started with
+	// --allow-privileged-actors accepts it; it shapes the guest container
+	// without the default hardening (see ocispec.ShapeMicroVM).
+	Privileged    bool `protobuf:"varint,7,opt,name=privileged,proto3" json:"privileged,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -963,6 +968,13 @@ func (x *ContainerSpec) GetCwd() string {
 		return x.Cwd
 	}
 	return ""
+}
+
+func (x *ContainerSpec) GetPrivileged() bool {
+	if x != nil {
+		return x.Privileged
+	}
+	return false
 }
 
 // ProcessUser is a resolved process identity.
@@ -2227,14 +2239,17 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x16external_volume_mounts\x18\x04 \x03(\v2\x16.ateworker.VolumeMountR\x14externalVolumeMounts\x12Q\n" +
 	"\x19system_info_volume_mounts\x18\x05 \x03(\v2\x16.ateworker.VolumeMountR\x16systemInfoVolumeMounts\x12F\n" +
 	"\x13image_volume_mounts\x18\x06 \x03(\v2\x16.ateworker.VolumeMountR\x11imageVolumeMounts\x12?\n" +
-	"\x0econtainer_spec\x18\a \x01(\v2\x18.ateworker.ContainerSpecR\rcontainerSpec\"\xdb\x01\n" +
+	"\x0econtainer_spec\x18\a \x01(\v2\x18.ateworker.ContainerSpecR\rcontainerSpec\"\xfb\x01\n" +
 	"\rContainerSpec\x12\x12\n" +
 	"\x04args\x18\x01 \x03(\tR\x04args\x12\x15\n" +
 	"\x03env\x18\x02 \x03(\tB\x03\x80\x01\x01R\x03env\x12\"\n" +
 	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\x12=\n" +
 	"\tresources\x18\x04 \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x12*\n" +
 	"\x04user\x18\x05 \x01(\v2\x16.ateworker.ProcessUserR\x04user\x12\x10\n" +
-	"\x03cwd\x18\x06 \x01(\tR\x03cwd\"Z\n" +
+	"\x03cwd\x18\x06 \x01(\tR\x03cwd\x12\x1e\n" +
+	"\n" +
+	"privileged\x18\a \x01(\bR\n" +
+	"privileged\"Z\n" +
 	"\vProcessUser\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x10\n" +
 	"\x03gid\x18\x02 \x01(\rR\x03gid\x12'\n" +

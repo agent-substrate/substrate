@@ -852,6 +852,7 @@ message Container {
   repeated VolumeMount volume_mounts = 6;
 
   // +k8s:optional
+  // +k8s:customValidation # capabilities must be unset when privileged
   SecurityContext security_context = 8;
 
   // resources are the cgroup limits for this container, from the
@@ -865,6 +866,11 @@ message Container {
 message SecurityContext {
   // +k8s:optional
   Capabilities capabilities = 1;
+
+  // privileged mirrors ateapi.SecurityContext.privileged.
+  //
+  // +k8s:optional
+  bool privileged = 2;
 }
 
 // Capabilities adjusts a container's Linux capabilities relative to the default

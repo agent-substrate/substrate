@@ -711,6 +711,17 @@ func TestValidateActorTemplate(t *testing.T) {
 			}}
 		},
 	}, {
+		name: "privileged container",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Privileged: true}
+		},
+	}, {
+		name: "privileged rejects capabilities",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Privileged: true, Capabilities: &ateapi.Capabilities{Drop: []string{"ALL"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities"), nil, "")},
+	}, {
 		name: "capabilities add rejects ALL",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{Add: []string{"ALL"}}}

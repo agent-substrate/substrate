@@ -30,6 +30,8 @@ import (
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/sizing"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type runsc struct {
@@ -121,6 +123,11 @@ func (r *runsc) writeSpec(containerName string) error {
 		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {
 			return fmt.Errorf("container %q is not in the workload spec", containerName)
+		}
+		if r.containers[i].GetContainerSpec().GetPrivileged() {
+			// The privileged shape relies on a VM boundary; gVisor shares the
+			// host kernel through runsc, so it never runs one.
+			return status.Errorf(codes.FailedPrecondition, "container %q is privileged; only microvm workers run privileged containers", containerName)
 		}
 		spec = ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: r.containers[i]})
 	}
