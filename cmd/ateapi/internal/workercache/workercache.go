@@ -46,6 +46,11 @@ type Cache struct {
 	workers  map[string]*ateapi.Worker
 	handlers []func(*ateapi.Worker)
 
+	// snapshot caches the slice Workers returns. Workers stores it under
+	// mu.RLock and writers clear it under mu.Lock, so a write is never hidden
+	// by a snapshot built before it.
+	snapshot atomic.Pointer[[]*ateapi.Worker]
+
 	ready atomic.Bool
 }
 
@@ -107,13 +112,16 @@ func (c *Cache) Start(ctx context.Context) error {
 	return nil
 }
 
-// Workers returns a snapshot of all currently known workers. The returned
-// slice and its elements must not be modified by the caller. Returns an error
-// if the cache is not ready (brief window during reconnect); callers are
-// expected to retry.
+// Workers returns a snapshot of all currently known workers. Calls between
+// two writes share the same slice, so the caller must not modify the slice or
+// its elements. Returns an error if the cache is not ready (brief window
+// during reconnect); callers are expected to retry.
 func (c *Cache) Workers() ([]*ateapi.Worker, error) {
 	if !c.ready.Load() {
 		return nil, fmt.Errorf("worker cache not ready")
+	}
+	if s := c.snapshot.Load(); s != nil {
+		return *s, nil
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -121,6 +129,7 @@ func (c *Cache) Workers() ([]*ateapi.Worker, error) {
 	for _, w := range c.workers {
 		out = append(out, w)
 	}
+	c.snapshot.Store(&out)
 	return out, nil
 }
 
@@ -146,6 +155,7 @@ func (c *Cache) Forget(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.workers, name)
+	c.snapshot.Store(nil)
 }
 
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
@@ -187,6 +197,7 @@ func (c *Cache) relist(ctx context.Context) error {
 		}
 	}
 	c.workers = newMap
+	c.snapshot.Store(nil)
 	handlers := c.handlers
 	c.mu.Unlock()
 	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)), slog.Int("changed", len(changed)))
@@ -254,10 +265,12 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 	switch event.Type {
 	case store.WorkerEventDeleted:
 		delete(c.workers, key)
+		c.snapshot.Store(nil)
 	case store.WorkerEventCreated, store.WorkerEventUpdated:
 		existing, ok := c.workers[key]
 		if !ok || event.Worker.GetMetadata().GetVersion() >= existing.GetMetadata().GetVersion() {
 			c.workers[key] = event.Worker
+			c.snapshot.Store(nil)
 			handlers = c.handlers
 		}
 	}

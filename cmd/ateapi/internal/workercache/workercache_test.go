@@ -88,6 +88,11 @@ func TestCache_CreatedEvent(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
+	// Build the snapshot so the event has to clear it.
+	if _, err := c.Workers(); err != nil {
+		t.Fatalf("Workers: %v", err)
+	}
+
 	w := makeWorker("ns", "pod1", 1)
 	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: w})
 
@@ -110,6 +115,11 @@ func TestCache_UpdatedEvent_NewerVersionApplied(t *testing.T) {
 
 	if err := c.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+
+	// Build the snapshot so the event has to clear it.
+	if _, err := c.Workers(); err != nil {
+		t.Fatalf("Workers: %v", err)
 	}
 
 	updated := makeWorker("ns", "pod1", 2)
@@ -170,6 +180,11 @@ func TestCache_DeletedEvent(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
+	// Build the snapshot so the event has to clear it.
+	if _, err := c.Workers(); err != nil {
+		t.Fatalf("Workers: %v", err)
+	}
+
 	// Delete events carry only the name.
 	fs.send(store.WorkerEvent{
 		Type:   store.WorkerEventDeleted,
@@ -180,6 +195,22 @@ func TestCache_DeletedEvent(t *testing.T) {
 		workers, err := c.Workers()
 		return err == nil && len(workers) == 0
 	}, 2*time.Second)
+}
+
+func TestCache_Forget(t *testing.T) {
+	c := workercache.New(newFakeStore(makeWorker("ns", "pod1", 1)), time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if workers, err := c.Workers(); err != nil || len(workers) != 1 {
+		t.Fatalf("Workers() = %d workers, %v; want 1, nil", len(workers), err)
+	}
+
+	c.Forget(workerName("ns", "pod1"))
+
+	if workers, err := c.Workers(); err != nil || len(workers) != 0 {
+		t.Fatalf("Workers() after Forget = %d workers, %v; want 0, nil", len(workers), err)
+	}
 }
 
 func TestCache_Disconnect_ResyncsWithFreshSnapshot(t *testing.T) {
