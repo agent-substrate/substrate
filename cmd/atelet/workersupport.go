@@ -290,7 +290,9 @@ func (s *workerSupportServer) RequestActorSuspend(ctx context.Context, req *atel
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
 		},
-		ActorUid: req.GetActorUid(),
+		ActorUid:     req.GetActorUid(),
+		Options:      toControlSuspendOptions(req.GetOptions()),
+		ExecutionUid: req.GetExecutionUid(),
 	}); err != nil {
 		return nil, err
 	}
@@ -300,6 +302,22 @@ func (s *workerSupportServer) RequestActorSuspend(ctx context.Context, req *atel
 		slog.String("actor_name", req.GetActorName()),
 		slog.String("actor_uid", req.GetActorUid()))
 	return &ateletpb.RequestActorSuspendResponse{}, nil
+}
+
+// toControlSuspendOptions converts a worker's suspend options for the control
+// plane. Nil stays nil, so a request without options does not carry the field.
+func toControlSuspendOptions(in *ateletpb.SuspendOptions) *ateapi.SuspendOptions {
+	if in == nil {
+		return nil
+	}
+	out := &ateapi.SuspendOptions{}
+	switch in.GetMode() {
+	case ateletpb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS:
+		out.Mode = ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+	case ateletpb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS:
+		out.Mode = ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	}
+	return out
 }
 
 // GetActorEgressPolicy reads the egress policy of an actor.

@@ -2968,6 +2968,21 @@ message RequestActorSuspendRequest {
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
+
+  // options controls how the suspend persists the Actor's snapshot, as for
+  // Control.SuspendActor.
+  //
+  // +k8s:optional
+  SuspendOptions options = 4;
+
+  // execution_uid identifies the execution the Worker believes it is hosting.
+  // If it and the Actor's status.worker_assignment.actor_execution_uid are
+  // both set and differ when the request arrives, the request gets
+  // FailedPrecondition.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 5;
 }
 
 message RequestActorSuspendResponse {

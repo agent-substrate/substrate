@@ -319,9 +319,42 @@ message RequestActorSuspendRequest {
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
+
+  // How the suspend persists the actor's snapshot. atelet forwards it to the
+  // control plane.
+  //
+  // +k8s:optional
+  SuspendOptions options = 4;
+
+  // The API server-assigned identity of the execution making the request, as
+  // for ReportActorCrashed. atelet forwards it to the control plane.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 5;
 }
 
 message RequestActorSuspendResponse {
+}
+
+// SuspendOptions mirrors the control plane's SuspendOptions.
+message SuspendOptions {
+  // If unspecified, the control plane's default applies.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the DurabilityMode enum
+  DurabilityMode mode = 1;
+}
+
+// DurabilityMode mirrors the control plane's DurabilityMode.
+enum DurabilityMode {
+  DURABILITY_MODE_UNSPECIFIED = 0;
+  // Acknowledge only after the snapshot is complete in durable storage.
+  DURABILITY_MODE_SYNCHRONOUS = 1;
+  // Acknowledge once the snapshot is captured on the node.
+  DURABILITY_MODE_ASYNCHRONOUS = 2;
+  // Keep this in sync with SuspendOptions.mode's maximum.
 }
 
 message ReportActorCrashedRequest {

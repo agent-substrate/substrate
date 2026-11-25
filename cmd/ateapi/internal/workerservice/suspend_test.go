@@ -39,16 +39,24 @@ const (
 // assignment at all, which is how a SUSPENDED or CRASHED one looks.
 func seedHostedActor(t *testing.T, st store.Interface, workerName string) *ateapi.Actor {
 	t.Helper()
+	return seedHostedExecution(t, st, workerName, "")
+}
+
+// seedHostedExecution is seedHostedActor with the assignment's
+// actor_execution_uid set to executionUID.
+func seedHostedExecution(t *testing.T, st store.Interface, workerName, executionUID string) *ateapi.Actor {
+	t.Helper()
 	actorStatus := &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
 	if workerName != "" {
 		actorStatus = &ateapi.ActorStatus{
 			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
 			WorkerAssignment: &ateapi.WorkerAssignment{
-				Worker:          &ateapi.ObjectRef{Name: workerName},
-				WorkerNamespace: "ate-system",
-				WorkerPool:      "pool-1",
-				WorkerPod:       "worker-pod-1",
-				WorkerPodUid:    workerName,
+				Worker:            &ateapi.ObjectRef{Name: workerName},
+				WorkerNamespace:   "ate-system",
+				WorkerPool:        "pool-1",
+				WorkerPod:         "worker-pod-1",
+				WorkerPodUid:      workerName,
+				ActorExecutionUid: executionUID,
 			},
 		}
 	}
@@ -80,14 +88,17 @@ func TestRequestActorSuspend(t *testing.T) {
 	control := &fakeControl{resp: &ateapi.SuspendActorResponse{Actor: suspended}}
 	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
+	options := &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}
+	req := suspendRequest(actor.GetMetadata().GetUid())
+	req.Options = options
 	got, err := s.RequestActorSuspend(
-		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),
-		suspendRequest(actor.GetMetadata().GetUid()))
+		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), req)
 	if err != nil {
 		t.Fatalf("RequestActorSuspend() failed: %v", err)
 	}
 	want := []*ateapi.SuspendActorRequest{{
-		Actor: &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		Actor:   &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		Options: options,
 	}}
 	if diff := cmp.Diff(want, control.calls, protocmp.Transform()); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
@@ -96,6 +107,48 @@ func TestRequestActorSuspend(t *testing.T) {
 	// whether the suspend it asked for actually happened.
 	if diff := cmp.Diff(suspended, got.GetActor(), protocmp.Transform()); diff != "" {
 		t.Errorf("returned actor mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A request from one execution must not suspend a later one. An empty UID on
+// either side is not compared.
+func TestRequestActorSuspend_ExecutionUID(t *testing.T) {
+	const (
+		current = "6f1c0d2e-8a3b-4c5d-9e7f-0a1b2c3d4e5f"
+		stale   = "0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b"
+	)
+	tests := []struct {
+		name      string
+		stored    string
+		requested string
+		want      codes.Code
+	}{
+		{name: "same execution", stored: current, requested: current, want: codes.OK},
+		{name: "stale execution", stored: current, requested: stale, want: codes.FailedPrecondition},
+		{name: "request without uid", stored: current, want: codes.OK},
+		{name: "assignment without uid", requested: current, want: codes.OK},
+		{name: "neither has a uid", want: codes.OK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			seedReportedWorker(t, st, testNode, &ateapi.WorkerResources{Actors: 1})
+			actor := seedHostedExecution(t, st, testWorkerName, tc.stored)
+			control := &fakeControl{resp: &ateapi.SuspendActorResponse{Actor: actor}}
+			s := New(st, control, testAteletSPIFFEID, nil, "", nil)
+
+			req := suspendRequest(actor.GetMetadata().GetUid())
+			req.ExecutionUid = tc.requested
+			_, err := s.RequestActorSuspend(
+				ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), req)
+			if got := apierror.Code(err); got != tc.want {
+				t.Fatalf("code = %v (err %v), want %v", got, err, tc.want)
+			}
+			if wantCalls := tc.want == codes.OK; (len(control.calls) == 1) != wantCalls {
+				t.Errorf("suspend calls = %v, want a call: %v", control.calls, wantCalls)
+			}
+		})
 	}
 }
 
@@ -184,6 +237,18 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 		// and suspend whatever took its name, so an absent one is refused
 		// rather than treated as "whichever is there now".
 		{"no actor uid", authed, suspendRequest(""), codes.InvalidArgument},
+		{"unknown durability mode", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:   &ateapi.ObjectRef{Name: testWorkerName},
+			Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+			ActorUid: uid,
+			Options:  &ateapi.SuspendOptions{Mode: 3},
+		}, codes.InvalidArgument},
+		{"malformed execution uid", authed, &ateapi.RequestActorSuspendRequest{
+			Worker:       &ateapi.ObjectRef{Name: testWorkerName},
+			Actor:        &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+			ActorUid:     uid,
+			ExecutionUid: "not-a-uuid",
+		}, codes.InvalidArgument},
 		{"absent worker", authed, &ateapi.RequestActorSuspendRequest{
 			Worker:   &ateapi.ObjectRef{Name: "5c7e2a91-3d4b-4f60-8a1c-2e9b7d0f4a63"},
 			Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
