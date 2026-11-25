@@ -53,6 +53,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -411,9 +412,8 @@ func nowSec() float64 {
 	return float64(time.Now().UnixNano()) / 1e9
 }
 
-// giveTask picks a random task + idle agent (or any agent if all have active
-// assignments) and records the assignment. Returns non-empty error string if no
-// agents exist in the namespace.
+// giveTask picks a random task and prefers idle agents. At capacity it evicts
+// the oldest completed assignment or rejects the task if all are active.
 func giveTask(ctx context.Context) (*assignment, string) {
 	agents := listActorNames(ctx)
 	if len(agents) == 0 {
@@ -425,10 +425,19 @@ func giveTask(ctx context.Context) (*assignment, string) {
 	defer mu.Unlock()
 
 	busy := make(map[string]bool, len(agents))
-	for _, a := range assignments {
-		if st := computeState(a); st == stateQueued || st == stateRunning {
+	oldestCompleted := -1
+	for i, a := range assignments {
+		if computeState(a) == stateCompleted {
+			oldestCompleted = i
+		} else {
 			busy[a.Agent] = true
 		}
+	}
+	if len(assignments) == maxAssignments {
+		if oldestCompleted == -1 {
+			return nil, "task queue is full. Wait for a task to complete and try again."
+		}
+		assignments = slices.Delete(assignments, oldestCompleted, oldestCompleted+1)
 	}
 	candidates := make([]string, 0, len(agents))
 	for _, name := range agents {
@@ -449,11 +458,9 @@ func giveTask(ctx context.Context) (*assignment, string) {
 		QueueFor:  roundOne(2.0 + rand.Float64()*3.0), // 2.0–5.0
 		RunFor:    roundOne(9.0 + rand.Float64()*7.0), // 9.0–16.0
 	}
-	assignments = append([]*assignment{asg}, assignments...)
-	if len(assignments) > maxAssignments {
-		assignments = assignments[:maxAssignments]
-	}
-	return asg, ""
+	assignments = slices.Insert(assignments, 0, asg)
+	snapshot := *asg
+	return &snapshot, ""
 }
 
 func roundOne(v float64) float64 {
