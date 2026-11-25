@@ -57,20 +57,30 @@ func (s *AteWorkerService) throttleSandboxMemory(ctx context.Context, hosted *ho
 // the host's RAM, and no watch.
 // https://github.com/google/gvisor/blob/0068142bdeb9de91fe72bf9794204de6dec92cb4/runsc/cgroup/cgroup_v2.go#L138-L153
 func (s *AteWorkerService) removeStaleSandboxLeaf(ctx context.Context, actorUID string) error {
-	dir := s.sandboxLeaf(actorUID)
+	return s.removeContainerLeaf(ctx, actorUID, sandboxCgroupContainer)
+}
+
+// removeContainerLeaf kills what is left in the cgroup leaf of one of the
+// actor's runsc containers and removes the leaf.
+func (s *AteWorkerService) removeContainerLeaf(ctx context.Context, actorUID, containerName string) error {
+	dir := s.containerLeaf(actorUID, containerName)
 	killCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := cgroup.KillLeafUnder(killCtx, s.cgroupRoot, filepath.Base(dir)); err != nil {
-		return fmt.Errorf("while clearing a leftover sandbox cgroup: %w", err)
+		return fmt.Errorf("while clearing leftover cgroup %q: %w", dir, err)
 	}
 	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("while removing leftover sandbox cgroup %q: %w", dir, err)
+		return fmt.Errorf("while removing leftover cgroup %q: %w", dir, err)
 	}
 	return nil
 }
 
 func (s *AteWorkerService) sandboxLeaf(actorUID string) string {
-	return filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(actorUID, sandboxCgroupContainer))
+	return s.containerLeaf(actorUID, sandboxCgroupContainer)
+}
+
+func (s *AteWorkerService) containerLeaf(actorUID, containerName string) string {
+	return filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(actorUID, containerName))
 }
 
 // swapMemoryMaxForHigh returns the limit it moved, or 0 if the leaf has none.
