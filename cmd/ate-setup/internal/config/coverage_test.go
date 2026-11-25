@@ -108,6 +108,8 @@ func valueFor(key string) string {
 		return "none"
 	case "preview":
 		return "ALL"
+	case "atelet.tolerations":
+		return `[{"key":"k","operator":"Exists"}]`
 	}
 	return "set"
 }

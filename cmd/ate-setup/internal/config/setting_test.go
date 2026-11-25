@@ -224,6 +224,9 @@ func TestSettingParse(t *testing.T) {
 		{name: "int rejects a second number", kind: KindInt, raw: "12 34", wantErr: true},
 		{name: "duration", kind: KindDuration, raw: "90s", want: 90 * time.Second},
 		{name: "duration rejects bare number", kind: KindDuration, raw: "90", wantErr: true},
+		{name: "json", kind: KindJSON, raw: `[{"key":"a"}]`, want: `[{"key":"a"}]`},
+		{name: "json empty", kind: KindJSON, raw: "", want: ""},
+		{name: "json rejects other", kind: KindJSON, raw: "a=b:NoSchedule", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := Setting{Key: "test.key", Kind: tc.kind}

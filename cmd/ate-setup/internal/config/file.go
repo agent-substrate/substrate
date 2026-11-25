@@ -15,6 +15,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -196,6 +197,18 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 			continue
 		}
 
+		if s, ok := Lookup(key); ok && s.Kind == KindJSON && value.Kind != yaml.ScalarNode {
+			raw, err := nodeJSON(value)
+			if err != nil {
+				return fmt.Errorf("setting %q: %w", key, err)
+			}
+			if _, dup := out[key]; dup {
+				return fmt.Errorf("setting %q is set twice", key)
+			}
+			out[key] = raw
+			continue
+		}
+
 		switch value.Kind {
 		case yaml.MappingNode:
 			if err := flatten(key, value, out); err != nil {
@@ -203,7 +216,7 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 			}
 			continue
 		case yaml.SequenceNode:
-			return fmt.Errorf("setting %q is a list; no setting takes a list", key)
+			return fmt.Errorf("setting %q is a list; only a JSON setting takes a list", key)
 		case yaml.ScalarNode:
 		default:
 			return fmt.Errorf("setting %q has an unsupported value", key)
@@ -219,6 +232,20 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 		out[key] = value.Value
 	}
 	return nil
+}
+
+// nodeJSON encodes a YAML value as JSON, so a JSON setting carries the same
+// text from the file as from its flag or environment variable.
+func nodeJSON(node *yaml.Node) (string, error) {
+	var v any
+	if err := node.Decode(&v); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func quoteAll(in []string) []string {

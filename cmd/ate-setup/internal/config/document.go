@@ -15,6 +15,7 @@
 package config
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,7 +106,8 @@ func (d *Document) Keys() []string {
 // Marshal renders the document, nesting the dotted keys so the result is
 // ordinary --config input rather than a second format.
 //
-// Scalars are written in their declared kind: a count reads as 7, not "7".
+// Values are written in their declared kind: a count reads as 7, not "7",
+// and a JSON setting as YAML.
 // ParseFile accepts either, but a document an operator edits should look like
 // the example in the documentation.
 func (d *Document) Marshal() ([]byte, error) {
@@ -137,6 +139,12 @@ func scalar(v Value) any {
 			return v.Raw
 		}
 		return n
+	case KindJSON:
+		var out any
+		if err := json.Unmarshal([]byte(v.Raw), &out); err != nil {
+			return v.Raw
+		}
+		return out
 	default:
 		return v.Raw
 	}

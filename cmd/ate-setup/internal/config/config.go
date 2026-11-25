@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
@@ -248,6 +249,10 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+
+	// AteletTolerations are added to the tolerations the atelet DaemonSet
+	// already carries (ATE_ATELET_TOLERATIONS).
+	AteletTolerations []corev1.Toleration
 
 	// PreviewGates is the --preview value (ATE_PREVIEW) every substrate
 	// component is deployed with: gate names, or "ALL" for all of them.

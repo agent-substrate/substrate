@@ -149,6 +149,8 @@ func kindDescription(k ValueKind) string {
 		return "an integer"
 	case KindDuration:
 		return "a duration such as 60s or 5m"
+	case KindJSON:
+		return "JSON"
 	default:
 		return "a string"
 	}

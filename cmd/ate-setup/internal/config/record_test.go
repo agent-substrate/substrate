@@ -63,6 +63,34 @@ func TestRecordRoundTripsThroughConfig(t *testing.T) {
 	}
 }
 
+// A record writes a JSON setting as YAML, so it reads like a hand-written
+// configuration, and reading it back yields the same value.
+func TestRecordWritesAJSONSettingAsYAML(t *testing.T) {
+	const raw = `[{"effect":"NoSchedule","key":"session-size","operator":"Exists"}]`
+	r, err := Resolve(nil, ResolveOptions{Env: map[string]string{"ATE_ATELET_TOLERATIONS": raw}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	path, _, err := RecordSuccess(t.TempDir(), "prod", "", r)
+	if err != nil {
+		t.Fatalf("RecordSuccess() error = %v", err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "  tolerations:\n  - effect: NoSchedule\n"; !strings.Contains(string(written), want) {
+		t.Errorf("record does not contain %q:\n%s", want, written)
+	}
+	f, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile() error = %v", err)
+	}
+	if got, _ := f.Get("atelet.tolerations"); got != raw {
+		t.Errorf("Get(atelet.tolerations) = %s, want %s", got, raw)
+	}
+}
+
 // A record has to reproduce the run that wrote it. An empty flag is the case
 // that breaks it: it resolves as supplied, so the record names the setting
 // with an empty value, and reading that back resolves to the default instead.

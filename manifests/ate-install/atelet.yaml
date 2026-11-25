@@ -157,6 +157,7 @@ spec:
       # the matching toleration to every pool's worker pods. Tolerating the key
       # with operator: Exists covers any current or future sandbox class value
       # without needing another manifest edit.
+      # ate-setup appends the tolerations in its atelet.tolerations setting.
       tolerations:
       - key: ate.dev/sandboxClass
         operator: Exists
