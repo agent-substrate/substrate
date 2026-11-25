@@ -23,6 +23,9 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
+// AteletBasePath is the owner-only host directory that only atelet mounts.
+const AteletBasePath = "/var/lib/atelet"
+
 var (
 	// ImageCacheDir is the node-local OCI image layer cache (see
 	// internal/imagecache). It lives under BasePath so the cached layer
@@ -61,7 +64,11 @@ var (
 	// CacheBootIDFile records the boot ID of the boot that last wrote atelet's
 	// caches. atelet clears them at startup when the node has rebooted since
 	// (see clearCachesAfterReboot in package main).
-	CacheBootIDFile = filepath.Join(nodepath.BasePath, "cache-boot-id")
+	CacheBootIDFile = filepath.Join(AteletBasePath, "cache-boot-id")
+
+	// LegacyCacheBootIDFile is where earlier releases keep the cache boot ID.
+	// atelet keeps it current for a rollback.
+	LegacyCacheBootIDFile = filepath.Join(nodepath.BasePath, "cache-boot-id")
 
 	// SnapshotCacheDir is the node-local cache of shared snapshot files, the
 	// snapshots many actors are created from (see

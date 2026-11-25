@@ -270,7 +270,10 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
 	}
-	cleared, err := clearCachesAfterReboot(bootID, ateletpath.CacheBootIDFile, nodepath.ActorsDir, nodepath.WorkersDir(),
+	if err := prepareAteletBasePath(ateletpath.AteletBasePath); err != nil {
+		serverboot.Fatal(ctx, "Failed to prepare atelet's base path", err)
+	}
+	cleared, err := clearCachesAfterReboot(bootID, ateletpath.CacheBootIDFile, ateletpath.LegacyCacheBootIDFile, nodepath.ActorsDir, nodepath.WorkersDir(),
 		*imageCacheDir, *sandboxAssetCacheDir, *snapshotCacheDir)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to clear the caches after a reboot", err)

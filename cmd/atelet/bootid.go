@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/safefs"
 )
 
 // localSnapshotBootCheck returns the snapshot tracker's check of whether an
@@ -43,9 +45,10 @@ func localSnapshotBootCheck(bootID string) func(actorUID, snapshotUUID string) b
 }
 
 // clearCachesAfterReboot empties each of cacheDirs, and removes every actor's
-// OCI bundle dir and every worker pod's default-runtime dir, when markerPath
-// records a boot other than bootID. Then it records bootID there. It reports
-// whether it cleared anything.
+// OCI bundle dir and every worker pod's default-runtime dir, when the node
+// has rebooted since atelet last started. Then it records bootID at
+// markerPath, and at legacyMarkerPath for rollbacks. It reports whether it
+// cleared anything.
 //
 // Cache writes aren't synced, so an unclean reboot can leave cache entries
 // and bundle specs empty or truncated. The bundle and default-runtime dirs
@@ -54,30 +57,71 @@ func localSnapshotBootCheck(bootID string) func(actorUID, snapshotUUID string) b
 // nothing still uses any of them. Run recreates an actor's bundle dir, and the
 // worker sandbox syncer recreates a worker's default-runtime dir.
 //
-// A missing marker only records bootID. atelet may be starting with this
-// check for the first time while actors run on what it would clear.
-func clearCachesAfterReboot(bootID, markerPath, actorsDir, workersDir string, cacheDirs ...string) (bool, error) {
+// Either marker matching bootID skips clearing: legacyMarkerPath is the only
+// marker on the first start after an upgrade, and the newer one after a
+// rollback. Missing both markers only records bootID, so a first run does not
+// clear caches live actors use.
+func clearCachesAfterReboot(bootID, markerPath, legacyMarkerPath, actorsDir, workersDir string, cacheDirs ...string) (bool, error) {
 	b, err := os.ReadFile(markerPath)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return false, writeCacheBootID(markerPath, bootID)
-	case err != nil:
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, fmt.Errorf("while reading the cache boot ID: %w", err)
-	case strings.TrimSpace(string(b)) == bootID:
-		return false, nil
 	}
-	for _, dir := range cacheDirs {
-		if err := removeChildren(dir, ""); err != nil {
+	found, recorded := err == nil, strings.TrimSpace(string(b))
+	legacy, legacyFound := readLegacyCacheBootID(legacyMarkerPath)
+
+	cleared := (found || legacyFound) && recorded != bootID && legacy != bootID
+	if cleared {
+		for _, dir := range cacheDirs {
+			if err := removeChildren(dir, ""); err != nil {
+				return false, err
+			}
+		}
+		if err := removeChildren(actorsDir, "bundles"); err != nil {
+			return false, err
+		}
+		if err := removeChildren(workersDir, defaultRuntimeDirsName); err != nil {
 			return false, err
 		}
 	}
-	if err := removeChildren(actorsDir, "bundles"); err != nil {
-		return false, err
+	if recorded != bootID {
+		if err := writeCacheBootID(markerPath, bootID); err != nil {
+			return cleared, err
+		}
 	}
-	if err := removeChildren(workersDir, defaultRuntimeDirsName); err != nil {
-		return false, err
+	if legacy != bootID {
+		if err := writeCacheBootID(legacyMarkerPath, bootID); err != nil {
+			slog.Warn("Failed to record the cache boot ID for earlier releases", slog.String("path", legacyMarkerPath), slog.Any("err", err))
+		}
 	}
-	return true, writeCacheBootID(markerPath, bootID)
+	return cleared, nil
+}
+
+// maxCacheBootIDBytes bounds the legacy cache boot ID file: a boot ID is a
+// UUID.
+const maxCacheBootIDBytes = 64
+
+// readLegacyCacheBootID reads the worker-writable legacy marker, logging and
+// removing invalid entries so tampering cannot stop startup.
+func readLegacyCacheBootID(path string) (string, bool) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		slog.Warn("Failed to open the directory of the legacy cache boot ID", slog.String("path", path), slog.Any("err", err))
+		return "", false
+	}
+	defer root.Close()
+	name := filepath.Base(path)
+	b, err := safefs.ReadRegularFile(root, name, maxCacheBootIDBytes)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false
+	}
+	if err != nil {
+		slog.Warn("Removing an invalid legacy cache boot ID", slog.String("path", path), slog.Any("err", err))
+		if err := root.RemoveAll(name); err != nil {
+			slog.Warn("Failed to remove the invalid legacy cache boot ID", slog.String("path", path), slog.Any("err", err))
+		}
+		return "", false
+	}
+	return strings.TrimSpace(string(b)), true
 }
 
 // removeChildren removes the named entry in each child directory of dir, or
