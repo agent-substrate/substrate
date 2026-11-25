@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -395,9 +396,13 @@ func TestRecordedSizeExcludesTrailingBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureLayer: %v", err)
 	}
-	size, ok, err := recordedLayerSize(dir)
-	if err != nil || !ok {
-		t.Fatalf("recordedLayerSize = %d, %v, %v", size, ok, err)
+	contents, err := os.ReadFile(filepath.Join(dir, layerSizeFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(string(contents)), 10, 64)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if size <= 0 || size > int64(len(tarBytes)) {
 		t.Errorf("recorded size = %d, want in (0, %d]", size, len(tarBytes))

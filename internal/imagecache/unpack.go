@@ -96,6 +96,7 @@ func validateTarName(name string) (cleaned string, skip bool, err error) {
 // unpackLayer extracts one uncompressed OCI layer tar into root. Whiteout
 // entries (.wh.*) are not written to the tree; they are returned so the
 // caller can persist them for later materialization by a privileged process.
+// It also returns the disk blocks the tree allocates, in bytes.
 //
 // Every entry keeps the numeric owner its tar header records, as containerd
 // and moby apply it, so image content given to a non-root user (a home
@@ -111,7 +112,7 @@ func validateTarName(name string) (cleaned string, skip bool, err error) {
 // are overlayfs's job now; the handling here only needs to cope with
 // duplicate entries within a single layer (real ko images repeat directory
 // entries).
-func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteoutSet, error) {
+func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteoutSet, int64, error) {
 	wh := &whiteoutSet{Version: 1}
 
 	// Directories are created root-owned and owner-writable, so their children
@@ -166,12 +167,12 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		if errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
-			return nil, fmt.Errorf("in tarReader.Next: %w", err)
+			return nil, 0, fmt.Errorf("in tarReader.Next: %w", err)
 		}
 
 		name, skip, err := validateTarName(hdr.Name)
 		if err != nil {
-			return nil, fmt.Errorf("invalid tar entry: %w", err)
+			return nil, 0, fmt.Errorf("invalid tar entry: %w", err)
 		}
 		if skip {
 			continue
@@ -197,7 +198,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		// grant device access, and the runtime provides /dev.
 		if hdr.Typeflag == tar.TypeChar || hdr.Typeflag == tar.TypeBlock {
 			if err := replaceExisting(name, "device node"); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			slog.DebugContext(ctx, "Skipping device node in image layer", slog.String("name", name))
 			continue
@@ -213,7 +214,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		markAncestors(name)
 		if parent := filepath.Dir(name); parent != "." {
 			if err := root.MkdirAll(parent, 0o755); err != nil {
-				return nil, fmt.Errorf("while creating parent directories for %q: %w", name, err)
+				return nil, 0, fmt.Errorf("while creating parent directories for %q: %w", name, err)
 			}
 		}
 
@@ -225,33 +226,33 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
 			// 3. If it's a directory, we recursively remove it so we can write the file.
 			if err := replaceExisting(name, "regular file"); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 
 			// Stream directly from tarReader to target file to avoid buffering in memory.
 			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
-				return nil, fmt.Errorf("while creating file %q: %w", name, err)
+				return nil, 0, fmt.Errorf("while creating file %q: %w", name, err)
 			}
 			_, err = io.Copy(outFile, tarReader)
 			closeErr := outFile.Close()
 			if err != nil {
-				return nil, fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
+				return nil, 0, fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
 			}
 			if closeErr != nil {
-				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
+				return nil, 0, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
 			// OpenFile's mode passed through atelet's umask and carries no
 			// setuid, setgid or sticky bit, and chown clears setuid and
 			// setgid, so the header's mode goes after the owner.
 			if err := tarutil.Lchown(root, name, hdr); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			if err := setFileMode(root, name, tarutil.Mode(hdr)); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			if err := restoreModTime(root, name, hdr.ModTime); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 
 		case tar.TypeDir:
@@ -264,18 +265,18 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				// existing dir is already owner-writable, so let the later entry's
 				// mode win at restore time.
 			} else if err != nil {
-				return nil, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
+				return nil, 0, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
 			// The header belongs to the directory now at name; Mkdir may
 			// have found a non-directory there, which keeps no header.
 			fi, err := root.Lstat(name)
 			if err != nil {
-				return nil, fmt.Errorf("while checking directory %q: %w", name, err)
+				return nil, 0, fmt.Errorf("while checking directory %q: %w", name, err)
 			}
 			if fi.IsDir() {
 				inode, err := dirInodeOf(name, fi)
 				if err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 				dh := dirHdrs[inode]
 				if dh == nil {
@@ -307,15 +308,15 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				// That's the desired semantic here — replace this path's
 				// entry without touching whatever the prior symlink targeted.
 				if err := replaceExisting(name, "symlink"); err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 				if err := root.Symlink(hdr.Linkname, name); err != nil {
-					return nil, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
+					return nil, 0, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
 				}
 			}
 			// Even an unchanged symlink takes the later entry's owner.
 			if err := tarutil.Lchown(root, name, hdr); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			// The symlink's own mtime is not restored: Chtimes follows the link,
 			// so it would stamp the target instead.
@@ -323,32 +324,32 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		case tar.TypeLink:
 			linkname, linkSkip, err := validateTarName(hdr.Linkname)
 			if err != nil {
-				return nil, fmt.Errorf("invalid hardlink target for %q: %w", name, err)
+				return nil, 0, fmt.Errorf("invalid hardlink target for %q: %w", name, err)
 			}
 			if linkSkip {
-				return nil, fmt.Errorf("invalid hardlink target for %q: empty", name)
+				return nil, 0, fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
 			if err := replaceExisting(name, "hardlink"); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			// The chown below gives the shared inode this header's owner.
 			if err := root.Link(linkname, name); err != nil {
-				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
+				return nil, 0, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
 			// The link shares its target's inode, so the chown below clears the
 			// setuid and setgid bits the target entry set; keep its mode to
 			// put them back.
 			target, err := root.Lstat(name)
 			if err != nil {
-				return nil, fmt.Errorf("while checking hardlink %q: %w", name, err)
+				return nil, 0, fmt.Errorf("while checking hardlink %q: %w", name, err)
 			}
 			if err := tarutil.Lchown(root, name, hdr); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			if target.Mode().IsRegular() {
 				if err := setFileMode(root, name, target.Mode()&tarutil.ModeBits); err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 			}
 			// No mtime to restore: the link shares the target's inode, which
@@ -357,9 +358,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		default:
 			tfStr := string([]byte{hdr.Typeflag})
 			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.String("name", name), slog.Any("hdr", hdr))
-			return nil, fmt.Errorf("unhandled tar entry typeflag %q at %q", tfStr, name)
+			return nil, 0, fmt.Errorf("unhandled tar entry typeflag %q at %q", tfStr, name)
 		}
 	}
+
+	// Measure before the restore pass, which can leave directories
+	// unreadable to atelet.
+	allocated := allocatedBytes(root.FS())
 
 	// Restore directory modes, mtimes and owners now that every child exists.
 	// Deepest (longest name) first, so a parent's restored mode or owner can't
@@ -393,7 +398,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	if len(unnamed) > 0 {
 		paths, err := dirPaths(root, ".")
 		if err != nil {
-			return nil, fmt.Errorf("while finding unpacked directories: %w", err)
+			return nil, 0, fmt.Errorf("while finding unpacked directories: %w", err)
 		}
 		for inode, hdr := range unnamed {
 			if name, ok := paths[inode]; ok {
@@ -406,13 +411,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		name, hdr := d.name, d.hdr
 		mode := tarutil.Mode(hdr)
 		if err := root.Chmod(name, mode); err != nil {
-			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", mode, name, err)
+			return nil, 0, fmt.Errorf("while restoring mode %v on directory %q: %w", mode, name, err)
 		}
 		if err := restoreModTime(root, name, hdr.ModTime); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := tarutil.Lchown(root, name, hdr); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
@@ -443,7 +448,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	}
 	sort.Strings(wh.ImplicitDirs)
 
-	return wh, nil
+	return wh, allocated, nil
 }
 
 // dirHdr is the header written last to a directory and every name it was

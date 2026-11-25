@@ -477,7 +477,7 @@ func TestEvictUnusedDryRunDoesNotBackfillSizes(t *testing.T) {
 
 	store := newTestStore(t)
 	img := mustEnsure(t, store, ref)
-	sizePath := filepath.Join(img.LayerDirs[0], layerSizeFileName)
+	sizePath := filepath.Join(img.LayerDirs[0], layerAllocatedFileName)
 	if err := os.Remove(sizePath); err != nil {
 		t.Fatal(err)
 	}

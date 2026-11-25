@@ -42,7 +42,7 @@ var (
 	imageCacheGCPeriod = pflag.Duration("image-cache-gc-period", 5*time.Minute, "How often to run the image cache eviction pass. 0 disables the periodic pass (startup orphan recovery still runs at every atelet start).")
 	imageCacheHighPct  = pflag.Int("image-cache-high-percent", 85, "Cache-volume usage percentage above which eviction starts.")
 	imageCacheLowPct   = pflag.Int("image-cache-low-percent", 80, "Cache-volume usage percentage eviction frees down to. Must be lower than --image-cache-high-percent.")
-	imageCacheMaxBytes = pflag.Int64("image-cache-max-bytes", 0, "Absolute cap on the summed size of cached layers, evicted down to independently of the volume watermarks. 0 means no cap.")
+	imageCacheMaxBytes = pflag.Int64("image-cache-max-bytes", 0, "Cap, in bytes, on the disk space cached layers allocate. GC evicts down to it even when the volume is below the watermarks. 0 means no cap.")
 	imageCacheMinAge   = pflag.Duration("image-cache-min-age", 2*time.Minute, "Layers and image records younger than this are never evicted (protects images pulled but not yet mounted). Governs startup orphan recovery too, so it is live even with the periodic pass disabled.")
 	imageCacheGCDryRun = pflag.Bool("image-cache-gc-dry-run", false, "Compute and log eviction decisions without deleting anything.")
 )

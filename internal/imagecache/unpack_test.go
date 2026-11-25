@@ -95,7 +95,8 @@ func unpackInto(t *testing.T, dir string, tarBytes []byte) (*whiteoutSet, error)
 		t.Fatalf("os.OpenRoot(%q): %v", dir, err)
 	}
 	defer root.Close()
-	return unpackLayer(context.Background(), bytes.NewReader(tarBytes), root)
+	wh, _, err := unpackLayer(context.Background(), bytes.NewReader(tarBytes), root)
+	return wh, err
 }
 
 func runUnpack(t *testing.T, entries []tarEntry) (string, *whiteoutSet, error) {
