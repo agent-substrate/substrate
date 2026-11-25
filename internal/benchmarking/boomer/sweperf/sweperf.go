@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	mathrand "math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -68,15 +69,26 @@ const (
 	// defaultSweperfPollInterval trades CycleCEL-to-ack accuracy against
 	// /status load on the router; sympy cycles take roughly 1.5-15s.
 	defaultSweperfPollInterval = 100 * time.Millisecond
+
+	// Same initial backoff as agentsession's wake retry and glutton's spawn
+	// retry; the cap is higher because sweperf users wait for room much longer.
+	resumeRetryInitialBackoff = 50 * time.Millisecond
+	resumeRetryMaxBackoff     = 4 * time.Second
+	resumeRetryJitterFraction = 0.1
 )
 
 // Derived rows: each spans more than one call, hence the actor method.
 const (
-	resumeToFirstExecMetric = "ResumeToFirstExec"
-	cycleCELMetric          = "CycleCEL"
-	taskCELMetric           = "TaskCEL"
-	taskWallClockMetric     = "TaskWallClock"
-	derivedMetricMethod     = "actor"
+	resumeWithRetryMetric   = "ResumeWithRetry"
+	resumeRetryGiveUpMetric = "ResumeRetryGiveUp"
+	// resumeActorRefusedMetric is the grpc row for ResumeActor attempts the
+	// fleet had no room for that were retried within the budget.
+	resumeActorRefusedMetric = "ResumeActorRefused"
+	resumeToFirstExecMetric  = "ResumeToFirstExec"
+	cycleCELMetric           = "CycleCEL"
+	taskCELMetric            = "TaskCEL"
+	taskWallClockMetric      = "TaskWallClock"
+	derivedMetricMethod      = "actor"
 )
 
 // init registers the sweperf user class so the boomer worker can select it by
@@ -106,6 +118,11 @@ type knobs struct {
 	TotalSteps     int    `json:"sweperf_total_steps"`
 	NumCycles      int    `json:"sweperf_num_cycles"`
 	PollIntervalMs int    `json:"sweperf_poll_interval_ms"`
+	// ResumeRetryBudget bounds how long a cycle keeps retrying a ResumeActor
+	// the fleet had no room for (ResourceExhausted or Unavailable) before giving
+	// up on the cycle, with backoff from 50ms to 4s. 0 (the default) gives the
+	// resume one attempt.
+	ResumeRetryBudget dynconfig.Seconds `json:"sweperf_resume_retry_budget"`
 }
 
 var knobsCodec = dynconfig.Typed[knobs]{
@@ -121,6 +138,9 @@ var knobsCodec = dynconfig.Typed[knobs]{
 		}
 		if k.PollIntervalMs < 0 {
 			return fmt.Errorf("sweperf_poll_interval_ms cannot be negative: %d", k.PollIntervalMs)
+		}
+		if k.ResumeRetryBudget < 0 {
+			return fmt.Errorf("sweperf_resume_retry_budget cannot be negative: %v", k.ResumeRetryBudget)
 		}
 		if err := k.Lifecycle.Validate(); err != nil {
 			return err
@@ -544,10 +564,15 @@ type sweperfUser struct {
 	startupDur  time.Duration // CreateActor until the sandbox answered /status
 	loopThink   time.Duration // think time between this task's cycles
 	loopRetries int           // failed resumes, each of which retries its cycle
-	resumeMax   time.Duration // slowest non-no-op ResumeActor, as recorded on its row
-	ttfeMax     time.Duration // slowest resume-to-ack; zero when no cycle after the no-op resume got an async ack
-	failStep    string        // first failed step: resume, execute or suspend
-	failCycle   int           // cycle of failStep
+	// capacityRetries counts ResumeActor attempts refused for capacity and
+	// retried within the budget.
+	capacityRetries int
+	// resumeMax is the slowest non-no-op resume: server time, or client wall
+	// time including waits when the resume was retried.
+	resumeMax time.Duration
+	ttfeMax   time.Duration // slowest resume-to-ack; zero when no cycle after the no-op resume got an async ack
+	failStep  string        // first failed step: resume, execute or suspend
+	failCycle int           // cycle of failStep
 }
 
 // ref is the control-plane reference to this user's actor.
@@ -598,21 +623,98 @@ func (u *sweperfUser) create(ctx context.Context) error {
 	})
 }
 
-// resume wakes the actor for the next cycle and reports the latency recorded
-// on its ResumeActor row and whether it worked. A failure is the caller's cue
-// to abandon the cycle rather than talk to a sandbox that is not running.
-func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
-	latency, err := u.tracedCallRecord(ctx, "ResumeActor", !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
-			Actor: u.ref(),
-		}, grpc.Trailer(tr))
-		return err
-	})
-	if err != nil {
-		slog.Error("ResumeActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
-		return latency, false
+// resumeOutcome holds the timing and retry counts of one cycle's resume.
+type resumeOutcome struct {
+	latency time.Duration // latency recorded on the last ResumeActor attempt
+	total   time.Duration // wall time from first attempt to completion, including retry wait
+	retries int           // number of retry attempts after the first (attempts - 1)
+	ok      bool          // whether ResumeActor succeeded
+	gaveUp  bool          // true when a capacity error ran out of the retry budget
+}
+
+// isCapacityError reports whether err indicates the fleet or control plane had
+// no room for the actor right now (ResourceExhausted or Unavailable). It is the
+// gRPC half of agentsession's isCapacityError (sweperf's resume is gRPC only).
+func isCapacityError(err error) bool {
+	switch status.Code(err) {
+	case codes.ResourceExhausted, codes.Unavailable:
+		return true
 	}
-	return latency, true
+	return false
+}
+
+// resume runs ResumeActor to wake the actor for the next cycle and, while it
+// fails with a capacity error (ResourceExhausted or Unavailable) and the next
+// attempt starts before sweperf_resume_retry_budget ends, backs off and
+// retries. Retried capacity refusals are recorded on ResumeActorRefused (grpc);
+// only the final attempt is recorded on ResumeActor and ResumeActor_rtt. Full
+// wall time is recorded on ResumeWithRetry, and capacity errors that run out of
+// a positive budget are recorded on ResumeRetryGiveUp.
+func (u *sweperfUser) resume(ctx context.Context) resumeOutcome {
+	start := time.Now()
+	budget := dynconfig.Get[knobs](u.cfg.Dyn).ResumeRetryBudget.Duration()
+	deadline := start.Add(budget)
+	var (
+		latency time.Duration
+		err     error
+		retries int
+		gaveUp  bool
+	)
+	delay := resumeRetryInitialBackoff
+	for {
+		var (
+			clientLatency time.Duration
+			source        string
+		)
+		latency, clientLatency, source, err = u.timedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
+			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
+				Actor: u.ref(),
+			}, grpc.Trailer(tr))
+			return err
+		})
+		if err != nil && canceled(ctx) {
+			return resumeOutcome{latency: latency, total: time.Since(start), retries: retries}
+		}
+		if err != nil && isCapacityError(err) && budget > 0 {
+			wait := delay + time.Duration(mathrand.Float64()*resumeRetryJitterFraction*float64(delay))
+			if time.Now().Add(wait).Before(deadline) {
+				bmetrics.RecordFailure("grpc", resumeActorRefusedMetric, u.userClass, latency, err.Error())
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					return resumeOutcome{latency: latency, total: time.Since(start), retries: retries}
+				}
+				retries++
+				delay = nextResumeBackoff(delay)
+				continue
+			}
+			gaveUp = true
+		}
+		u.recordRPC("ResumeActor", latency, clientLatency, source, err, !u.awake)
+		break
+	}
+
+	total := time.Since(start)
+	if err == nil {
+		if !u.awake {
+			bmetrics.RecordSuccess(derivedMetricMethod, resumeWithRetryMetric, u.userClass, total, 0)
+		}
+		return resumeOutcome{latency: latency, total: total, retries: retries, ok: true}
+	}
+	if canceled(ctx) {
+		return resumeOutcome{latency: latency, total: total, retries: retries}
+	}
+	bmetrics.RecordFailure(derivedMetricMethod, resumeWithRetryMetric, u.userClass, total, err.Error())
+	if gaveUp {
+		bmetrics.RecordFailure(derivedMetricMethod, resumeRetryGiveUpMetric, u.userClass, total, err.Error())
+	}
+	slog.Error("ResumeActor failed",
+		slog.String("actor", u.actorName),
+		slog.Int("retries", retries),
+		slog.Bool("gave_up", gaveUp),
+		slog.Duration("waited", total),
+		slog.String("err", err.Error()))
+	return resumeOutcome{latency: latency, total: total, retries: retries, gaveUp: gaveUp}
 }
 
 // suspend snapshots the actor and puts it to sleep, ending a cycle. It reports
@@ -674,33 +776,58 @@ func (u *sweperfUser) tracedCall(ctx context.Context, name string, do func(conte
 // tracedCallRecord is tracedCall with optional success rows; failures are
 // always recorded. It also returns the latency it records.
 func (u *sweperfUser) tracedCallRecord(ctx context.Context, name string, recordSuccess bool, do func(context.Context, *metadata.MD) error) (time.Duration, error) {
+	latency, clientLatency, source, err := u.timedCall(ctx, name, do)
+	if err != nil && canceled(ctx) {
+		return latency, err
+	}
+	u.recordRPC(name, latency, clientLatency, source, err, recordSuccess)
+	return latency, err
+}
+
+// timedCall runs one control-plane RPC under a span named name and returns
+// its latency (server-measured when the trailer has it, else client), the
+// client latency, and whether latency is server- or client-measured. It
+// records no stats rows. A call cut short by ctx returns the client latency.
+func (u *sweperfUser) timedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) (latency, clientLatency time.Duration, source string, err error) {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
 	start := time.Now()
 	var tr metadata.MD
-	err := do(ctx, &tr)
-	clientLatency := time.Since(start)
+	err = do(ctx, &tr)
+	clientLatency = time.Since(start)
 	if err != nil && canceled(ctx) {
-		return clientLatency, err
+		return clientLatency, clientLatency, boomerutil.SourceClient, err
 	}
 
-	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
+	latency, source = boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
 	if source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
-		if err != nil || recordSuccess {
-			u.recordClientRTT(name, clientLatency, err)
-		}
 	}
 	boomerutil.LogSampledTrace(span, name, latency, source, err)
+	return latency, clientLatency, source, err
+}
+
+// recordRPC records one control-plane RPC as a locust stats row of the same
+// name, plus a <name>_rtt row with the client latency when latency came from
+// the server. Failures are always recorded; successes only if recordSuccess.
+func (u *sweperfUser) recordRPC(name string, latency, clientLatency time.Duration, source string, err error, recordSuccess bool) {
+	if source == boomerutil.SourceServer && (err != nil || recordSuccess) {
+		u.recordClientRTT(name, clientLatency, err)
+	}
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
-		return latency, err
+		return
 	}
 	if recordSuccess {
 		bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
 	}
-	return latency, nil
+}
+
+// nextResumeBackoff doubles a capacity-retry backoff, up to
+// resumeRetryMaxBackoff.
+func nextResumeBackoff(d time.Duration) time.Duration {
+	return min(d*2, resumeRetryMaxBackoff)
 }
 
 // recordClientRTT publishes the client wall clock for an RPC whose own row carries server time.
@@ -802,26 +929,36 @@ func (u *sweperfUser) step(ctx context.Context) {
 	// Summed per cycle so the between-cycle think time stays out of the total.
 	defer func() { u.loopWall += time.Since(resumeStart) }()
 	// A cycle cut short by shutdown returns without recording or advancing.
-	resumeLatency, resumed := u.resume(ctx)
-	if !resumed {
+	res := u.resume(ctx)
+	if !res.ok {
 		if canceled(ctx) {
 			return
 		}
 		u.loopFailed = true
 		u.loopRetries++
+		u.capacityRetries += res.retries
 		u.noteFailure("resume", cycleNum)
 		bmetrics.RecordFailure(derivedMetricMethod, resumeToFirstExecMetric, u.userClass,
 			time.Since(resumeStart), "ResumeActor failed")
 		slog.Error("ResumeActor failed in step",
 			slog.String("actor", u.actorName),
 			slog.Int("cycle", cycleNum),
+			slog.Int("resume_retries", res.retries),
+			slog.Bool("gave_up", res.gaveUp),
 			slog.Float64("wall_ms", boomerutil.MsFloat(time.Since(resumeStart))),
 		)
 		return
 	}
+	resumeLatency := res.latency
 	u.awake = false
 	if !noopResume {
-		u.resumeMax = max(u.resumeMax, resumeLatency)
+		d := resumeLatency
+		if res.retries > 0 {
+			// Include the capacity-retry waits.
+			d = res.total
+		}
+		u.resumeMax = max(u.resumeMax, d)
+		u.capacityRetries += res.retries
 	}
 
 	// 2. Execute step range chunk inside sandbox
@@ -874,7 +1011,11 @@ func (u *sweperfUser) step(ctx context.Context) {
 	}
 	// A no-op resume and a reply without an async ack have nothing to report.
 	if !noopResume {
-		attrs = append(attrs, slog.Float64("resume_ms", boomerutil.MsFloat(resumeLatency)))
+		attrs = append(attrs,
+			slog.Float64("resume_ms", boomerutil.MsFloat(resumeLatency)),
+			slog.Float64("resume_with_retry_ms", boomerutil.MsFloat(res.total)),
+			slog.Int("resume_retries", res.retries),
+		)
 	}
 	if ttfe > 0 {
 		attrs = append(attrs, slog.Float64("ttfe_ms", boomerutil.MsFloat(ttfe)))
@@ -953,6 +1094,7 @@ func (u *sweperfUser) logTaskRecord() {
 		slog.Float64("think_ms", boomerutil.MsFloat(u.loopThink)),
 		slog.Float64("resume_max_ms", boomerutil.MsFloat(u.resumeMax)),
 		slog.Int("retries", u.loopRetries),
+		slog.Int("capacity_retries", u.capacityRetries),
 		slog.Bool("failed", u.loopFailed),
 		slog.String("fail_step", u.failStep),
 		slog.Int("fail_cycle", u.failCycle),

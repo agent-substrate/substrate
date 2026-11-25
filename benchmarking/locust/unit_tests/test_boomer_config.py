@@ -55,10 +55,13 @@ class TestBoomerConfig(unittest.TestCase):
             "300",
             "--agentsession-resume-retry-budget",
             "0",
+            "--sweperf-resume-retry-budget",
+            "60",
         ])
         parsed = json.loads(raw)
         self.assertEqual(parsed["agentsession_phase_in"], 300.0)
         self.assertEqual(parsed["agentsession_resume_retry_budget"], 0.0)
+        self.assertEqual(parsed["sweperf_resume_retry_budget"], 60.0)
 
     def test_build_config_json_turnover(self):
         raw = boomer_config.build_config_json([

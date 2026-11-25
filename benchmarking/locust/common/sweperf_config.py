@@ -52,3 +52,15 @@ def add_sweperf_arguments(parser: LocustArgumentParser) -> None:
         help="Interval in ms between /status polls while a cycle's job runs (default: 100)",
         include_in_web_ui=True,
     )
+    parser.add_argument(
+        "--sweperf-resume-retry-budget",
+        type=float,
+        default=0.0,
+        env_var="LOCUST_SWEPERF_RESUME_RETRY_BUDGET",
+        help=(
+            "Seconds a cycle retries ResumeActor on capacity errors "
+            "(ResourceExhausted or Unavailable) before giving up "
+            "(default: 0, single attempt)"
+        ),
+        include_in_web_ui=True,
+    )
