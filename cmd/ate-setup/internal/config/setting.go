@@ -312,6 +312,12 @@ var Registry = []Setting{
 			"use it on a cluster that serves real actors",
 	},
 	{
+		Key: "pprof", Env: "ATE_INSTALL_PPROF", Flag: "pprof", Kind: KindString,
+		Default: PprofOff,
+		Usage: "Enable Go runtime pprof profiling across control-plane and worker workloads " +
+			"(off, on, contention; never use on a cluster that serves real actors)",
+	},
+	{
 		// Comma-separated, as the router's own flag is. The registry has no
 		// list kind, so the value is carried as written and split where it is
 		// used.

@@ -29,7 +29,6 @@ import (
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
-	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 )
 
 // systemPod is one ate-system workload's pod template.
@@ -70,7 +69,7 @@ var unadmittedPorts = map[string][]string{
 
 // installConfigs are the configurations whose ate-system the policies must
 // cover: both dataplanes, on GKE and on kind, each with the real and the fake
-// data plane.
+// data plane, plus --pprof=on on GKE Envoy.
 func installConfigs() []*config.Config {
 	var out []*config.Config
 	for _, kind := range []bool{false, true} {
@@ -80,6 +79,7 @@ func installConfigs() []*config.Config {
 			}
 		}
 	}
+	out = append(out, &config.Config{Router: config.RouterEnvoy, Pprof: config.PprofOn})
 	return out
 }
 
@@ -91,6 +91,9 @@ func installName(cfg *config.Config) string {
 	name := env + "-" + cfg.Router
 	if cfg.FakeDataPlane {
 		name += "-fake"
+	}
+	if cfg.Pprof != "" && cfg.Pprof != config.PprofOff {
+		name += "-pprof"
 	}
 	return name
 }
@@ -120,20 +123,16 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 	add(e.postgresManifestPath(), rendered, err)
 	if cfg.Router == config.RouterAgentgateway {
 		egress := filepath.Join(root, installDir, "agentgateway-egress")
-		rendered, err = kustomize.Build(egress)
+		rendered, err = e.render(egress)
 		add(egress, rendered, err)
 	} else {
-		loaded, err := kube.LoadPath(e.atenetEgressManifestPath())
-		if err != nil {
-			t.Fatalf("loading %s: %v", e.atenetEgressManifestPath(), err)
-		}
-		objs = append(objs, loaded...)
+		egress := e.atenetEgressManifestPath()
+		rendered, err = e.render(egress)
+		add(egress, rendered, err)
 	}
-	provider, err := kube.LoadPath(e.k8sCredentialProviderPath(k8sCredentialProviderManifest))
-	if err != nil {
-		t.Fatalf("loading the credential provider manifest: %v", err)
-	}
-	objs = append(objs, provider...)
+	provider := e.k8sCredentialProviderPath(k8sCredentialProviderManifest)
+	rendered, err = e.render(provider)
+	add(provider, rendered, err)
 
 	install := systemInstall{serviceAccounts: map[string]corev1.ServiceAccount{}}
 	for _, obj := range objs {

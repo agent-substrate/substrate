@@ -53,6 +53,16 @@ const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
 const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-static-mtls"
 
+// pprofComponent is the kustomize component that exposes :6060 pprof servers
+// across Go control-plane and worker workloads, layered over every control
+// plane apply under --pprof=on or --pprof=contention.
+const pprofComponent = installDir + "/components/pprof"
+
+// pprofContentionComponent is the kustomize component that enables Go mutex
+// and block contention sampling alongside pprofComponent, layered over every
+// control plane apply under --pprof=contention.
+const pprofContentionComponent = installDir + "/components/pprof-contention"
+
 // components lists the kustomize components every control plane apply is
 // composed with. Each patch targets its workloads by name, and kustomize leaves
 // a stream alone when nothing in it matches, so composing a manifest that
@@ -72,6 +82,12 @@ func (e *Env) components() []string {
 	}
 	if e.Cfg.CordonSystemInfraComponents {
 		components = append(components, e.Cfg.Path(cordonSystemInfraComponent))
+	}
+	if e.Cfg.Pprof == config.PprofOn || e.Cfg.Pprof == config.PprofContention {
+		components = append(components, e.Cfg.Path(pprofComponent))
+	}
+	if e.Cfg.Pprof == config.PprofContention {
+		components = append(components, e.Cfg.Path(pprofContentionComponent))
 	}
 	return components
 }

@@ -41,6 +41,7 @@ type Options struct {
 	CordonSystemInfraComponents    bool
 	FakeDataPlane                  bool
 	E2ETuning                      bool
+	Pprof                          string
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
@@ -89,6 +90,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"atenet-dataplane", opts.Router},
 		{"rollout-timeout", opts.RolloutTimeout},
 		{"cluster-size", opts.ClusterSize},
+		{"pprof", opts.Pprof},
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
 		{"credential-provider", opts.CredentialProvider},
 		{"otlp-endpoint", opts.OtlpEndpoint},

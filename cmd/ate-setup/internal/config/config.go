@@ -51,6 +51,11 @@ const (
 	// the podcertificate controller's API rate limits to match.
 	ClusterSizeSize0  = "size0"
 	ClusterSizeSize10 = "size10"
+
+	// Pprof profiling modes for ATE_INSTALL_PPROF (--pprof).
+	PprofOff        = "off"
+	PprofOn         = "on"
+	PprofContention = "contention"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -229,6 +234,11 @@ type Config struct {
 	// E2ETuning layers the e2e test kustomize component over control plane and
 	// data plane applies (ATE_INSTALL_E2E_TUNING).
 	E2ETuning bool
+
+	// Pprof selects Go runtime pprof profiling across control-plane and worker
+	// workloads (ATE_INSTALL_PPROF): off, on, or contention. Never enable it on
+	// a cluster that serves real actors.
+	Pprof string
 
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
@@ -521,6 +531,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_E2E_TUNING")
 	if c.E2ETuning {
 		merged["ATE_INSTALL_E2E_TUNING"] = "true"
+	}
+	delete(merged, "ATE_INSTALL_PPROF")
+	if c.Pprof != "" && c.Pprof != PprofOff {
+		merged["ATE_INSTALL_PPROF"] = c.Pprof
 	}
 	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
 	if len(c.IngressAllowedSPIFFEIDs) > 0 {

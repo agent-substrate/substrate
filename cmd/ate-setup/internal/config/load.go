@@ -270,6 +270,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
 		E2ETuning:                      r.Bool("e2e.tuning"),
+		Pprof:                          r.String("pprof"),
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
@@ -405,6 +406,10 @@ func validateResolved(cfg *Config, r *Resolved) error {
 
 	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {
 		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
+	}
+
+	if pprofVal, _ := r.Value("pprof"); cfg.Pprof != PprofOff && cfg.Pprof != PprofOn && cfg.Pprof != PprofContention {
+		return &InvalidError{Value: pprofVal, Want: PprofOff + ", " + PprofOn + " or " + PprofContention}
 	}
 
 	// The router and ate-api-server reject a malformed ID at startup; catch it
