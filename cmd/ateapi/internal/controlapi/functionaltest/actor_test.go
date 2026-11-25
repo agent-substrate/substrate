@@ -2142,6 +2142,88 @@ func TestResumeActor_DeletedExternalVolumeClass(t *testing.T) {
 	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, `ExternalVolumeClass "evc-gone" not found`)
 }
 
+// TestActorLifecycle_DeleteExternalVolumeClassAfterProvisioning checks that
+// deleting an ExternalVolumeClass does not affect an actor whose volume was
+// already provisioned: the actor can still resume and be deleted.
+func TestActorLifecycle_DeleteExternalVolumeClassAfterProvisioning(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-delete-evc-after-prov")
+	tc := setupPreviewTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	if _, err := tc.client.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:     &ateapi.ResourceMetadata{Name: "evc-ephemeral"},
+			DriverName:   "substrate.io/mock",
+			Parameters:   map[string]string{"tier": "gold"},
+			MountOptions: []string{"nfsvers=4.1"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+	}
+	volumes := []*ateapi.Volume{{
+		Name: "data-vol",
+		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "evc-ephemeral"},
+			CapacityBytes:       1 << 30,
+		}},
+	}}
+	mounts := []*ateapi.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	actorRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-evc-after-delete"}
+	if _, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor-evc-after-delete"},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	firstResume, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("initial ResumeActor failed: %v", err)
+	}
+	provVols := firstResume.GetActor().GetStatus().GetExternalVolumes().GetVolumes()
+	if len(provVols) != 1 || provVols[0].GetStorageVolumeId() == "" {
+		t.Fatalf("initial ResumeActor volumes = %v, want 1 provisioned volume", provVols)
+	}
+	wantVolID := provVols[0].GetStorageVolumeId()
+
+	if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+
+	if _, err := tc.client.DeleteExternalVolumeClass(ctx, &ateapi.DeleteExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: "evc-ephemeral"},
+	}); err != nil {
+		t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+	}
+
+	secondResume, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("ResumeActor after ExternalVolumeClass delete failed: %v", err)
+	}
+	resumedVols := secondResume.GetActor().GetStatus().GetExternalVolumes().GetVolumes()
+	if len(resumedVols) != 1 || resumedVols[0].GetStorageVolumeId() != wantVolID {
+		t.Fatalf("resumed volumes = %v, want storage_volume_id %q", resumedVols, wantVolID)
+	}
+	if diff := cmp.Diff([]string{"nfsvers=4.1"}, resumedVols[0].GetMountOptions()); diff != "" {
+		t.Errorf("resumed mount options mismatch (-want +got):\n%s", diff)
+	}
+
+	if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor after ExternalVolumeClass delete failed: %v", err)
+	}
+	if _, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetActor after delete = %v, want NotFound", err)
+	}
+}
+
 type partialFailVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	deleted []string
