@@ -493,7 +493,8 @@ data:
                   # without it the forward proxy would dial the Host's port.
                   #
                   # WebSocket uses HTTP/1.1 only between the gateway and the
-                  # origin.
+                  # origin. This route keeps Envoy's default 15s timeout, which
+                  # covers only the handshake: Envoy stops it at the 101.
                   - match:
                       prefix: "/"
                       headers:
@@ -510,7 +511,6 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_websocket
-                      timeout: 0s
                   # Native gRPC uses upstream ALPN to negotiate h2 and carry
                   # status in trailers.
                   - match:
@@ -1141,8 +1141,9 @@ data:
       - name: egress_forward_proxy_websocket
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
-        # Sized like egress_forward_proxy. An open WebSocket holds its
-        # connection for as long as it lasts.
+        # At most 65536 WebSockets can be open through one gateway pod. Past
+        # that, a new handshake waits for a connection to free up or fails
+        # with 503, depending on whether its pool already has connections.
         circuit_breakers:
           thresholds:
           - priority: DEFAULT
