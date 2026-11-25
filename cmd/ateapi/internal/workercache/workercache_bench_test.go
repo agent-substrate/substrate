@@ -24,9 +24,9 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 )
 
-// BenchmarkWorkers times the copy Workers() hands to every Schedule call, on
-// its own, so the scheduling benchmarks can be read as filter cost and this
-// one as cache cost.
+// BenchmarkWorkers times the Workers() call every Schedule makes, on its own,
+// so the scheduling benchmarks can be read as filter cost and this one as
+// cache cost.
 func BenchmarkWorkers(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		workers := make([]*ateapi.Worker, 0, n)
