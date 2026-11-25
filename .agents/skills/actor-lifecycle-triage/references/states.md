@@ -6,13 +6,16 @@ changes actor state.
 
 In the commands, `<worker-namespace>`, `<worker-pod>`, and `<node>` come from
 the actor's `status.workerAssignment` and `status.assignedNode`. A crash clears
-`status.workerAssignment` while keeping `status.assignedNode`: for a CRASHED
-actor, get `<worker>` (the Worker name and pod UID) from `ate-api-server` logs
-near `status.crash.crashTime` (`Releasing actor from a worker whose pod is
-gone`, `Releasing actor from a restarted worker`, or `Worker reported an actor
-crash`), then resolve the pod with `kubectl ate get worker <worker> -o yaml`
-when the Worker still exists. The atelet pod is the one from `kubectl -n
-ate-system get pods -l app=atelet -o wide --field-selector
+`status.workerAssignment` while keeping `status.assignedNode`. For
+worker-caused crashes (`Releasing actor from a worker whose pod is gone`,
+`Releasing actor from a restarted worker`, or `Worker reported an actor crash`
+in `ate-api-server` logs near `status.crash.crashTime`), `<worker>` is the
+`worker` attribute (Worker name and pod UID); resolve the pod with `kubectl ate
+get worker <worker> -o yaml` when the Worker still exists. For other crashes
+(`atelet` errors, draining or ineligible workers, snapshot conflicts), those
+lines do not appear: use `status.assignedNode` for `atelet` logs and
+`ate-api-server` logs near `status.crash.crashTime`. The atelet pod is the one
+from `kubectl -n ate-system get pods -l app=atelet -o wide --field-selector
 spec.nodeName=<node>`.
 
 ## Stuck in a transition
@@ -43,15 +46,15 @@ automatically.
 
 | Symptom (`status.crash.message`, after any `<op> failed: ` prefix) | Root cause | Confirm | Mitigation (confirm first) |
 |---|---|---|---|
-| `worker pod went away while hosting the actor` | The worker pod was deleted or evicted while it hosted the actor: a WorkerPool rollout, node upgrade, scale-down or Spot preemption | `ate-api-server` log `Releasing actor from a worker whose pod is gone` near `crashTime` for `<worker>`; `kubectl get events -A --field-selector involvedObject.uid=<worker>` | Revert, then resume. To keep state through an eviction, the actor needs a SIGTERM handler that gets it suspended within 30 minutes; see [Eviction](../../../../docs/reference/api-guide.md#eviction) |
+| `worker pod went away while hosting the actor` | The worker pod was deleted or evicted while it hosted the actor: a WorkerPool rollout, node upgrade, scale-down or Spot preemption | `ate-api-server` log `Releasing actor from a worker whose pod is gone` near `crashTime` for `<worker>`; `kubectl get events -A --field-selector involvedObject.uid=<worker>` (events expire after about 1h, so empty output on an older crash does not rule out eviction) | Revert, then resume. To keep state through an eviction, the actor needs a SIGTERM handler that gets it suspended within 30 minutes; see [Eviction](../../../../docs/reference/api-guide.md#eviction) |
 | `worker restarted while hosting the actor` | The worker process restarted, so its sandboxes are gone | `ate-api-server` log `Releasing actor from a restarted worker` for `<worker>`, `kubectl ate get worker <worker> -o yaml` for its pod, then RESTARTS and `kubectl -n <worker-namespace> logs <worker-pod> --previous` | Revert, then resume. Use the previous log to find why the worker exited |
-| `killed for exceeding its memory limit` | The actor's gVisor sandbox or microVM exceeded its memory limit and the worker killed it | `ate-api-server` log `Worker reported an actor crash` near `crashTime` | Raise the actor's memory limit or investigate memory growth, then revert and resume |
+| `killed for exceeding its memory limit` (or `atelet Run:` / `atelet Restore:` containing `killed for exceeding its memory limit`) | The actor's gVisor sandbox or microVM exceeded its memory limit and the worker killed it | `ate-api-server` log `Worker reported an actor crash` near `crashTime` (for crashes while RUNNING), or `Setting Actor to crashed due to Atelet error` if killed during `Run` or `Restore` | Raise the actor's memory limit or investigate memory growth, then revert and resume |
 | `gVisor sandbox exited`, or starts with `cloud-hypervisor exited:` or `virtiofsd exited:` | The sandbox or microVM process exited while the actor was RUNNING | `ate-api-server` log `Worker reported an actor crash` for `<worker>`; worker pod logs (`Sandbox died` on gVisor, `Micro-VM died` on microVM) | Inspect the worker logs for why the sandbox exited, then revert and resume |
-| `assigned worker is draining` | A resume was retried after its worker started draining | The worker from `ate-api-server` logs near `crashTime` is DRAINING in `kubectl ate get workers` | Revert, then resume. It will be assigned to another worker |
+| `assigned worker is draining` | A resume was retried after its worker started draining | `ate-api-server` log `Assigned worker is draining; crashing actor` near `crashTime` (its `worker` attribute is `<namespace>/<pod>`); match that pod in `kubectl ate get workers` to confirm DRAINING | Revert, then resume. It will be assigned to another worker |
 | `assigned worker no longer satisfies the actor's placement constraints` | The actor's worker selector changed between a failed resume and its retry | Compare the actor's worker selector with the eligible WorkerPools | Revert, then resume |
 | Starts with `node holding the actor's latest snapshot no longer exists` | The last suspend was async, and the node holding its snapshot went away before the upload finished | `kubectl get node <node>` returns NotFound | Revert, then resume. The async snapshot is lost. Use `kubectl ate suspend actor --mode=sync` when a snapshot has to survive its node |
 | `node holding the actor's local snapshot is unknown`, `actor has no local snapshot`, `actor has no durable snapshot`, or `atelet's snapshot state conflicts with the actor's record` | The actor's snapshot record is in an inconsistent state that retries cannot fix | ate-api-server log for the actor near `crashTime` | Revert, then resume. File an issue with the log, as this should not happen in normal operation |
-| Starts with `atelet <RPC>:`, such as `atelet Restore:` | atelet or the worker returned a non-retriable error for that call | ate-api-server log `Setting Actor to crashed due to Atelet error`; `kubectl -n ate-system logs <atelet-pod> -c atelet --since=1h \| grep '<actor>'` | Check the atelet error, then revert and resume. If it crashes the same way again, file an issue with the atelet log |
+| Starts with `atelet <RPC>:`, such as `atelet Restore:` | atelet or the worker returned a non-retriable error for that call (if it includes `killed for exceeding its memory limit`, see the memory-limit row above) | ate-api-server log `Setting Actor to crashed due to Atelet error`; `kubectl -n ate-system logs <atelet-pod> -c atelet --since=1h \| grep '<actor>'` | Check the atelet error, then revert and resume. If it crashes the same way again, file an issue with the atelet log |
 
 ## Call refused
 
@@ -70,6 +73,6 @@ RUNNING actor or suspending a SUSPENDED one is a no-op.
 
 | Symptom | Root cause | Confirm | Fix |
 |---|---|---|---|
-| Requests fail or hang, and the actor's processes are gone | An app process exited while the sandbox stayed up (#2972), or a process inside the sandbox or guest was OOM-killed (#3615); on gVisor, an unreported dead sandbox logs a warning (#2211) | `kubectl ate logs actor <actor> -a <atespace>` for app exit or errors; `kubectl -n <worker-namespace> logs <worker-pod>` for `Sandbox has no processes left while the actor is hosted` | Share the logs with the actor's owner; confirm before running revert and resume |
+| Requests fail or hang, and the actor's processes are gone | An app process exited while the sandbox stayed up (#2972), a process inside the sandbox or guest was OOM-killed (#3615), or a dead sandbox failed to report CRASHED (#2211) | `kubectl ate logs actor <actor> -a <atespace>` for app exit or errors; `kubectl -n <worker-namespace> logs <worker-pod>` for `Sandbox has no processes left while the actor is hosted`, `Cannot watch the sandbox, a crash will go unreported`, or `Failed to report the actor crashed` | Share the logs with the actor's owner; confirm before running revert and resume |
 | Requests reach the actor, and it returns errors | Error in the actor's application | `kubectl ate logs actor <actor> -a <atespace>` shows the errors | Give the logs to the actor's owner |
 | Requests fail before they reach the actor | Networking | The router's response or the client error | Go back to [troubleshoot](../../troubleshoot/SKILL.md) step 2 |

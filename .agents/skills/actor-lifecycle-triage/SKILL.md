@@ -42,18 +42,28 @@ kubectl ate get workers
 ```
 
 When the actor is CRASHED, `status.workerAssignment` is empty, while
-`status.assignedNode` still names the node for the `atelet` lookup. To find the
-worker that hosted it, check `ate-api-server` logs near `status.crash.crashTime`
-for `Releasing actor from a worker whose pod is gone`, `Releasing actor from a
-restarted worker`, or `Worker reported an actor crash`. Each line carries a
-`worker` attribute (the Worker name, which is also the worker pod's UID):
+`status.assignedNode` still names the node for the `atelet` lookup.
+
+For worker-caused crashes (pod gone, worker restarted, or a sandbox crash
+reported by the worker), find the former worker in `ate-api-server` logs near
+`status.crash.crashTime` under `Releasing actor from a worker whose pod is
+gone`, `Releasing actor from a restarted worker`, or `Worker reported an actor
+crash`. Each line carries a `worker` attribute (the Worker name, which is also
+the worker pod's UID):
 
 ```bash
 # If the Worker still exists, this gives its pod name and namespace:
 kubectl ate get worker <worker> -o yaml
-# If the worker pod was deleted, look up its events by UID:
+# If the worker pod was deleted, look up its events by UID.
+# Kubernetes keeps events for about an hour by default, so an empty result for
+# an older crash does not rule out eviction or deletion:
 kubectl get events -A --field-selector involvedObject.uid=<worker>
 ```
+
+For other crashes (`atelet` errors, draining or ineligible workers, snapshot
+state conflicts), those three lines do not appear. Use `status.assignedNode` to
+check `atelet` logs and inspect `ate-api-server` logs for the actor near
+`status.crash.crashTime`.
 
 A missing worker pod or an unready `atelet` on the node causes most stuck and
 crashed actors. Note what you find for step 3.
@@ -88,7 +98,12 @@ kubectl ate logs actor <actor> -a <atespace> --source=lifecycle
 - If an application process exits while its sandbox stays up (#2972), or a
   process inside the sandbox or guest is OOM-killed without killing the sandbox
   (#3615), the actor stays RUNNING (see #2211). A dead sandbox or microVM, or a
-  sandbox killed for exceeding its memory limit, is reported as CRASHED.
+  sandbox killed for exceeding its memory limit, is usually reported as
+  CRASHED, except when reporting fails: on gVisor, `watchSandbox` skips the
+  report if the sandbox was never pinned or `exited()` fails (logging `Cannot
+  watch the sandbox, a crash will go unreported`), and both workers give up
+  retrying `ReportActorCrashed` after 5 minutes (`Failed to report the actor
+  crashed`). In those cases the actor stays RUNNING.
 - `ate-api-server` does not retry failed lifecycle calls. After a retriable
   error, the actor stays in its transition state until the caller retries.
 - During an `atelet` rollout, a resume or suspend hitting that node fails with
