@@ -21,9 +21,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -40,6 +43,7 @@ type mountCall struct {
 }
 
 type fakeWorkerPlugin struct {
+	mu          sync.Mutex
 	mountErr    error
 	mountErrs   map[string]error
 	unmountErr  error
@@ -49,6 +53,8 @@ type fakeWorkerPlugin struct {
 }
 
 func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.mountCalls = append(f.mountCalls, mountCall{
 		volumeID:   req.VolumeID,
 		targetPath: req.TargetPath,
@@ -154,6 +160,43 @@ func TestUnmountExternalVolumes(t *testing.T) {
 	})
 }
 
+// blockingPlugin holds every MountVolume call until all of them have started.
+type blockingPlugin struct {
+	fakeWorkerPlugin
+	started sync.WaitGroup
+}
+
+func (b *blockingPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
+	b.started.Done()
+	b.started.Wait()
+	return nil
+}
+
+func TestMountExternalVolumesConcurrently(t *testing.T) {
+	useTempNodeDirs(t)
+	var volumes []*ateletpb.Volume
+	for _, name := range []string{"vol-1", "vol-2", "vol-3"} {
+		volumes = append(volumes, &ateletpb.Volume{
+			Name:     name,
+			External: &ateletpb.ExternalVolumeSource{StorageVolumeId: name, VolumeType: "mock-driver"},
+		})
+	}
+	plugin := &blockingPlugin{}
+	plugin.started.Add(len(volumes))
+	s := &Atelet{volumePlugins: map[string]volume.VolumePluginWorkerPlane{"mock-driver": plugin}}
+
+	done := make(chan error, 1)
+	go func() { done <- s.mountExternalVolumes(context.Background(), "actor", volumes) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("mountExternalVolumes failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("mounts did not run concurrently")
+	}
+}
+
 func TestMountExternalVolumes(t *testing.T) {
 	ctx := context.Background()
 	actorUID := "test-actor-456"
@@ -218,7 +261,7 @@ func TestMountExternalVolumes(t *testing.T) {
 			{volumeID: "mock-vol-1", targetPath: expectedPath1, attributes: map[string]string{"key": "val1"}},
 			{volumeID: "mock-vol-2", targetPath: expectedPath2, attributes: map[string]string{"key": "val2"}},
 		}
-		if diff := cmp.Diff(wantCalls, fake.mountCalls, cmp.AllowUnexported(mountCall{})); diff != "" {
+		if diff := cmp.Diff(wantCalls, fake.mountCalls, cmp.AllowUnexported(mountCall{}), cmpopts.SortSlices(func(a, b mountCall) bool { return a.volumeID < b.volumeID })); diff != "" {
 			t.Errorf("mountCalls mismatch (-want +got):\n%s", diff)
 		}
 	})
@@ -292,7 +335,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		}
 	})
 
-	t.Run("multi-volume partial failure aborts on first failure", func(t *testing.T) {
+	t.Run("multi-volume failure attempts every mount", func(t *testing.T) {
 		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{
@@ -308,8 +351,8 @@ func TestMountExternalVolumes(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected mountExternalVolumes to fail, got nil")
 		}
-		if len(fake.mountCalls) != 1 {
-			t.Errorf("mountCalls count = %d, want 1 (stopped after first failure)", len(fake.mountCalls))
+		if len(fake.mountCalls) != 2 {
+			t.Errorf("mountCalls count = %d, want 2", len(fake.mountCalls))
 		}
 	})
 
@@ -342,8 +385,8 @@ func TestMountExternalVolumes(t *testing.T) {
 		if len(fake.mountCalls) != 2 {
 			t.Fatalf("mountCalls count = %d, want 2", len(fake.mountCalls))
 		}
-		if fake.mountCalls[0].volumeID != "mock-vol-1" || fake.mountCalls[1].volumeID != "mock-vol-2" {
-			t.Errorf("mountCalls = %v, want calls for mock-vol-1 followed by mock-vol-2", fake.mountCalls)
+		if fake.mountCalls[0].volumeID == fake.mountCalls[1].volumeID {
+			t.Errorf("mountCalls = %v, want one call each for mock-vol-1 and mock-vol-2", fake.mountCalls)
 		}
 
 		// Verify vol-1 was not rolled back or unmounted when vol-2 failed.
