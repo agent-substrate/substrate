@@ -375,23 +375,37 @@ func resumeActorByName(ctx context.Context, name string) bool {
 	return true
 }
 
+func listDemoWorkers(ctx context.Context) ([]*ateapi.Worker, error) {
+	var workers []*ateapi.Worker
+	pageToken := ""
+	for {
+		resp, err := ateClient.ListWorkers(ctx, &ateapi.ListWorkersRequest{
+			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, worker := range resp.GetWorkers() {
+			if worker.GetWorkerNamespace() == namespace {
+				workers = append(workers, worker)
+			}
+		}
+		pageToken = resp.GetNextPageToken()
+		if pageToken == "" {
+			return workers, nil
+		}
+	}
+}
+
 func countPoolWorkers(ctx context.Context) int {
 	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListWorkers(rctx, &ateapi.ListWorkersRequest{})
+	workers, err := listDemoWorkers(rctx)
 	if err != nil {
+		// Use the demo's configured replica count when the listing fails.
 		return 2
 	}
-	count := 0
-	for _, w := range resp.GetWorkers() {
-		if namespace == "" || w.GetWorkerNamespace() == "" || w.GetWorkerNamespace() == namespace {
-			count++
-		}
-	}
-	if count <= 0 {
-		return 2
-	}
-	return count
+	return len(workers)
 }
 
 func suspendActorByName(ctx context.Context, name string) bool {
@@ -507,15 +521,13 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListWorkers(ctx, &ateapi.ListWorkersRequest{})
+	workers, err := listDemoWorkers(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ListWorkers: " + err.Error()})
 		return
 	}
-	pods := make([]podSummary, 0, len(resp.GetWorkers()))
-	for _, wk := range resp.GetWorkers() {
-		// No demo-namespace filter: a Worker listing does not name the Actors
-		// it holds, so there is no template namespace to compare against.
+	pods := make([]podSummary, 0, len(workers))
+	for _, wk := range workers {
 		ready := wk.GetStatus().GetAllocated().GetActors() > 0
 		pods = append(pods, podSummary{
 			Name:      wk.GetWorkerPod(),
