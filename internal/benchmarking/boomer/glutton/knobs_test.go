@@ -78,11 +78,12 @@ func TestClassCodecs(t *testing.T) {
 		{
 			name:    "durdir",
 			codec:   durDirCodec,
-			initial: durDirKnobs{},
+			initial: durDirKnobs{FileCount: 1},
 			valid: `{
 				"min_wait_time": 0.1, "max_wait_time": 0.5,
 				"resume_mode": "implicit", "lifecycle_mode": "sync",
 				"durdir_file_size_bytes": 1048576,
+				"durdir_file_count": 256,
 				"durdir_read_mode": "digest",
 				"durdir_template": "glutton-durdir-data"
 			}`,
@@ -90,15 +91,18 @@ func TestClassCodecs(t *testing.T) {
 				WaitTime:  window,
 				Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeImplicit, LifecycleMode: dynconfig.LifecycleModeSync},
 				FileSize:  1048576,
+				FileCount: 256,
 				ReadMode:  readModeDigest,
 				Template:  "glutton-durdir-data",
 			},
 			invalid: map[string]string{
-				"negative file size":      `{"durdir_file_size_bytes": -100}`,
-				"file size over 2 GiB":    `{"durdir_file_size_bytes": 2147483648}`,
-				"invalid read mode":       `{"durdir_read_mode": "invalid_read"}`,
-				"invalid lifecycle mode":  `{"lifecycle_mode": "invalid_lifecycle"}`,
-				"max wait below min wait": `{"min_wait_time": 2, "max_wait_time": 1}`,
+				"file count exceeds int32": `{"durdir_file_count": 2147483648}`,
+				"fractional file count":    `{"durdir_file_count": 1.5}`,
+				"negative file size":       `{"durdir_file_size_bytes": -100}`,
+				"file size over 2 GiB":     `{"durdir_file_size_bytes": 2147483648}`,
+				"invalid read mode":        `{"durdir_read_mode": "invalid_read"}`,
+				"invalid lifecycle mode":   `{"lifecycle_mode": "invalid_lifecycle"}`,
+				"max wait below min wait":  `{"min_wait_time": 2, "max_wait_time": 1}`,
 			},
 		},
 		{
@@ -136,5 +140,32 @@ func TestClassCodecs(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestDurDirFileCountDefaults(t *testing.T) {
+	h := dynconfig.NewHolder(durDirCodec)
+	for _, tc := range []struct {
+		payload string
+		want    int
+	}{
+		{`{"durdir_file_count": 256}`, 256},
+		{`{"durdir_file_count": null}`, 1},
+		{`{"durdir_file_count": 4}`, 4},
+		{`{}`, 1},
+		{`{"durdir_file_count": 0}`, 0},
+		{`{"durdir_file_count": -1}`, -1},
+	} {
+		if _, _, err := h.Apply([]byte(tc.payload)); err != nil {
+			t.Fatalf("Apply(%s): %v", tc.payload, err)
+		}
+		cfg := dynconfig.Get[durDirKnobs](h)
+		if cfg.FileCount != tc.want {
+			t.Errorf("Apply(%s): FileCount = %d, want %d", tc.payload, cfg.FileCount, tc.want)
+		}
+		layout, _ := (&durDirUser{}).params(cfg)
+		if layout.fileCount != int32(max(1, tc.want)) {
+			t.Errorf("Apply(%s): layout.fileCount = %d", tc.payload, layout.fileCount)
+		}
 	}
 }

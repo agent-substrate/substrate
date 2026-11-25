@@ -66,6 +66,7 @@ type Server struct {
 	mu            sync.Mutex
 	paths         []string
 	writeSizes    []int32
+	writeCounts   []int32
 	readModes     []gluttonpb.ReadMode
 	ramWriteSizes []string
 	ramWriteModes []gluttonpb.WriteMode
@@ -108,6 +109,13 @@ func (s *Server) RecordedWriteSizes() []int32 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]int32(nil), s.writeSizes...)
+}
+
+// RecordedWriteFileCounts returns each /writedisk request's file_count.
+func (s *Server) RecordedWriteFileCounts() []int32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int32(nil), s.writeCounts...)
 }
 
 func (s *Server) RecordedReadModes() []gluttonpb.ReadMode {
@@ -187,6 +195,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		s.writeSizes = append(s.writeSizes, req.GetSize())
+		s.writeCounts = append(s.writeCounts, req.GetFileCount())
 		s.mu.Unlock()
 
 		resp, _ := proto.Marshal(&gluttonpb.WriteDiskResponse{

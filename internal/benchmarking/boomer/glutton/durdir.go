@@ -285,20 +285,26 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 	return nil
 }
 
-func (u *durDirUser) params(dynCfg durDirKnobs) (int64, gluttonpb.ReadMode) {
-	fileSize := dynCfg.FileSize
-	if fileSize <= 0 {
-		fileSize = defaultFileSize
+// durDirLayout spreads totalSize bytes over fileCount files.
+type durDirLayout struct {
+	totalSize int64
+	fileCount int32
+}
+
+func (u *durDirUser) params(dynCfg durDirKnobs) (durDirLayout, gluttonpb.ReadMode) {
+	layout := durDirLayout{totalSize: dynCfg.FileSize, fileCount: int32(max(1, dynCfg.FileCount))}
+	if layout.totalSize <= 0 {
+		layout.totalSize = defaultFileSize
 	}
 	readMode := gluttonpb.ReadMode_READ_MODE_DATA
 	if dynCfg.ReadMode == readModeDigest {
 		readMode = gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY
 	}
-	return fileSize, readMode
+	return layout, readMode
 }
 
 func (u *durDirUser) step(ctx context.Context, dynCfg durDirKnobs) {
-	fileSize, readMode := u.params(dynCfg)
+	layout, readMode := u.params(dynCfg)
 
 	// 1. Suspend or pause actor
 	u.hibernate(ctx, dynCfg)
@@ -318,21 +324,21 @@ func (u *durDirUser) step(ctx context.Context, dynCfg durDirKnobs) {
 		return
 	}
 
-	// 5. Overwrite file with fresh random bytes
-	if err := u.writeDisk(ctx, "DurDirOverwrite", fileSize, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
+	// 5. Overwrite files with fresh random bytes
+	if err := u.writeDisk(ctx, "DurDirOverwrite", layout, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
 		return
 	}
 }
 
 func (u *durDirUser) bootstrap(ctx context.Context, dynCfg durDirKnobs) error {
-	fileSize, readMode := u.params(dynCfg)
+	layout, readMode := u.params(dynCfg)
 
 	if !u.resume(ctx, dynCfg.ResumeMode) {
 		return fmt.Errorf("initial resume failed")
 	}
 
-	// Initial write to create DurDir file
-	if err := u.writeDisk(ctx, "DurDirWrite", fileSize, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
+	// Initial write to create DurDir files
+	if err := u.writeDisk(ctx, "DurDirWrite", layout, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
 		return fmt.Errorf("initial WriteDisk failed: %w", err)
 	}
 
@@ -344,11 +350,13 @@ func (u *durDirUser) bootstrap(ctx context.Context, dynCfg durDirKnobs) error {
 	return nil
 }
 
-func (u *durDirUser) writeDisk(ctx context.Context, metricName string, size int64, mode gluttonpb.WriteMode) error {
+func (u *durDirUser) writeDisk(ctx context.Context, metricName string, layout durDirLayout, mode gluttonpb.WriteMode) error {
+	size := layout.totalSize
 	req := &gluttonpb.WriteDiskRequest{
 		Key:       durDirTestFile,
 		Size:      int32(size),
 		WriteMode: mode,
+		FileCount: layout.fileCount,
 	}
 	body, err := proto.Marshal(req)
 	if err != nil {
