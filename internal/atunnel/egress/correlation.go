@@ -15,9 +15,7 @@
 package egress
 
 import (
-	"errors"
 	"net"
-	"net/http"
 	"net/netip"
 	"strconv"
 
@@ -41,20 +39,4 @@ func namedDestination(names *fakeip.Table, address string) string {
 		return address
 	}
 	return net.JoinHostPort(name, strconv.Itoa(int(addrPort.Port())))
-}
-
-// refusesNames reports whether err is how a gateway that only takes addresses
-// answers a CONNECT to a name.
-//
-// TODO(liorlieberman): do we need this, or is an upgrade note enough? Workers
-// upgrade before atenet and roll back after it
-// (docs/reference/version-skew-policy.md), so a worker can face a gateway one
-// release older. If we keep it, remove it once every supported gateway accepts
-// a name.
-func refusesNames(err error) bool {
-	var rejected *ConnectRejectedError
-	if !errors.As(err, &rejected) {
-		return false
-	}
-	return rejected.StatusCode == http.StatusForbidden || rejected.StatusCode == http.StatusBadRequest
 }

@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/testcert"
 	corev1 "k8s.io/api/core/v1"
@@ -594,7 +595,7 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 	if got.Error != "" || got.StatusCode != http.StatusOK || got.Body != expectedBody || got.Protocol != "HTTP/1.1" || !got.TLS {
 		t.Errorf("HTTPS observation = %+v; want verified TLS, HTTP/1.1, status 200 and body %q", got, expectedBody)
 	}
-	assertProtocolGateway(t, ctx, since, actorName, target.TLSAddress())
+	assertProtocolGateway(t, ctx, since, actorName, tlsEgressAuthority(target))
 }
 
 func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod, encrypted bool) (e2e.Server, string, string) {
@@ -852,6 +853,16 @@ func valueString(value *string) string {
 // name, which the unified gateway needs for SNI, on its TLS port if it has one.
 // The CONNECT authority in the gateway's access log is the ClusterIP on the
 // same port, target.TLSAddress() or target.Address().
+// tlsEgressAuthority is the CONNECT authority the gateway logs when the actor
+// connects to target's TLS port by name. With DNS correlation that is the
+// name, and without it the address the name resolved to.
+func tlsEgressAuthority(target e2e.Server) string {
+	if preview.IsEnabled(preview.GateDNSCorrelationInWorker) {
+		return protocolOriginRequest(target)
+	}
+	return target.TLSAddress()
+}
+
 func protocolOriginRequest(target e2e.Server) string {
 	port := target.Port
 	if target.TLSPort != 0 {

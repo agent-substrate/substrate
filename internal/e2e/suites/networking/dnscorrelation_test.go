@@ -34,17 +34,10 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 )
 
-// dnsCorrelationManifests is the probe fixture on a WorkerPool with DNS
-// correlation on.
-var dnsCorrelationManifests = e2e.SubstrateFixtureManifests{
-	Pool:     "internal/e2e/fixtures/probe/probe-dnscorrelation.yaml.tmpl",
-	Template: "internal/e2e/fixtures/probe/probe-template.yaml.tmpl",
-}
-
 // fakeAddresses is the range DNS correlation answers from.
 var fakeAddresses = netip.MustParsePrefix("198.18.0.0/15")
 
-// TestActorDNSCorrelation: on a pool with DNS correlation, an actor's lookup
+// TestActorDNSCorrelation: with DNS correlation, an actor's lookup
 // of an allowed name returns a fake address, and its connection to that
 // address reaches the egress gateway as a CONNECT to the name. After a suspend
 // and resume, the address the actor was given still leads to the name, and
@@ -58,7 +51,7 @@ var fakeAddresses = netip.MustParsePrefix("198.18.0.0/15")
 func TestActorDNSCorrelation(t *testing.T) {
 	e2e.RequirePreview(t, preview.GateDNSCorrelationInWorker)
 	if e2e.IsAgentGateway() {
-		t.Skip("agentgateway connects plain HTTP to the address in the CONNECT, so its actors cannot be given fake addresses")
+		t.Skip("the test reads fields only Envoy's CONNECT access log has")
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -69,7 +62,7 @@ func TestActorDNSCorrelation(t *testing.T) {
 	originURL := "http://" + name + "/healthz"
 	authority := net.JoinHostPort(name, "80")
 
-	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, dnsCorrelationManifests, "dnscorrelation", nil)
+	atespace, _ := e2e.DeployProbe(t, "dnscorrelation")
 	const id = "correlated"
 	ref := &ateapi.ObjectRef{Atespace: atespace, Name: id}
 	actorRef := resources.ActorRef{Atespace: atespace, Name: id}

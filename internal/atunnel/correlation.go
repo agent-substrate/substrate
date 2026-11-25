@@ -26,9 +26,9 @@ import (
 )
 
 // NewFakeIPs returns the fake address table for an actor that starts without
-// a snapshot. It returns nil unless the worker runs with --dns-correlation.
+// a snapshot. It returns nil unless the DnsCorrelationInWorker gate is on.
 func (t *Tunnel) NewFakeIPs(actor resources.ActorAttribution) *fakeip.Table {
-	if !t.cfg.DNSCorrelation {
+	if !t.dnsCorrelation {
 		return nil
 	}
 	return fakeip.New(fakeIPsLogger(actor))
@@ -38,16 +38,17 @@ func (t *Tunnel) NewFakeIPs(actor resources.ActorAttribution) *fakeip.Table {
 // from the snapshot in dir, so the addresses the actor kept still lead to the
 // same names.
 //
-// A worker that runs without --dns-correlation loads the table too. It does
+// A worker without the DnsCorrelationInWorker gate loads the table too. It does
 // not serve it, but saves it with the actor's next checkpoint, so the actor
 // still has it on a later worker that does.
 func (t *Tunnel) LoadFakeIPs(ctx context.Context, actor resources.ActorAttribution, dir string) *fakeip.Table {
 	table, err := fakeip.Load(dir, fakeIPsLogger(actor))
 	if err != nil {
-		// Not a reason to fail the restore: an address the actor kept then
-		// belongs to no name, and is tunneled as the address it is.
-		slog.LogAttrs(ctx, slog.LevelError, "Could not load the actor's fake addresses; starting with none",
+		// Not a reason to fail the restore. A new table could give an address the
+		// actor kept to another name, so the actor gets one with none left.
+		slog.LogAttrs(ctx, slog.LevelError, "Could not load the actor's fake addresses; giving it no new ones",
 			append(ateattr.ActorLogAttrs(actor), slog.Any("err", err))...)
+		return fakeip.NewUsedUp(fakeIPsLogger(actor))
 	}
 	if table == nil {
 		return t.NewFakeIPs(actor)
@@ -60,11 +61,11 @@ func fakeIPsLogger(actor resources.ActorAttribution) *slog.Logger {
 	return slog.New(slog.Default().Handler().WithAttrs(ateattr.ActorLogAttrs(actor)))
 }
 
-// ServedFakeIPs returns table if the worker runs with --dns-correlation, and
+// ServedFakeIPs returns table if the DnsCorrelationInWorker gate is on, and
 // nil otherwise: the actor's DNS then answers with real addresses, and its
 // connections are tunneled by address.
 func (t *Tunnel) ServedFakeIPs(table *fakeip.Table) *fakeip.Table {
-	if !t.cfg.DNSCorrelation {
+	if !t.dnsCorrelation {
 		return nil
 	}
 	return table

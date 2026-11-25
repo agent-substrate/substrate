@@ -192,7 +192,7 @@ func requestDestination(md *extproc.RequestMetadata) (egresspolicy.Destination, 
 	if raw := md.Attribute(extproc.ConnectAuthorityFilterStateAttribute); raw != "" {
 		dialed, err := egresspolicy.NormalizeAuthority(raw)
 		if err != nil || dialed.Port == 0 {
-			return egresspolicy.Destination{}, fmt.Errorf("CONNECT authority %q is not a host:port", raw)
+			return egresspolicy.Destination{}, fmt.Errorf("invalid CONNECT authority %q", raw)
 		}
 		dest.Port = dialed.Port
 	}

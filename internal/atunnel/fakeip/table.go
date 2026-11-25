@@ -64,6 +64,11 @@ func New(log *slog.Logger) *Table {
 	return newTable(log, capacity, rand.Uint32N(poolSize), poolSize)
 }
 
+// NewUsedUp returns an empty table that has no address left to give out.
+func NewUsedUp(log *slog.Logger) *Table {
+	return newTable(log, capacity, 0, 0)
+}
+
 func newTable(log *slog.Logger, capacity int, next, left uint32) *Table {
 	return &Table{
 		log:      log,

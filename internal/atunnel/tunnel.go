@@ -77,9 +77,6 @@ type Config struct {
 	EgressTrustBundle string
 	// DNSEgressPolicy selects the DNS egress policy enforcement mode.
 	DNSEgressPolicy string
-	// DNSCorrelation answers actor DNS lookups with fake addresses, so that
-	// actor connections are tunneled to the egress gateway by name.
-	DNSCorrelation bool
 }
 
 // RegisterFlags registers the atunnel flags on fs and returns the Config they
@@ -97,7 +94,6 @@ func RegisterFlags(fs FlagSet) *Config {
 	fs.StringVar(&c.EgressListenAddress, "atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	fs.StringVar(&c.EgressTrustBundle, "atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+")")
-	fs.BoolVar(&c.DNSCorrelation, "dns-correlation", false, "Answer actor DNS lookups with fake addresses, so that actor connections are tunneled to the egress gateway by name. Needs the "+string(preview.GateDNSCorrelationInWorker)+" preview gate.")
 	return c
 }
 
@@ -120,6 +116,8 @@ type Tunnel struct {
 	cfg Config
 	// ateletTLS is used to authenticate to atelet to fetch egress policies.
 	ateletTLS *tls.Config
+	// dnsCorrelation is whether the DnsCorrelationInWorker preview gate is on.
+	dnsCorrelation bool
 }
 
 // Start builds the DNS relay and starts serving actor ingress, which proxies
@@ -128,9 +126,6 @@ type Tunnel struct {
 func Start(ctx context.Context, cfg Config, upstream string, meter metric.Meter) (*Tunnel, error) {
 	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
 		return nil, err
-	}
-	if cfg.DNSCorrelation && !preview.IsEnabled(preview.GateDNSCorrelationInWorker) {
-		return nil, fmt.Errorf("--dns-correlation needs the %s preview gate", preview.GateDNSCorrelationInWorker)
 	}
 	upstreamURL, err := url.Parse(upstream)
 	if err != nil {
@@ -176,12 +171,13 @@ func Start(ctx context.Context, cfg Config, upstream string, meter metric.Meter)
 	}
 
 	return &Tunnel{
-			Ingress:    ingressServer,
-			Egress:     egressProxy,
-			EgressPort: egressPort,
-			DNSRelay:   dnsRelay,
-			cfg:        cfg,
-			ateletTLS:  ateletTLS},
+			Ingress:        ingressServer,
+			Egress:         egressProxy,
+			EgressPort:     egressPort,
+			DNSRelay:       dnsRelay,
+			cfg:            cfg,
+			ateletTLS:      ateletTLS,
+			dnsCorrelation: preview.IsEnabled(preview.GateDNSCorrelationInWorker)},
 		nil
 }
 

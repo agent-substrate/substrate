@@ -178,7 +178,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	// the tunnel dial the SNI or the Host they decided on, on this port.
 	dest, err := egresspolicy.NormalizeAuthority(md.Host)
 	if err != nil || dest.Port == 0 {
-		slog.WarnContext(ctx, "egress denied: CONNECT authority is not a host:port", slog.Any("actor", ref), slog.String("leg", leg), slog.String("authority", md.Host), slog.Any("err", err))
+		slog.WarnContext(ctx, "egress denied: invalid CONNECT authority", slog.Any("actor", ref), slog.String("leg", leg), slog.String("authority", md.Host), slog.Any("err", err))
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
 

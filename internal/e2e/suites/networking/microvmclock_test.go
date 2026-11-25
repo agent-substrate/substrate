@@ -103,7 +103,7 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 	if got.Error != "" || got.StatusCode != 200 || got.Body != "delayed restore clock" || got.Protocol != "HTTP/1.1" || !got.TLS {
 		t.Errorf("delayed-restore HTTPS observation = %+v; want one verified TLS HTTP/1.1 8443 request", got)
 	}
-	assertProtocolGateway(t, ctx, since, actorName, target.TLSAddress())
+	assertProtocolGateway(t, ctx, since, actorName, tlsEgressAuthority(target))
 }
 
 func logOriginCertificateValidity(t *testing.T, ctx context.Context, target e2e.Server, rootCA string, suspendBoundary time.Time) {

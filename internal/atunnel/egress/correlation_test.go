@@ -16,11 +16,8 @@ package egress
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"net/netip"
 	"testing"
 	"time"
@@ -76,34 +73,11 @@ func TestNamedDestination(t *testing.T) {
 	}
 }
 
-func TestRefusesNames(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "no error", err: nil},
-		{name: "403", err: &ConnectRejectedError{StatusCode: http.StatusForbidden}, want: true},
-		{name: "400", err: &ConnectRejectedError{StatusCode: http.StatusBadRequest}, want: true},
-		{name: "wrapped 403", err: fmt.Errorf("dial: %w", &ConnectRejectedError{StatusCode: http.StatusForbidden}), want: true},
-		{name: "503", err: &ConnectRejectedError{StatusCode: http.StatusServiceUnavailable}},
-		{name: "not a rejection", err: errors.New("connection reset")},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := refusesNames(tc.err); got != tc.want {
-				t.Errorf("refusesNames(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestEgressTunnelsFakeAddressToItsName(t *testing.T) {
 	names := fakeip.New(slog.Default())
 	fakeAddr := fakeAddress(t, names, "db.example.com")
 	fake := net.JoinHostPort(fakeAddr.String(), "5432")
 	unused := net.JoinHostPort(unusedFakeAddress(t, names, fakeAddr).String(), "5432")
-	forbidden := &ConnectRejectedError{StatusCode: http.StatusForbidden}
 
 	tests := []struct {
 		name string
@@ -111,8 +85,6 @@ func TestEgressTunnelsFakeAddressToItsName(t *testing.T) {
 		names *fakeip.Table
 		// dialed is the address the actor connected to.
 		dialed string
-		// refuse is what the gateway answers a CONNECT to a name with.
-		refuse error
 		// wantTunnels are the destinations the proxy tries, in order.
 		wantTunnels []string
 	}{
@@ -120,8 +92,6 @@ func TestEgressTunnelsFakeAddressToItsName(t *testing.T) {
 		{name: "fake address that belongs to no name", names: names, dialed: unused, wantTunnels: []string{unused}},
 		{name: "real address", names: names, dialed: "93.184.216.34:443", wantTunnels: []string{"93.184.216.34:443"}},
 		{name: "address in the fake range without a table", dialed: fake, wantTunnels: []string{fake}},
-		{name: "gateway that refuses names", names: names, dialed: fake, refuse: forbidden, wantTunnels: []string{"db.example.com:5432", fake}},
-		{name: "gateway that fails for another reason", names: names, dialed: fake, refuse: errors.New("connection reset"), wantTunnels: []string{"db.example.com:5432"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,9 +110,6 @@ func TestEgressTunnelsFakeAddressToItsName(t *testing.T) {
 				tunnels <- destination
 				if _, _, err := net.SplitHostPort(destination); err != nil {
 					return nil, err
-				}
-				if host, _, _ := net.SplitHostPort(destination); tc.refuse != nil && net.ParseIP(host) == nil {
-					return nil, tc.refuse
 				}
 				return upstream, nil
 			})

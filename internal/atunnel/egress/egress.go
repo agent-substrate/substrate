@@ -370,27 +370,18 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 // openTunnel opens the tunnel for a connection the actor made to address. With
 // names, a fake address is tunneled to the name it was given to.
 func (e *Proxy) openTunnel(active *activation, names *fakeip.Table, address string) (net.Conn, error) {
-	dial := func(destination string) (net.Conn, error) {
-		ctx, cancel := context.WithTimeout(active.ctx, e.tunnelOpenTimeout)
-		defer cancel()
-		return active.dialer.DialContext(ctx, destination)
+	destination := address
+	if names != nil {
+		destination = namedDestination(names, address)
 	}
-	if names == nil {
-		return dial(address)
-	}
-	destination := namedDestination(names, address)
-	upstream, err := dial(destination)
-	if destination == address || err == nil {
-		return upstream, err
-	}
-	if refusesNames(err) {
-		upstream, err = dial(address)
-	}
-	if err != nil {
+	ctx, cancel := context.WithTimeout(active.ctx, e.tunnelOpenTimeout)
+	defer cancel()
+	upstream, err := active.dialer.DialContext(ctx, destination)
+	if err != nil && destination != address {
 		// The caller only knows the address, so say which name it stood for.
 		return nil, fmt.Errorf("egress: tunneling to %s: %w", destination, err)
 	}
-	return upstream, nil
+	return upstream, err
 }
 
 func copyBothWays(a, b net.Conn) {
