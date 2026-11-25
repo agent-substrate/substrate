@@ -16,9 +16,10 @@
 
 // Package workerhost hosts atunnel the way an ateworker does, with the
 // worker's own code: atunnel.Start once, then per actor the calls
-// cmd/ateworker-gvisor makes to run one, in its order. Only the sandbox itself
-// is missing: each actor's network namespaces, veth, nftables redirect, egress
-// listener, and DNS relay are real, but no gVisor runs in them.
+// cmd/ateworker-gvisor makes to run one, in its order. Only gVisor itself is
+// missing: each actor's network namespace, veth, nftables redirect, egress
+// listener, and DNS relay are real, and a guest namespace holds eth0 in place
+// of gVisor's network stack.
 package workerhost
 
 import (
@@ -26,13 +27,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"sync"
 
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"github.com/vishvananda/netlink"
+
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -50,8 +55,8 @@ type Sandbox struct {
 	// Actor is atespace/name, the value of the routing header.
 	Actor string `json:"actor"`
 	UID   string `json:"uid"`
-	// NetNS is the namespace the actor's runtime would run in, where its
-	// ingress actor listens and its egress starts.
+	// NetNS is the guest namespace holding the actor's network stack, where
+	// its ingress actor listens and its egress starts.
 	NetNS string `json:"netns"`
 }
 
@@ -73,6 +78,7 @@ type Host struct {
 type actor struct {
 	attribution resources.ActorAttribution
 	session     *actornet.SandboxSession
+	guest       netns.Handle
 }
 
 // Start starts atunnel from cfg, as a worker's main does, and hosts actors
@@ -98,7 +104,8 @@ func Start(ctx context.Context, cfg atunnel.Config, actors int, gatewayAddress s
 
 // host runs an actor's network as cmd/ateworker-gvisor's RunWorkload does:
 // clear any previous activation, prepare egress (minting the actor
-// certificate through atelet), set up the sandbox network, then activate.
+// certificate through atelet), set up the sandbox network, import eth0 and
+// activate the gateway as a sandbox start does, then activate.
 func (h *Host) host(ctx context.Context, attribution resources.ActorAttribution, gatewayAddress string) error {
 	if err := h.tunnel.Deactivate(ctx, attribution); err != nil {
 		return err
@@ -116,8 +123,12 @@ func (h *Host) host(ctx context.Context, attribution resources.ActorAttribution,
 	if err != nil {
 		return err
 	}
+	guest, err := importEth0(ctx, session, attribution.UID)
+	if err != nil {
+		return errors.Join(err, session.Close(ctx))
+	}
 	h.mu.Lock()
-	h.actors = append(h.actors, &actor{attribution: attribution, session: session})
+	h.actors = append(h.actors, &actor{attribution: attribution, session: session, guest: guest})
 	h.mu.Unlock()
 	if err := h.tunnel.ActivateEgress(attribution, egress); err != nil {
 		return err
@@ -134,7 +145,7 @@ func (h *Host) Info() Info {
 		info.Sandboxes = append(info.Sandboxes, Sandbox{
 			Actor: a.attribution.Ref.Atespace + "/" + a.attribution.Ref.Name,
 			UID:   a.attribution.UID,
-			NetNS: nodepath.ActorNetNSPath(a.attribution.UID),
+			NetNS: filepath.Join("/run/netns", guestNetNSName(a.attribution.UID)),
 		})
 	}
 	return info
@@ -155,10 +166,96 @@ func (h *Host) Close(ctx context.Context) error {
 		if err := a.session.Close(ctx); err != nil {
 			errs = append(errs, err)
 		}
+		if err := a.guest.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		if err := netns.RemoveNamed(guestNetNSName(a.attribution.UID)); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		slog.ErrorContext(ctx, "tearing down actors", slog.Any("err", err))
 		return err
 	}
 	return nil
+}
+
+// guestNetNSName names the namespace standing in for gVisor's network stack
+// in one hosted sandbox.
+func guestNetNSName(actorUID string) string {
+	return nodepath.ActorNetNSName(actorUID) + "-guest"
+}
+
+// importEth0 plays runsc: it removes eth0's kernel addresses, has
+// ActivateGateway assign the gateway address, then moves eth0 into a guest
+// namespace in place of gVisor's network stack.
+func importEth0(ctx context.Context, session *actornet.SandboxSession, actorUID string) (_ netns.Handle, retErr error) {
+	if err := netns.Do(ctx, session.Network.NetNS, func(context.Context) error {
+		eth0, err := netlink.LinkByName(actornet.ActorVethName)
+		if err != nil {
+			return err
+		}
+		addrs, err := netlink.AddrList(eth0, netlink.FAMILY_V4)
+		if err != nil {
+			return err
+		}
+		for _, addr := range addrs {
+			if err := netlink.AddrDel(eth0, &addr); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	if err := session.Network.ActivateGateway(ctx); err != nil {
+		return 0, err
+	}
+	guest, err := netns.CreateNamed(guestNetNSName(actorUID))
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if retErr != nil {
+			_ = guest.Close()
+			_ = netns.RemoveNamed(guestNetNSName(actorUID))
+		}
+	}()
+	if err := netns.Do(ctx, session.Network.NetNS, func(context.Context) error {
+		eth0, err := netlink.LinkByName(actornet.ActorVethName)
+		if err != nil {
+			return err
+		}
+		return netlink.LinkSetNsFd(eth0, int(guest))
+	}); err != nil {
+		return 0, err
+	}
+	if err := netns.Do(ctx, guest, func(context.Context) error {
+		// The ingress actor binds port 80 without privileges, as it could in
+		// the sandbox namespace.
+		if err := netns.SetSysctls(netns.Sysctl{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"}); err != nil {
+			return err
+		}
+		lo, err := netlink.LinkByName("lo")
+		if err != nil {
+			return err
+		}
+		if err := netlink.LinkSetUp(lo); err != nil {
+			return err
+		}
+		eth0, err := netlink.LinkByName(actornet.ActorVethName)
+		if err != nil {
+			return err
+		}
+		if err := netlink.AddrReplace(eth0, actornet.ActorVethAddr); err != nil {
+			return err
+		}
+		if err := netlink.LinkSetUp(eth0); err != nil {
+			return err
+		}
+		return netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: actornet.ActorVethGwIP})
+	}); err != nil {
+		return 0, err
+	}
+	return guest, nil
 }

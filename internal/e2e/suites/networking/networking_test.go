@@ -115,28 +115,52 @@ func TestActorEgress(t *testing.T) {
 	defer router.Close()
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	url := fmt.Sprintf("http://%s/healthz", target.Address())
-
-	// Bound the access-log scan to lines this test produced: captured before
-	// the fetch, with slack for clock skew against the gateway's node.
-	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
-	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
-	if status != http.StatusOK {
-		t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
-	}
-	t.Logf("Actor egress fetch of %s succeeded; body: %s", url, body)
-
-	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
-
-	// Test resolution by DNS.
-	t.Run("by DNS name", func(t *testing.T) {
-		url := fmt.Sprintf("http://%s.%s.svc.cluster.local/healthz", origin.Name, target.Namespace)
-		status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
-		if status != http.StatusOK {
-			t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+	for _, phase := range []string{"initial", "restored", "restored again"} {
+		if phase != "initial" {
+			clients := e2e.GetClients()
+			suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+				Actor:   actorRef.ToObjectRef(),
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			})
+			if err != nil {
+				t.Fatalf("SuspendActor: %v", err)
+			}
+			var latest *ateapi.Snapshot
+			for _, snapshot := range suspended.GetActor().GetStatus().GetSnapshots() {
+				if snapshot.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED &&
+					(latest == nil || snapshot.GetGeneration() > latest.GetGeneration()) {
+					latest = snapshot
+				}
+			}
+			if latest == nil || latest.GetFidelity() != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+				t.Fatalf("suspended snapshot = %v, want MEMORY", latest)
+			}
+			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+				t.Fatalf("ResumeActor: %v", err)
+			}
 		}
-		t.Logf("Actor egress fetch of %s succeeded; body: %s", url, body)
-	})
+		if !t.Run(phase, func(t *testing.T) {
+			since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+			url := fmt.Sprintf("http://%s/healthz", target.Address())
+			status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
+			if status != http.StatusOK {
+				t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+			}
+			if phase == "initial" {
+				assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
+			}
+
+			t.Run("by DNS name", func(t *testing.T) {
+				url := fmt.Sprintf("http://%s.%s.svc.cluster.local/healthz", origin.Name, target.Namespace)
+				status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
+				if status != http.StatusOK {
+					t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+				}
+			})
+		}) {
+			return
+		}
+	}
 }
 
 func TestActorEgressMultiplexing(t *testing.T) {
