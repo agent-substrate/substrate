@@ -293,10 +293,19 @@ func stat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// writefile writes a file at path inside the actor. The body is the content
+// query parameter when the request carries one, so a test can give each actor
+// content of its own and tell whose file a later read returned; without it the
+// body is the fixed string "written by probe".
 func writefile(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
+	query := r.URL.Query()
+	path := query.Get("path")
+	content := "written by probe"
+	if query.Has("content") {
+		content = query.Get("content")
+	}
 	resp := map[string]string{"path": path}
-	if err := os.WriteFile(path, []byte("written by probe"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		resp["error"] = err.Error()
 	} else {
 		resp["ok"] = "true"
@@ -563,6 +572,42 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+type netInterfaceInfo struct {
+	Name  string   `json:"name"`
+	Addrs []string `json:"addrs"`
+}
+
+type netInfoResponse struct {
+	Interfaces []netInterfaceInfo `json:"interfaces"`
+	Error      string             `json:"error,omitempty"`
+}
+
+// netinfo reports the network interfaces and IPv4 CIDR addresses visible inside
+// the sandbox.
+func netinfo(w http.ResponseWriter, _ *http.Request) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		writeJSON(w, netInfoResponse{Error: err.Error()})
+		return
+	}
+	out := make([]netInterfaceInfo, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			writeJSON(w, netInfoResponse{Error: fmt.Sprintf("interface %s addrs: %v", iface.Name, err)})
+			return
+		}
+		ipv4s := []string{}
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+				ipv4s = append(ipv4s, addr.String())
+			}
+		}
+		out = append(out, netInterfaceInfo{Name: iface.Name, Addrs: ipv4s})
+	}
+	writeJSON(w, netInfoResponse{Interfaces: out})
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -703,6 +748,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/fetch", fetch)
+	mux.HandleFunc("/netinfo", netinfo)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/lookup", lookup)

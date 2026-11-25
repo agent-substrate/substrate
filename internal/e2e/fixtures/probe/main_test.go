@@ -563,6 +563,42 @@ func TestStatReportsOwnerAndMode(t *testing.T) {
 	}
 }
 
+// The security e2e suite gives each actor content of its own through
+// /writefile's content parameter, and other suites rely on the fixed default.
+func TestWritefileContent(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name  string
+		query url.Values
+		want  string
+	}{
+		{name: "default", query: url.Values{}, want: "written by probe"},
+		{name: "given", query: url.Values{"content": {"written by ns/actor-a"}}, want: "written by ns/actor-a"},
+		{name: "empty", query: url.Values{"content": {""}}, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name)
+			tc.query.Set("path", path)
+			rec := httptest.NewRecorder()
+			writefile(rec, httptest.NewRequest(http.MethodGet, "/writefile?"+tc.query.Encode(), nil))
+			var resp map[string]string
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decoding /writefile response: %v", err)
+			}
+			if resp["ok"] != "true" || resp["error"] != "" {
+				t.Fatalf("/writefile = %v, want ok", resp)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("/writefile wrote %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The imagefs e2e suite asserts on /stdin, so these cases pin what readStdin
 // reports for each kind of stdin.
 func TestReadStdin(t *testing.T) {
@@ -616,5 +652,24 @@ func TestReadStdin(t *testing.T) {
 				t.Errorf("readStdin() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNetInfo(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/netinfo", nil)
+	rec := httptest.NewRecorder()
+	netinfo(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp netInfoResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding netinfo response: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("netinfo error: %s", resp.Error)
+	}
+	if len(resp.Interfaces) == 0 {
+		t.Fatal("netinfo returned 0 interfaces")
 	}
 }
