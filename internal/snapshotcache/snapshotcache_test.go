@@ -19,6 +19,7 @@ package snapshotcache
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -210,7 +211,7 @@ func TestStartWriteback(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	if err := StartWriteback([]string{p}, func() { close(done) }); err != nil {
+	if err := StartWriteback([]string{p}, nil, func() { close(done) }); err != nil {
 		t.Fatalf("StartWriteback: %v", err)
 	}
 	select {
@@ -258,7 +259,7 @@ func startFakeWriteback(t *testing.T, pc pageCache) (string, <-chan struct{}) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, nil, func() { close(done) }); err != nil {
 		t.Fatalf("startWriteback: %v", err)
 	}
 	return p, done
@@ -311,6 +312,73 @@ func TestStartWritebackDropsUnlinkedDirtyFile(t *testing.T) {
 	}
 }
 
+func TestStartWritebackFlushesOnlyWhenAsked(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 4<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	pc := &fakePageCache{onWriteOut: sync.OnceFunc(func() { close(started) })}
+	var tight atomic.Bool
+	// Pause each poll pass until the test tells it to proceed.
+	passes, proceed := make(chan struct{}), make(chan struct{})
+	flush := func() (bool, <-chan struct{}) {
+		passes <- struct{}{}
+		<-proceed
+		return tight.Load(), nil
+	}
+	done := make(chan struct{})
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, flush, func() { close(done) }); err != nil {
+		t.Fatalf("startWriteback: %v", err)
+	}
+	receive(t, passes, "no first pass")
+	proceed <- struct{}{}
+	// Once pass 2 starts, pass 1 has finished polling without flushing.
+	receive(t, passes, "no second pass")
+	if got := pc.writeOuts.Load(); got != 0 {
+		t.Fatalf("write-out started %d times before flush returned true, want 0", got)
+	}
+	tight.Store(true)
+	proceed <- struct{}{}
+	receive(t, started, "write-out didn't start once flush returned true")
+	pc.clean.Store(true)
+	receive(t, done, "done never ran once the file was clean")
+}
+
+func TestStartWritebackAsksAgainOnRecheck(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 4<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Delete the file on write-out so startWriteback finishes right away.
+	pc := &fakePageCache{onWriteOut: func() { _ = os.Remove(p) }}
+	recheck := make(chan struct{})
+	asked := make(chan struct{}, 2)
+	var calls atomic.Int32
+	flush := func() (bool, <-chan struct{}) {
+		asked <- struct{}{}
+		return calls.Add(1) > 1, recheck
+	}
+	done := make(chan struct{})
+	// Poll interval is 1h, so only closing recheck can wake the goroutine.
+	if err := startWriteback(pc, []time.Duration{time.Hour}, []string{p}, flush, func() { close(done) }); err != nil {
+		t.Fatalf("startWriteback: %v", err)
+	}
+	receive(t, asked, "flush never asked")
+	close(recheck)
+	receive(t, asked, "flush not asked again once recheck was closed")
+	receive(t, done, "done never ran")
+}
+
+func receive(t *testing.T, ch <-chan struct{}, msg string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatal(msg)
+	}
+}
+
 func TestStartWritebackStopsWriteOutOnUnlink(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "memory-ranges")
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
@@ -321,7 +389,7 @@ func TestStartWritebackStopsWriteOutOnUnlink(t *testing.T) {
 	}
 	pc := &fakePageCache{onWriteOut: func() { _ = os.Remove(p) }}
 	done := make(chan struct{})
-	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, nil, func() { close(done) }); err != nil {
 		t.Fatalf("startWriteback: %v", err)
 	}
 	select {
@@ -341,7 +409,7 @@ func TestStartWritebackStartsWriteOutRightAway(t *testing.T) {
 	}
 	pc := &fakePageCache{}
 	t.Cleanup(func() { pc.clean.Store(true) })
-	if err := startWriteback(pc, []time.Duration{30 * time.Second}, []string{p}, nil); err != nil {
+	if err := startWriteback(pc, []time.Duration{30 * time.Second}, []string{p}, nil, nil); err != nil {
 		t.Fatalf("startWriteback: %v", err)
 	}
 	deadline := time.Now().Add(10 * time.Second)

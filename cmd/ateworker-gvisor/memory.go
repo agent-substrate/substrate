@@ -70,3 +70,15 @@ func (s *AteWorkerService) checkpointCacheLimit(hosted *hostedActor, actorUID st
 	}
 	return max(checkpointWriteHeadroom, booked-used) + borrowed, borrowed
 }
+
+// checkpointFlush returns the flush func for a checkpoint's writeback, given
+// what checkpointCacheLimit returned. When the pod lent the whole write,
+// write-out waits until memory is tight. When it lent part or none, write-out
+// starts right away: the rest of the write isn't in the ledger, and terminate
+// has released the actor's booking.
+func (s *AteWorkerService) checkpointFlush(cacheHigh, borrowed int64) func() (bool, <-chan struct{}) {
+	if cacheHigh != 0 || borrowed <= 0 {
+		return nil
+	}
+	return s.borrow.Tight
+}
