@@ -25,18 +25,34 @@ Note:
 
 - `status.state`, and how long it has stayed there.
 - `status.crash.message` and `status.crash.crashTime`, if CRASHED.
-- `status.workerAssignment`: the worker pod, its namespace and pool.
-- `status.assignedNode`.
+- `status.workerAssignment`: the worker pod, its namespace and pool (cleared
+  when the actor is CRASHED).
+- `status.assignedNode` (kept even when CRASHED).
 
 ## 2. Check the worker and atelet
 
 A resume, suspend, or revert calls `atelet` on the assigned node, which calls
-the worker. Check both:
+the worker. Check `atelet` on `status.assignedNode`, and check the worker pod
+if `status.workerAssignment` is set:
 
 ```bash
 kubectl -n <worker-namespace> get pod <worker-pod> -o wide
 kubectl -n ate-system get pods -l app=atelet -o wide --field-selector spec.nodeName=<node>
 kubectl ate get workers
+```
+
+When the actor is CRASHED, `status.workerAssignment` is empty, while
+`status.assignedNode` still names the node for the `atelet` lookup. To find the
+worker that hosted it, check `ate-api-server` logs near `status.crash.crashTime`
+for `Releasing actor from a worker whose pod is gone`, `Releasing actor from a
+restarted worker`, or `Worker reported an actor crash`. Each line carries a
+`worker` attribute (the Worker name, which is also the worker pod's UID):
+
+```bash
+# If the Worker still exists, this gives its pod name and namespace:
+kubectl ate get worker <worker> -o yaml
+# If the worker pod was deleted, look up its events by UID:
+kubectl get events -A --field-selector involvedObject.uid=<worker>
 ```
 
 A missing worker pod or an unready `atelet` on the node causes most stuck and
@@ -54,8 +70,9 @@ the actor:
 | Call refused with `FailedPrecondition` | [Call refused](references/states.md#call-refused) |
 | RUNNING, but requests or logs show it is not working | [RUNNING but not working](references/states.md#running-but-not-working) |
 
-Run the Confirm check before calling a root cause. These logs are useful across
-all cases:
+Run the Confirm check before calling a root cause. Treat state-changing steps
+like `revert` and `resume` as recommendations and confirm with the user before
+running them. These logs are useful across all cases:
 
 ```bash
 # ate-api-server runs every lifecycle call and logs each one as `Handle RPC`,
@@ -68,8 +85,10 @@ kubectl ate logs actor <actor> -a <atespace> --source=lifecycle
 
 ## 4. Known gaps
 
-- On gVisor, an actor stays RUNNING even after its sandbox dies (such as from
-  OOM, see #2211). Nothing marks it CRASHED.
+- If an application process exits while its sandbox stays up (#2972), or a
+  process inside the sandbox or guest is OOM-killed without killing the sandbox
+  (#3615), the actor stays RUNNING (see #2211). A dead sandbox or microVM, or a
+  sandbox killed for exceeding its memory limit, is reported as CRASHED.
 - `ate-api-server` does not retry failed lifecycle calls. After a retriable
   error, the actor stays in its transition state until the caller retries.
 - During an `atelet` rollout, a resume or suspend hitting that node fails with
