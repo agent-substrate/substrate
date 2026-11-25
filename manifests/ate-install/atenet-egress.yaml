@@ -1113,6 +1113,14 @@ data:
             name: 25   # TCP_NOTSENT_LOWAT
             int_value: 16384
             state: STATE_PREBIND
+        # Sized like egress_forward_proxy. Each open gRPC stream holds a request
+        # here until it ends, so Envoy's default of 1024 caps concurrent streams.
+        circuit_breakers:
+          thresholds:
+          - priority: DEFAULT
+            max_connections: 65536
+            max_pending_requests: 65536
+            max_requests: 65536
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
@@ -1242,6 +1250,15 @@ data:
             name: 25   # TCP_NOTSENT_LOWAT
             int_value: 16384
             state: STATE_PREBIND
+        # Each passthrough tunnel holds one upstream connection for its whole
+        # life. These limits match mitm_internal, which caps its own tunnels the
+        # same way. Past Envoy's default of 1024, new tunnels are refused.
+        circuit_breakers:
+          thresholds:
+          - priority: DEFAULT
+            max_connections: 1048400
+            max_pending_requests: 1048400
+            max_requests: 1048400
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
