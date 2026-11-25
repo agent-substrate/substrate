@@ -17,8 +17,8 @@
 // Package tarutil archives and restores a directory tree as a tar file,
 // preserving the metadata a workload's data directory depends on: modes,
 // ownership, modification times, symlinks, hardlinks, FIFOs, overlay
-// whiteouts, and user.* / overlay extended attributes (as PAX SCHILY.xattr
-// records).
+// whiteouts, user.* / overlay extended attributes (as PAX SCHILY.xattr
+// records), and the holes in sparse files (see paxHoles).
 //
 // It exists for snapshotting durable-dir volumes and rootfs overlay uppers
 // (see cmd/ateworker-microvm): the contents are written by the sandboxed workload
@@ -144,7 +144,8 @@ type readerOnly struct{ io.Reader }
 //
 // Regular files, directories, symlinks, FIFOs, and overlay whiteouts are
 // archived with their mode, ownership, modification time, and the xattrs
-// keepXattr allows. A file with multiple links inside srcDir is archived once
+// keepXattr allows. A sparse regular file also records its holes (see
+// recordHoles). A file with multiple links inside srcDir is archived once
 // and referenced as a hardlink thereafter. Sockets and other device nodes are
 // skipped (see writeTree).
 func Create(ctx context.Context, tarPath, srcDir string, opts ...Option) error {
@@ -333,6 +334,9 @@ func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc
 				return fmt.Errorf("opening %q: %w", path, err)
 			}
 			defer in.Close()
+			if err := recordHoles(hdr, in, info); err != nil {
+				return fmt.Errorf("finding holes in %q: %w", path, err)
+			}
 			if err := tw.WriteHeader(hdr); err != nil {
 				return fmt.Errorf("writing tar header for %q: %w", path, err)
 			}
@@ -382,7 +386,8 @@ func openRegular(root *os.Root, name string) (*os.File, error) {
 }
 
 // Extract unpacks tarPath into dstDir, which must already exist. Modes,
-// ownership, modification times, symlinks, and hardlinks are restored.
+// ownership, modification times, symlinks, and hardlinks are restored, and a
+// file's recorded holes stay unallocated (see copySparse).
 //
 // All writes go through an os.Root rooted at dstDir, so entries naming a path
 // outside it — via "..", an absolute path, or a symlink planted earlier in the
@@ -455,6 +460,13 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		return nil
 
 	case tar.TypeReg:
+		holes, err := parseHoles(hdr)
+		if err != nil {
+			// The record only saves space, so a bad one costs a dense copy,
+			// not the restore.
+			slog.Warn("Ignoring invalid hole record while extracting archive",
+				slog.String("path", name), slog.String("root", root.Name()), slog.Any("err", err))
+		}
 		if err := replaceExisting(root, name); err != nil {
 			return err
 		}
@@ -462,7 +474,12 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		if err != nil {
 			return fmt.Errorf("creating file %q: %w", name, err)
 		}
-		_, copyErr := copyPooled(out, tr)
+		var copyErr error
+		if holes != nil {
+			copyErr = copySparse(out, tr, hdr.Size, holes)
+		} else {
+			_, copyErr = copyPooled(out, tr)
+		}
 		closeErr := out.Close()
 		if copyErr != nil {
 			return fmt.Errorf("writing contents of %q: %w", name, copyErr)
