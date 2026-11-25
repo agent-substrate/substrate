@@ -44,15 +44,12 @@ import (
 // is covered.
 func upstreamConnectSnapshot(t *testing.T) *cachev3.Snapshot {
 	t.Helper()
-	server := NewXdsServer(18000)
-	server.SetConfig(50053, "127.0.0.1")
-	server.SetConnectTLSPort(8444)
-	setIngressTLS(server)
-	server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
-	server.SetUpstreamConnect(true)
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
+	server := newEnvoyXdsTestServer(t, 18000, 50053, "127.0.0.1",
+		withConnectTLS(8444),
+		withIngressTLS(),
+		withUpstreamTls("/run/bundle.pem", "/run/trust.pem"),
+		withUpstreamConnect(),
+	)
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)

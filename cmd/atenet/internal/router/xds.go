@@ -696,12 +696,9 @@ func (x *XdsServer) UpdateSnapshot() error {
 	return x.snapshot.SetSnapshot(context.Background(), NodeID, snapshot)
 }
 
+// Serve starts the xDS gRPC server. Callers must call UpdateSnapshot at
+// least once before start serving.
 func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
-	// Ensure a first snapshot is deployed
-	if err := x.UpdateSnapshot(); err != nil {
-		slog.ErrorContext(ctx, "Warning - initial xDS setup update failed", slog.String("err", err.Error()))
-	}
-
 	grpcServer := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
