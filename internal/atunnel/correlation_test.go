@@ -36,7 +36,7 @@ func TestWorkerWithoutDNSCorrelationCarriesTheTable(t *testing.T) {
 	if table := plain.NewFakeIPs(testActor); table != nil {
 		t.Errorf("NewFakeIPs(testActor) returned a table without the gate")
 	}
-	if table := plain.LoadFakeIPs(ctx, testActor, t.TempDir()); table != nil {
+	if table := mustLoadFakeIPs(t, plain, t.TempDir()); table != nil {
 		t.Errorf("LoadFakeIPs() of a snapshot without a table returned one without the gate")
 	}
 
@@ -50,7 +50,7 @@ func TestWorkerWithoutDNSCorrelationCarriesTheTable(t *testing.T) {
 		t.Fatalf("SaveFakeIPs() = %q, want %q", file, fakeip.FileName)
 	}
 
-	carried := plain.LoadFakeIPs(ctx, testActor, fromCorrelating)
+	carried := mustLoadFakeIPs(t, plain, fromCorrelating)
 	if carried == nil {
 		t.Fatal("LoadFakeIPs() dropped the snapshot's table")
 	}
@@ -62,7 +62,7 @@ func TestWorkerWithoutDNSCorrelationCarriesTheTable(t *testing.T) {
 		t.Fatalf("SaveFakeIPs() of the carried table = %q, want %q", file, fakeip.FileName)
 	}
 
-	back := correlating.LoadFakeIPs(ctx, testActor, fromPlain)
+	back := mustLoadFakeIPs(t, correlating, fromPlain)
 	if served := correlating.ServedFakeIPs(back); served != back {
 		t.Errorf("ServedFakeIPs() did not return the table with the gate")
 	}
@@ -86,7 +86,7 @@ func TestFakeIPsSurviveCheckpointAndRestore(t *testing.T) {
 	if file := SaveFakeIPs(ctx, testActor, table, dir); file != fakeip.FileName {
 		t.Fatalf("SaveFakeIPs() = %q, want %q", file, fakeip.FileName)
 	}
-	restored := correlating.LoadFakeIPs(ctx, testActor, dir)
+	restored := mustLoadFakeIPs(t, correlating, dir)
 	if name, ok := restored.Name(addr); !ok || name != "db.example.com" {
 		t.Fatalf("after restore, %s belongs to %q, %v, want db.example.com", addr, name, ok)
 	}
@@ -109,10 +109,9 @@ func TestSaveFakeIPsWithNothingToSave(t *testing.T) {
 	}
 }
 
-// A checkpoint or restore goes on without the table. A table that cannot be
-// loaded is replaced with one that gives out no address, so an address the
-// actor kept cannot end up at another name.
-func TestFakeIPsFailuresDoNotFailTheActor(t *testing.T) {
+// A failed save leaves the checkpoint without a table, and a table that cannot
+// be loaded fails the restore, with or without the gate.
+func TestFakeIPsFailures(t *testing.T) {
 	ctx := context.Background()
 	table := correlating.NewFakeIPs(testActor)
 	if _, ok := table.Address("db.example.com"); !ok {
@@ -127,22 +126,18 @@ func TestFakeIPsFailuresDoNotFailTheActor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tunnel := range []*Tunnel{correlating, {}} {
-		restored := tunnel.LoadFakeIPs(ctx, testActor, dir)
-		if restored == nil {
-			t.Fatalf("LoadFakeIPs() of an unreadable table with the gate %v returned none, want a used-up one", tunnel.dnsCorrelation)
-		}
-		if addr, ok := restored.Address("db.example.com"); ok {
-			t.Errorf("the table that replaced an unreadable one gave out %s, want none", addr)
+		if _, err := tunnel.LoadFakeIPs(testActor, dir); err == nil {
+			t.Errorf("LoadFakeIPs() of an unreadable table with the gate %v succeeded, want an error", tunnel.dnsCorrelation)
 		}
 	}
+}
 
-	// The used-up table is saved, so the actor's next restore still gives out none.
-	usedUp := correlating.LoadFakeIPs(ctx, testActor, dir)
-	next := t.TempDir()
-	if file := SaveFakeIPs(ctx, testActor, usedUp, next); file != fakeip.FileName {
-		t.Fatalf("SaveFakeIPs() of a used-up table = %q, want %q", file, fakeip.FileName)
+// mustLoadFakeIPs loads the table saved in dir, failing the test on an error.
+func mustLoadFakeIPs(t *testing.T, tunnel *Tunnel, dir string) *fakeip.Table {
+	t.Helper()
+	table, err := tunnel.LoadFakeIPs(testActor, dir)
+	if err != nil {
+		t.Fatalf("LoadFakeIPs(): %v", err)
 	}
-	if addr, ok := correlating.LoadFakeIPs(ctx, testActor, next).Address("db.example.com"); ok {
-		t.Errorf("after another restore, the table gave out %s, want none", addr)
-	}
+	return table
 }

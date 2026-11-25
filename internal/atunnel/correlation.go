@@ -18,6 +18,7 @@ package atunnel
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"go.ate.dev/substrate/internal/ateattr"
@@ -41,19 +42,18 @@ func (t *Tunnel) NewFakeIPs(actor resources.ActorAttribution) *fakeip.Table {
 // A worker without the DnsCorrelationInWorker gate loads the table too. It does
 // not serve it, but saves it with the actor's next checkpoint, so the actor
 // still has it on a later worker that does.
-func (t *Tunnel) LoadFakeIPs(ctx context.Context, actor resources.ActorAttribution, dir string) *fakeip.Table {
+//
+// A table that cannot be loaded fails the restore: a new one could give an
+// address the actor kept to another name.
+func (t *Tunnel) LoadFakeIPs(actor resources.ActorAttribution, dir string) (*fakeip.Table, error) {
 	table, err := fakeip.Load(dir, fakeIPsLogger(actor))
 	if err != nil {
-		// Not a reason to fail the restore. A new table could give an address the
-		// actor kept to another name, so the actor gets one with none left.
-		slog.LogAttrs(ctx, slog.LevelError, "Could not load the actor's fake addresses; giving it no new ones",
-			append(ateattr.ActorLogAttrs(actor), slog.Any("err", err))...)
-		return fakeip.NewUsedUp(fakeIPsLogger(actor))
+		return nil, fmt.Errorf("loading the actor's fake addresses: %w", err)
 	}
 	if table == nil {
-		return t.NewFakeIPs(actor)
+		return t.NewFakeIPs(actor), nil
 	}
-	return table
+	return table, nil
 }
 
 // fakeIPsLogger returns the logger for actor's fake address table.
@@ -76,7 +76,8 @@ func (t *Tunnel) ServedFakeIPs(table *fakeip.Table) *fakeip.Table {
 func SaveFakeIPs(ctx context.Context, actor resources.ActorAttribution, table *fakeip.Table, dir string) string {
 	file, err := table.Save(dir)
 	if err != nil {
-		// Not a reason to fail the checkpoint, see LoadFakeIPs.
+		// Not a reason to fail the checkpoint. The actor's next activation
+		// starts a new table.
 		slog.LogAttrs(ctx, slog.LevelError, "Could not save the actor's fake addresses",
 			append(ateattr.ActorLogAttrs(actor), slog.Any("err", err))...)
 		return ""

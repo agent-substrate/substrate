@@ -50,8 +50,7 @@ type savedName struct {
 }
 
 // Save writes the table into dir and returns the name of the file. A nil
-// table, or a new one that never gave out an address, writes nothing and
-// returns "".
+// table, or one that never gave out an address, writes nothing and returns "".
 func (t *Table) Save(dir string) (string, error) {
 	if t == nil {
 		return "", nil
@@ -69,7 +68,7 @@ func (t *Table) Save(dir string) (string, error) {
 		content.Names = append(content.Names, savedName{Name: e.name, Address: addressAt(e.index)})
 	}
 	t.mu.Unlock()
-	if content.Left == poolSize {
+	if len(content.Names) == 0 {
 		return "", nil
 	}
 

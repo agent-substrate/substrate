@@ -76,6 +76,9 @@ the actor's connections to fake addresses fail. So turn the gate on only after
 
 ## Limits
 
+For symptoms and how to tell them apart, see
+[What to Expect and How to Debug](dns-correlation-debugging.md).
+
 * `198.18.0.0/15` must not hold real destinations of the actors. A connection
   to an address in it that a name was given is tunneled to that name.
 * A table holds the 4096 names an actor used most recently. A name pushed out
@@ -97,9 +100,9 @@ the actor's connections to fake addresses fail. So turn the gate on only after
 * A table that cannot be saved is missing from that snapshot, so the actor's
   next activation starts a new table. That table can give an address the
   actor kept to another name.
-* A table that cannot be loaded is replaced with one that gives out no
-  address, for the rest of the actor's life. Addresses the actor kept are
-  tunneled as addresses, and new names resolve to their real addresses.
+* A table that cannot be loaded fails the restore, so a kept address cannot
+  end up at another name. Only a corrupt file, an unknown format version, or
+  a bug causes it.
 * A worker of a release without DNS correlation does not keep the table in the
   actor's snapshots. After a rollback to such a release and a later upgrade,
   an address an actor kept can be given to another name.

@@ -1181,14 +1181,17 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	//   * The OCI bundles of the application containers are set up.
 	//   * Checkpoint downloaded and placed on disk
 
+	// Loaded before the network serves, so an address the actor kept leads
+	// to the same name from its first connection.
+	fakeIPs, err := s.tunnel.LoadFakeIPs(attribution, req.GetActorDirs().GetRestoreDir())
+	if err != nil {
+		return nil, err
+	}
 	egress, err := s.tunnel.PrepareEgress(ctx, attribution, req.GetEgressGateway())
 	timing.egressPrepare = lap(&tLast)
 	if err != nil {
 		return nil, err
 	}
-	// Loaded before the network serves, so an address the actor kept leads
-	// to the same name from its first connection.
-	fakeIPs := s.tunnel.LoadFakeIPs(ctx, attribution, req.GetActorDirs().GetRestoreDir())
 	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes, fakeIPs)
 	timing.netSetup = lap(&tLast)
 	if err != nil {

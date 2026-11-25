@@ -165,7 +165,11 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 	// Loaded before the network serves, so an address the actor kept leads
 	// to the same name from its first connection.
-	p.fakeIPs = s.tunnel.LoadFakeIPs(ctx, attribution, restoreDir)
+	fakeIPs, err := s.tunnel.LoadFakeIPs(attribution, restoreDir)
+	if err != nil {
+		return nil, err
+	}
+	p.fakeIPs = fakeIPs
 
 	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
 		return nil, err
