@@ -20,11 +20,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -129,10 +132,11 @@ const baseIDFile = "base-id"
 // Asset names in RunWorkloadRequest.runtime_asset_paths (set by atelet's
 // fetchRuntimeAssets, keyed by the ActorTemplate runtime asset names).
 const (
-	assetCH        = "cloud-hypervisor"
-	assetKernel    = "kata-kernel"
-	assetImage     = "kata-image"
-	assetVirtiofsd = "virtiofsd"
+	assetCH          = "cloud-hypervisor"
+	assetKernel      = "kata-kernel"
+	assetImage       = "kata-image"
+	assetVirtiofsd   = "virtiofsd"
+	assetMaxPhysBits = "max-phys-bits"
 
 	// guestImagePmemID names the virtio-pmem device that carries the guest
 	// image, in the VM config and so in every snapshot's config.json.
@@ -399,6 +403,11 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	if kernel == "" || image == "" {
 		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
+	vcpus := p.size.VCPUs()
+	cpus, err := guestCPUConfig(vcpus, paths[assetMaxPhysBits])
+	if err != nil {
+		return fmt.Errorf("read %s: %w", assetMaxPhysBits, err)
+	}
 	rr := s.resolveRuntime(paths)
 	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
 	if err != nil {
@@ -460,7 +469,6 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// snapshot restore reuses the size baked into the snapshot
 	// (restoreMemoryFidelity), so resizing an existing actor takes effect on its
 	// next cold boot.
-	vcpus := p.size.VCPUs()
 	if vcpus == 0 {
 		return errors.New("actor has no cpu limit to size the micro-VM's vCPUs")
 	}
@@ -535,7 +543,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host-side overlay upper through the shared mount). The console log is also read
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
-	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
+	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, cpus,
 		agentInit(ctx, client.Info()), s.guestDebug)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
@@ -789,6 +797,32 @@ func initParams(agentInit bool) string {
 		"systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket"
 }
 
+func guestCPUConfig(vcpus int, path string) (ch.CpusConfig, error) {
+	cpus := ch.CpusConfig{BootVcpus: int32(vcpus), MaxVcpus: int32(vcpus)}
+	if path == "" {
+		return cpus, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return cpus, err
+	}
+	defer f.Close()
+	const maxSize = 64
+	data, err := io.ReadAll(io.LimitReader(f, maxSize+1))
+	if err != nil {
+		return cpus, err
+	}
+	if len(data) > maxSize {
+		return cpus, fmt.Errorf("file exceeds %d bytes", maxSize)
+	}
+	bits, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 8)
+	if err != nil || bits < 32 || bits > 64 {
+		return cpus, errors.New("expected a decimal integer between 32 and 64")
+	}
+	cpus.MaxPhysBits = uint8(bits)
+	return cpus, nil
+}
+
 // buildVMConfig assembles the cloud-hypervisor VmConfig.
 //
 // The disk-backed rootfs upper share (see rootfsupper.go) is always present.
@@ -803,7 +837,7 @@ func initParams(agentInit bool) string {
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
 //
 // swiotlb=noforce skips the software bounce buffer.
-func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
+func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB int, cpus ch.CpusConfig, agentInit, debug bool) ch.VmConfig {
 	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
 		"panic=1 no_timer_check noreplace-smp console=hvc0 swiotlb=noforce " +
 		initParams(agentInit)
@@ -819,7 +853,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		serial = &ch.ConsoleConfig{Mode: "File", File: kata.SerialLogPath(id)}
 	}
 	return ch.VmConfig{
-		Cpus:    ch.CpusConfig{BootVcpus: int32(vcpus), MaxVcpus: int32(vcpus)},
+		Cpus:    cpus,
 		Memory:  ch.MemoryConfig{Size: int64(memMiB) * 1024 * 1024, Shared: true},
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only

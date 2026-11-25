@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -168,7 +169,7 @@ func TestBuildVMConfigConsole(t *testing.T) {
 	const id = "actor-1"
 	consoleLog := kata.ConsoleLogPath(id)
 
-	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false)
+	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, ch.CpusConfig{BootVcpus: 1, MaxVcpus: 1}, true, false)
 	if cfg.Console == nil || cfg.Console.Mode != "File" || cfg.Console.File != consoleLog {
 		t.Errorf("Console = %+v, want File %q", cfg.Console, consoleLog)
 	}
@@ -185,7 +186,7 @@ func TestBuildVMConfigConsole(t *testing.T) {
 		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)
 	}
 
-	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true)
+	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, ch.CpusConfig{BootVcpus: 1, MaxVcpus: 1}, true, true)
 	if dbg.Serial == nil || dbg.Serial.Mode != "File" || dbg.Serial.File != kata.SerialLogPath(id) {
 		t.Errorf("debug Serial = %+v, want File %q", dbg.Serial, kata.SerialLogPath(id))
 	}
@@ -232,8 +233,51 @@ func TestKernelParamsDebugConsole(t *testing.T) {
 	}
 }
 
+func TestMaxPhysBitsAsset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), assetMaxPhysBits)
+	if _, err := guestCPUConfig(2, path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing asset: got %v, want file not found", err)
+	}
+	for _, tt := range []struct {
+		name, contents, wantJSON string
+	}{
+		{"absent", "", `{"boot_vcpus":2,"max_vcpus":2}`},
+		{"configured", "43\n", `{"boot_vcpus":2,"max_vcpus":2,"max_phys_bits":43}`},
+		{"empty", "", ""},
+		{"not a number", "4x", ""},
+		{"too small", "31", ""},
+		{"too large", "65", ""},
+		{"trailing data", "43" + strings.Repeat(" ", 62) + "x", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			asset := ""
+			if tt.name != "absent" {
+				asset = path
+				if err := os.WriteFile(asset, []byte(tt.contents), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cpus, err := guestCPUConfig(2, asset)
+			if tt.wantJSON == "" {
+				if err == nil {
+					t.Fatalf("accepted invalid asset %q", tt.contents)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := buildVMConfig("actor-1", "/vmlinux", "/rootfs.img", "", "/console.log", 256, cpus, true, false)
+			got, err := json.Marshal(cfg.Cpus)
+			if err != nil || string(got) != tt.wantJSON {
+				t.Errorf("CPU config = %s, %v; want %s", got, err, tt.wantJSON)
+			}
+		})
+	}
+}
+
 func TestBuildVMConfigBalloon(t *testing.T) {
-	cfg := buildVMConfig("actor-1", "/vmlinux", "/rootfs.img", "", "/console.log", 256, 1, true, false)
+	cfg := buildVMConfig("actor-1", "/vmlinux", "/rootfs.img", "", "/console.log", 256, ch.CpusConfig{BootVcpus: 1, MaxVcpus: 1}, true, false)
 	if cfg.Balloon == nil || !cfg.Balloon.FreePageReporting || cfg.Balloon.Size != 0 {
 		t.Fatalf("cfg.Balloon = %+v, want size 0 with free page reporting", cfg.Balloon)
 	}
