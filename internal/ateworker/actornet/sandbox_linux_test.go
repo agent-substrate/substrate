@@ -32,11 +32,14 @@ import (
 	"time"
 
 	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"go.ate.dev/substrate/internal/nodepath"
+	"golang.org/x/sys/unix"
 
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/testgolden"
 )
 
 const testEgressPort = 15001
@@ -143,6 +146,96 @@ func TestSetupSandboxNetwork(t *testing.T) {
 	direct := &http.Client{Timeout: 2 * time.Second}
 	if _, err := direct.Get("http://" + net.JoinHostPort(ActorVethIP, "80")); err == nil {
 		t.Error("the worker namespace reached an actor directly; addresses are not isolated")
+	}
+}
+
+func TestSetupSandboxNetworkRejectsIPv6Only(t *testing.T) {
+	_, err := SetupSandboxNetwork(context.Background(), SandboxNetworkConfig{
+		ActorUID: "ipv6-only", EgressPort: testEgressPort, Families: IPv6,
+	})
+	if err == nil || !strings.Contains(err.Error(), "IPv4 actor networking is required") {
+		t.Fatalf("SetupSandboxNetwork() error = %v, want IPv4 requirement", err)
+	}
+}
+
+func TestSetupSandboxNetworkUsesSelectedFamilies(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name     string
+		uid      string
+		families IPFamilies
+		want4    bool
+		want6    bool
+	}{
+		{"IPv4", "14141414-1414-1414-1414-141414141414", IPv4, true, false},
+		{"dual stack", "46464646-4646-4646-4646-464646464646", IPv4 | IPv6, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+				ActorUID: tc.uid, Veth: true, EgressPort: testEgressPort, Families: tc.families,
+			})
+			if err != nil {
+				t.Fatalf("SetupSandboxNetwork: %v", err)
+			}
+			t.Cleanup(func() { CleanupSandboxNetwork(n) })
+
+			if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+				link, err := netlink.LinkByName(ActorVethName)
+				if err != nil {
+					return err
+				}
+				addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+				if err != nil {
+					return err
+				}
+				got4, got6 := false, false
+				for _, addr := range addrs {
+					if addr.IP.To4() != nil {
+						if addr.IP.String() == ActorVethIP {
+							got4 = true
+						}
+						continue
+					}
+					if addr.IP.String() == ActorVethIPv6 {
+						got6 = true
+						if addr.Flags&unix.IFA_F_TENTATIVE != 0 {
+							t.Error("actor IPv6 address is tentative")
+						}
+					}
+				}
+				if got4 != tc.want4 || got6 != tc.want6 {
+					t.Errorf("actor addresses include IPv4=%v IPv6=%v, want IPv4=%v IPv6=%v", got4, got6, tc.want4, tc.want6)
+				}
+				routes, err := netlink.RouteList(link, netlink.FAMILY_ALL)
+				if err != nil {
+					return err
+				}
+				default4, default6 := false, false
+				for _, route := range routes {
+					if route.Gw == nil {
+						continue
+					}
+					if route.Dst != nil {
+						ones, _ := route.Dst.Mask.Size()
+						if ones != 0 {
+							continue
+						}
+					}
+					if route.Gw.To4() != nil {
+						default4 = true
+					} else {
+						default6 = true
+					}
+				}
+				if default4 != tc.want4 || default6 != tc.want6 {
+					t.Errorf("default routes include IPv4=%v IPv6=%v, want IPv4=%v IPv6=%v", default4, default6, tc.want4, tc.want6)
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("inspecting actor network: %v", err)
+			}
+		})
 	}
 }
 
@@ -423,7 +516,7 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 		{"tap", "dddddddd-0000-0000-0000-00000000000d", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: tc.uid, Veth: tc.veth, EgressPort: testEgressPort})
+			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: tc.uid, Veth: tc.veth, EgressPort: testEgressPort, Families: IPv4})
 			if err != nil {
 				t.Fatalf("SetupSandboxNetwork: %v", err)
 			}
@@ -458,33 +551,123 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 				t.Fatal(err)
 			}
 			dropping := map[nftables.TableFamily]bool{}
-			var foundDisallowedEgress bool
+			filtering := map[nftables.TableFamily]bool{}
+			redirecting := map[nftables.TableFamily]bool{}
 			for _, ch := range chains {
 				if ch.Hooknum != nil && *ch.Hooknum == *nftables.ChainHookForward &&
 					ch.Policy != nil && *ch.Policy == nftables.ChainPolicyDrop {
 					dropping[ch.Table.Family] = true
 				}
-				if ch.Table.Family == nftables.TableFamilyIPv4 && ch.Name == "disallowed-egress" {
-					foundDisallowedEgress = true
-					rules, err := c.GetRules(ch.Table, ch)
-					if err != nil {
-						t.Fatalf("getting disallowed-egress rules: %v", err)
-					}
-					if len(rules) != 3 {
-						t.Errorf("disallowed-egress has %d rules, want 3", len(rules))
-					}
-				}
+				filtering[ch.Table.Family] = filtering[ch.Table.Family] || ch.Name == "disallowed-egress"
+				redirecting[ch.Table.Family] = redirecting[ch.Table.Family] || ch.Name == "prerouting"
 			}
 			for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
 				if !dropping[family] {
 					t.Errorf("no forward-hook chain with a drop policy for family %v", family)
 				}
+				if !filtering[family] {
+					t.Errorf("no disallowed-egress chain for family %v", family)
+				}
 			}
-			if !foundDisallowedEgress {
-				t.Error("no disallowed-egress chain found in IPv4 table")
+			if !redirecting[nftables.TableFamilyIPv4] {
+				t.Error("no IPv4 egress redirect")
+			}
+			if redirecting[nftables.TableFamilyIPv6] {
+				t.Error("IPv6 egress redirect installed on an IPv4-only worker")
 			}
 		})
 	}
+}
+
+func TestEgressRules(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	n, err := SetupSandboxNetwork(context.Background(), SandboxNetworkConfig{
+		ActorUID: "eeeeeeee-1111-1111-1111-111111111111", EgressPort: testEgressPort, Families: IPv4 | IPv6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { CleanupSandboxNetwork(n) })
+
+	c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.CloseLasting() }()
+
+	for _, tc := range []struct {
+		name  string
+		table *nftables.Table
+	}{
+		{name: "ipv4", table: &nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"}},
+		{name: "ipv6", table: &nftables.Table{Family: nftables.TableFamilyIPv6, Name: "worker-actor-v6"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got strings.Builder
+			for _, chainName := range []string{"disallowed-egress", "prerouting"} {
+				rules, err := c.GetRules(tc.table, &nftables.Chain{Table: tc.table, Name: chainName})
+				if err != nil {
+					t.Fatalf("getting %s/%s rules: %v", tc.table.Name, chainName, err)
+				}
+				for _, rule := range rules {
+					fmt.Fprintf(&got, "%s/%s: %s\n", tc.table.Name, chainName, nftRuleString(rule))
+				}
+			}
+
+			testgolden.Check(t, "egress-rules-"+tc.name+".golden", []byte(got.String()))
+		})
+	}
+}
+
+// nftRuleString returns a stable test-only description of nftables expressions,
+// such as "payload network 16:4 -> r1; cmp r1 == a9fe1100".
+func nftRuleString(rule *nftables.Rule) string {
+	parts := make([]string, 0, len(rule.Exprs))
+	for _, expression := range rule.Exprs {
+		switch e := expression.(type) {
+		case *expr.Payload:
+			base := fmt.Sprint(e.Base)
+			switch e.Base {
+			case expr.PayloadBaseNetworkHeader:
+				base = "network"
+			case expr.PayloadBaseTransportHeader:
+				base = "transport"
+			}
+			parts = append(parts, fmt.Sprintf("payload %s %d:%d -> r%d", base, e.Offset, e.Len, e.DestRegister))
+		case *expr.Bitwise:
+			parts = append(parts, fmt.Sprintf("bitwise r%d len %d mask %x xor %x -> r%d", e.SourceRegister, e.Len, e.Mask, e.Xor, e.DestRegister))
+		case *expr.Meta:
+			key := fmt.Sprint(e.Key)
+			if e.Key == expr.MetaKeyL4PROTO {
+				key = "l4proto"
+			}
+			parts = append(parts, fmt.Sprintf("meta %s -> r%d", key, e.Register))
+		case *expr.Cmp:
+			op := fmt.Sprint(e.Op)
+			switch e.Op {
+			case expr.CmpOpEq:
+				op = "=="
+			case expr.CmpOpNeq:
+				op = "!="
+			}
+			parts = append(parts, fmt.Sprintf("cmp r%d %s %x", e.Register, op, e.Data))
+		case *expr.Verdict:
+			verdict := fmt.Sprint(e.Kind)
+			if e.Kind == expr.VerdictAccept {
+				verdict = "accept"
+			}
+			parts = append(parts, "verdict "+verdict)
+		case *expr.Reject:
+			parts = append(parts, fmt.Sprintf("reject type %d code %d", e.Type, e.Code))
+		case *expr.Immediate:
+			parts = append(parts, fmt.Sprintf("immediate %x -> r%d", e.Data, e.Register))
+		case *expr.Redir:
+			parts = append(parts, fmt.Sprintf("redirect port r%d", e.RegisterProtoMin))
+		default:
+			parts = append(parts, fmt.Sprintf("%T", expression))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // A new namespace copies conf/all and conf/default from the node, and a link

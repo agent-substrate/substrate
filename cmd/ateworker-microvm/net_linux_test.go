@@ -89,7 +89,7 @@ func TestSetupActorTap(t *testing.T) {
 	ctx := context.Background()
 	ns := tapNetNS(t, "microvm-tap-test")
 
-	fds, err := setupActorTap(ctx, ns, "tap0_kata", 1)
+	fds, err := setupActorTap(ctx, ns, "tap0_kata", 1, actornet.IPv4|actornet.IPv6)
 	if err != nil {
 		t.Fatalf("setupActorTap: %v", err)
 	}
@@ -116,18 +116,33 @@ func TestSetupActorTap(t *testing.T) {
 		if got := link.Attrs().MTU; got != actorTapMTU {
 			t.Errorf("tap MTU = %d, want %d, the value the guest was snapshotted against", got, actorTapMTU)
 		}
-		addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+		addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
 		if err != nil {
 			return err
 		}
-		var found bool
+		found := map[string]struct{}{}
 		for _, a := range addrs {
-			if a.IPNet.String() == actornet.HostVethAddr.IPNet.String() {
-				found = true
+			found[a.IPNet.String()] = struct{}{}
+		}
+		for _, want := range []*netlink.Addr{actornet.HostVethAddr, actornet.HostVethIPv6Addr} {
+			if _, ok := found[want.IPNet.String()]; !ok {
+				t.Errorf("tap addresses = %v, want gateway %s", addrs, want)
 			}
 		}
-		if !found {
-			t.Errorf("tap addresses = %v, want the gateway %s the guest routes to", addrs, actornet.HostVethAddr)
+		neighbors, err := netlink.NeighList(link.Attrs().Index, netlink.FAMILY_ALL)
+		if err != nil {
+			return err
+		}
+		foundNeighbors := map[string]bool{}
+		for _, neighbor := range neighbors {
+			if neighbor.HardwareAddr.String() == actorGuestMAC && neighbor.State == netlink.NUD_PERMANENT {
+				foundNeighbors[neighbor.IP.String()] = true
+			}
+		}
+		for _, want := range []string{actornet.ActorVethIP, actornet.ActorVethIPv6} {
+			if !foundNeighbors[want] {
+				t.Errorf("tap neighbors = %v, want %s at %s permanent", neighbors, want, actorGuestMAC)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -147,7 +162,7 @@ func TestSetupActorTapReplacesALeftover(t *testing.T) {
 	ctx := context.Background()
 	ns := tapNetNS(t, "microvm-tap-replace")
 
-	first, err := setupActorTap(ctx, ns, "tap0_kata", 1)
+	first, err := setupActorTap(ctx, ns, "tap0_kata", 1, actornet.IPv4)
 	if err != nil {
 		t.Fatalf("first setupActorTap: %v", err)
 	}
@@ -155,7 +170,7 @@ func TestSetupActorTapReplacesALeftover(t *testing.T) {
 		defer f.Close()
 	}
 
-	second, err := setupActorTap(ctx, ns, "tap0_kata", 2)
+	second, err := setupActorTap(ctx, ns, "tap0_kata", 2, actornet.IPv4)
 	if err != nil {
 		t.Fatalf("second setupActorTap over a leftover: %v", err)
 	}

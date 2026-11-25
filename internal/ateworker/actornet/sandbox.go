@@ -61,6 +61,8 @@ func (n *SandboxNetwork) holdsNetNS() bool { return n.RuntimeNetNS > 0 }
 // SandboxNetworkConfig describes one actor's private networking.
 type SandboxNetworkConfig struct {
 	ActorUID string
+	// Families selects IPv4 or dual-stack networking. Zero defaults to IPv4.
+	Families IPFamilies
 
 	// Veth separates gVisor's interfaces from the kernel-owned gateway.
 	// MicroVMs use a tap in a single namespace instead.
@@ -85,6 +87,15 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 	actorUID := cfg.ActorUID
 	if actorUID == "" {
 		return nil, fmt.Errorf("actornet: actor UID is required")
+	}
+	if cfg.Families == 0 {
+		cfg.Families = IPv4
+	}
+	if cfg.Families&^(IPv4|IPv6) != 0 {
+		return nil, fmt.Errorf("actornet: invalid IP families %d", cfg.Families)
+	}
+	if !cfg.Families.Has(IPv4) {
+		return nil, fmt.Errorf("actornet: IPv4 actor networking is required")
 	}
 
 	actorNSName := nodepath.ActorNetNSName(actorUID)
@@ -117,7 +128,7 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 		}()
 		atunnelNS = outer
 	}
-	if err := installEgressRules(atunnelNS, cfg.EgressPort); err != nil {
+	if err := installEgressRules(atunnelNS, cfg.EgressPort, cfg.Families); err != nil {
 		return nil, err
 	}
 
@@ -218,7 +229,12 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 			return err
 		}
 		if err := netlink.AddrReplace(atSide, HostVethAddr); err != nil {
-			return fmt.Errorf("while assigning the atunnel-side address: %w", err)
+			return fmt.Errorf("while assigning the atunnel-side IPv4 address: %w", err)
+		}
+		if cfg.Families.Has(IPv6) {
+			if err := netlink.AddrReplace(atSide, HostVethIPv6Addr); err != nil {
+				return fmt.Errorf("while assigning the atunnel-side IPv6 address: %w", err)
+			}
 		}
 		if err := netlink.LinkSetUp(atSide); err != nil {
 			return err
@@ -235,15 +251,25 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 			return err
 		}
 		if err := netlink.AddrReplace(eth0, ActorVethAddr); err != nil {
-			return fmt.Errorf("while assigning the actor address: %w", err)
+			return fmt.Errorf("while assigning the actor IPv4 address: %w", err)
+		}
+		if cfg.Families.Has(IPv6) {
+			if err := netlink.AddrReplace(eth0, ActorVethIPv6Addr); err != nil {
+				return fmt.Errorf("while assigning the actor IPv6 address: %w", err)
+			}
 		}
 		if err := netlink.LinkSetUp(eth0); err != nil {
 			return err
 		}
-		return netlink.RouteReplace(&netlink.Route{
-			LinkIndex: eth0.Attrs().Index,
-			Gw:        ActorVethGwIP,
-		})
+		if err := netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethGwIP}); err != nil {
+			return err
+		}
+		if cfg.Families.Has(IPv6) {
+			if err := netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethIPv6GwIP}); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return 0, err
 	}
@@ -258,14 +284,16 @@ func linkUp(name string) error {
 	return netlink.LinkSetUp(link)
 }
 
-// installEgressRules rejects link-local traffic before it reaches the egress PEP,
-// then redirects other TCP egress to atunnel. The actor's own /30 is excluded
-// from both rules so ingress replies and DNS reach their local sockets.
-func installEgressRules(ns netns.Handle, egressPort uint16) error {
+// installEgressRules filters both IP families, then redirects enabled families'
+// TCP egress to atunnel. The actor's own subnet is excluded so ingress replies
+// and DNS reach their local sockets.
+func installEgressRules(ns netns.Handle, egressPort uint16, families IPFamilies) error {
 	const (
-		icmpNetUnreachable                          = 0
+		icmpDestinationUnreachable                  = 0
 		icmpDestinationAdministrativelyProhibited   = 13
 		icmpv6DestinationAdministrativelyProhibited = 1
+		icmpv6NeighborSolicitation                  = 135
+		icmpv6NeighborAdvertisement                 = 136
 	)
 
 	if egressPort == 0 {
@@ -277,22 +305,20 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 	}
 	defer func() { _ = c.CloseLasting() }()
 
-	var ipv4Table *nftables.Table
 	for _, family := range []struct {
+		flag        IPFamilies
 		tableFamily nftables.TableFamily
 		name        string
 		addressLen  uint32
 		dstOffset   uint32
 		rejectCode  uint8
-		isPrefix    func(netip.Prefix) bool
+		subnet      netip.Prefix
+		linkLocal   netip.Prefix
 	}{
-		{nftables.TableFamilyIPv4, "worker-actor", 4, 16, icmpDestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is4() }},
-		{nftables.TableFamilyIPv6, "worker-actor-v6", 16, 24, icmpv6DestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is6() }},
+		{IPv4, nftables.TableFamilyIPv4, "worker-actor", 4, 16, icmpDestinationAdministrativelyProhibited, netip.MustParsePrefix(ActorVethSubnet), netip.MustParsePrefix("169.254.0.0/16")},
+		{IPv6, nftables.TableFamilyIPv6, "worker-actor-v6", 16, 24, icmpv6DestinationAdministrativelyProhibited, netip.MustParsePrefix(ActorVethIPv6Subnet), netip.MustParsePrefix("fe80::/10")},
 	} {
 		table := c.AddTable(&nftables.Table{Family: family.tableFamily, Name: family.name})
-		if family.tableFamily == nftables.TableFamilyIPv4 {
-			ipv4Table = table
-		}
 		// Backs up the forwarding sysctls: nothing in this namespace is routed.
 		dropPolicy := nftables.ChainPolicyDrop
 		c.AddChain(&nftables.Chain{
@@ -304,85 +330,62 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 			Name: "disallowed-egress", Table: table, Type: nftables.ChainTypeFilter,
 			Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityRaw,
 		})
-		if family.tableFamily == nftables.TableFamilyIPv4 {
-			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: []expr.Any{
-				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
-				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: actorSubnetMask, Xor: []byte{0, 0, 0, 0}},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: actorSubnetBase},
-				&expr.Verdict{Kind: expr.VerdictAccept},
-			}})
-		}
-		for _, prefix := range linkLocalEgressCIDRRanges {
-			if !family.isPrefix(prefix) {
-				continue
+		// Accept the actor subnet and IPv6 neighbor discovery, reject link-local
+		// and non-TCP traffic, then redirect other TCP traffic to atunnel.
+		subnetMask := net.CIDRMask(family.subnet.Bits(), int(family.addressLen*8))
+		subnetBase := family.subnet.Addr().AsSlice()
+		c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: []expr.Any{
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
+			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: subnetMask, Xor: make([]byte, family.addressLen)},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: subnetBase},
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		}})
+		if family.flag == IPv6 {
+			for _, messageType := range []byte{icmpv6NeighborSolicitation, icmpv6NeighborAdvertisement} {
+				expressions := append(l4ProtocolEqual(unix.IPPROTO_ICMPV6),
+					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{messageType}},
+					&expr.Verdict{Kind: expr.VerdictAccept},
+				)
+				c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
 			}
-			mask := net.CIDRMask(prefix.Bits(), int(family.addressLen*8))
-			address := prefix.Addr().AsSlice()
-			expressions := []expr.Any{
-				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
-			}
-			expressions = append(expressions,
-				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: mask, Xor: make([]byte, family.addressLen)},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: address},
-				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: family.rejectCode},
-			)
-			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
 		}
-		if family.tableFamily == nftables.TableFamilyIPv4 {
-			// With forwarding off, the kernel drops unroutable packets silently instead
-			// of returning ICMP net unreachable. Reject non-TCP egress leaving the /30
-			// so UDP or ping fails fast rather than waiting out a timeout.
-			expressions := append(l4ProtocolNotEqual(unix.IPPROTO_TCP),
-				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: icmpNetUnreachable},
-			)
-			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
+		linkLocalMask := net.CIDRMask(family.linkLocal.Bits(), int(family.addressLen*8))
+		c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: []expr.Any{
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
+			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: linkLocalMask, Xor: make([]byte, family.addressLen)},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: family.linkLocal.Addr().AsSlice()},
+			&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: family.rejectCode},
+		}})
+		c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: append(l4ProtocolNotEqual(unix.IPPROTO_TCP),
+			&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: icmpDestinationUnreachable},
+		)})
+
+		if !families.Has(family.flag) {
+			continue
 		}
+		prerouting := c.AddChain(&nftables.Chain{
+			Name: "prerouting", Table: table, Type: nftables.ChainTypeNAT,
+			Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest,
+		})
+		expressions := []expr.Any{
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
+			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: subnetMask, Xor: make([]byte, family.addressLen)},
+			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: subnetBase},
+		}
+		expressions = append(expressions, l4ProtocolEqual(unix.IPPROTO_TCP)...)
+		expressions = append(expressions,
+			&expr.Immediate{Register: 1, Data: binaryutil.BigEndian.PutUint16(egressPort)},
+			&expr.Redir{RegisterProtoMin: 1},
+		)
+		c.AddRule(&nftables.Rule{Table: table, Chain: prerouting, Exprs: expressions})
 	}
-
-	prerouting := c.AddChain(&nftables.Chain{
-		Name: "prerouting", Table: ipv4Table, Type: nftables.ChainTypeNAT,
-		Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest,
-	})
-
-	// Offset of the destination address in an IPv4 header.
-	const ipv4HeaderDst = 16
-	exprs := []expr.Any{
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: ipv4HeaderDst, Len: 4},
-		&expr.Bitwise{
-			SourceRegister: 1, DestRegister: 1, Len: 4,
-			Mask: actorSubnetMask, Xor: []byte{0, 0, 0, 0},
-		},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: actorSubnetBase},
-	}
-	exprs = append(exprs, l4ProtocolEqual(unix.IPPROTO_TCP)...)
-	exprs = append(exprs,
-		&expr.Immediate{Register: 1, Data: binaryutil.BigEndian.PutUint16(egressPort)},
-		&expr.Redir{RegisterProtoMin: 1},
-	)
-	c.AddRule(&nftables.Rule{Table: ipv4Table, Chain: prerouting, Exprs: exprs})
 
 	if err := c.Flush(); err != nil {
 		return fmt.Errorf("while installing the actor egress redirect: %w", err)
 	}
 	return nil
 }
-
-// linkLocalEgressCIDRRanges cover all IPv4 and IPv6 link-local space. The
-// nftables chain accepts the actor's 169.254.17.0/30 first because that network
-// carries actor ingress and DNS relay traffic.
-var linkLocalEgressCIDRRanges = []netip.Prefix{
-	netip.MustParsePrefix("169.254.0.0/16"),
-	netip.MustParsePrefix("fe80::/10"),
-}
-
-// The actor subnet, in the form the nftables comparison takes.
-var actorSubnetBase, actorSubnetMask = func() ([]byte, []byte) {
-	_, subnet, err := net.ParseCIDR(ActorVethSubnet)
-	if err != nil {
-		panic(fmt.Sprintf("parsing constant actor subnet %q: %v", ActorVethSubnet, err))
-	}
-	return subnet.IP.To4(), subnet.Mask
-}()
 
 // gatewayVethName is the veth peer in the gateway namespace.
 const gatewayVethName = "atside"

@@ -42,7 +42,7 @@ import (
 const Atespace = "bench"
 
 // ActorPort is where the ingress actor listens inside each sandbox: the port
-// of actornet.ActorHTTPUpstream, which ingress proxies to.
+// of the actor HTTP upstream, which ingress proxies to.
 const ActorPort = 80
 
 // Sandbox is one hosted actor, as a process placing an ingress actor in it needs it.

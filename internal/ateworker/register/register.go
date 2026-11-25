@@ -148,14 +148,16 @@ func ParsePodIPs(value string) []string {
 	return ips
 }
 
-// buildCompat converts the compatibility attributes atelet wrote for one
-// SandboxConfig version into a VersionedSandboxCompat.
-func buildCompat(attrs sandboxruntimes.Attributes) *ateletpb.VersionedSandboxCompat {
-	entries := make([]*ateletpb.AttributeEntry, 0, len(attrs))
-	for _, k := range slices.Sorted(maps.Keys(attrs)) {
+// buildCompat converts the compatibility attributes for one worker runtime.
+func buildCompat(attrs, workerAttrs sandboxruntimes.Attributes) *ateletpb.VersionedSandboxCompat {
+	all := make(sandboxruntimes.Attributes, len(attrs)+len(workerAttrs))
+	maps.Copy(all, attrs)
+	maps.Copy(all, workerAttrs)
+	entries := make([]*ateletpb.AttributeEntry, 0, len(all))
+	for _, k := range slices.Sorted(maps.Keys(all)) {
 		entries = append(entries, &ateletpb.AttributeEntry{
 			Key:   k,
-			Value: attrs[k],
+			Value: all[k],
 		})
 	}
 	return &ateletpb.VersionedSandboxCompat{
@@ -166,20 +168,20 @@ func buildCompat(attrs sandboxruntimes.Attributes) *ateletpb.VersionedSandboxCom
 
 // buildRuntime converts one runtime of the sandbox runtimes file into a
 // WorkerSandboxRuntime.
-func buildRuntime(rt sandboxruntimes.Runtime) *ateletpb.WorkerSandboxRuntime {
-	return &ateletpb.WorkerSandboxRuntime{Version: buildCompat(rt.Version)}
+func buildRuntime(rt sandboxruntimes.Runtime, workerAttrs sandboxruntimes.Attributes) *ateletpb.WorkerSandboxRuntime {
+	return &ateletpb.WorkerSandboxRuntime{Version: buildCompat(rt.Version, workerAttrs)}
 }
 
 // buildRuntimesRequest builds the SetWorkerSandboxRuntimesRequest for one
 // class of the sandbox runtimes file, the one this worker implements, for the
 // worker process registered with epoch.
-func buildRuntimesRequest(epoch int64, class *sandboxruntimes.Class) *ateletpb.SetWorkerSandboxRuntimesRequest {
+func buildRuntimesRequest(epoch int64, class *sandboxruntimes.Class, workerAttrs sandboxruntimes.Attributes) *ateletpb.SetWorkerSandboxRuntimesRequest {
 	c := &ateletpb.WorkerSandboxClass{
 		SandboxClass:   class.SandboxClass,
-		DefaultRuntime: buildRuntime(class.DefaultRuntime),
+		DefaultRuntime: buildRuntime(class.DefaultRuntime, workerAttrs),
 	}
 	for _, rt := range class.RestorableRuntimes {
-		c.RestorableRuntimes = append(c.RestorableRuntimes, buildRuntime(rt))
+		c.RestorableRuntimes = append(c.RestorableRuntimes, buildRuntime(rt, workerAttrs))
 	}
 	return &ateletpb.SetWorkerSandboxRuntimesRequest{
 		Epoch:          epoch,
@@ -246,6 +248,9 @@ type ReportConfig struct {
 	// ActorOverhead is what each actor costs the worker on top of its own
 	// limits, reported on every runtime. Nil is none.
 	ActorOverhead *ateletpb.RuntimeOverhead
+	// RuntimeAttributes identify process-level compatibility requirements on
+	// every runtime.
+	RuntimeAttributes sandboxruntimes.Attributes
 	// SandboxClass is the class this worker implements ("gvisor", "microvm").
 	SandboxClass string
 	// RuntimesFile is the sandbox runtimes file atelet keeps for this worker
@@ -471,7 +476,7 @@ func (r *reconciler) sync(ctx context.Context) (retry bool, err error) {
 		slog.WarnContext(ctx, "Ignoring a sandbox runtimes file with no default runtime", slog.String("path", r.cfg.RuntimesFile))
 		return false, nil
 	}
-	req := buildRuntimesRequest(r.epoch, class)
+	req := buildRuntimesRequest(r.epoch, class, r.cfg.RuntimeAttributes)
 	setActorOverhead(req, r.cfg.ActorOverhead)
 	if proto.Equal(req, r.reported) {
 		return false, nil

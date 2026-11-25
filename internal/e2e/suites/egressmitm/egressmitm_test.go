@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -146,12 +147,13 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 
 	// The gateway dials the name the SNI claims.
-	bySNI := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "pem", originRoots, "dial="+url.QueryEscape(unreachableAddress))
+	unreachable := unreachableAddress(mitm.ClusterIP)
+	bySNI := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "pem", originRoots, "dial="+url.QueryEscape(unreachable))
 	switch {
 	case bySNI.Error != "":
-		t.Errorf("TLS passthrough to %s dialed at %s failed: %s — the gateway dialed the actor's address instead of resolving the SNI", passthroughOrigin, unreachableAddress, bySNI.Error)
+		t.Errorf("TLS passthrough to %s dialed at %s failed: %s — the gateway dialed the actor's address instead of resolving the SNI", passthroughOrigin, unreachable, bySNI.Error)
 	case bySNI.Status != "200":
-		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachableAddress, bySNI.Status)
+		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachable, bySNI.Status)
 	}
 
 	// Each name is an origin's fully qualified alias: only the wrong-port rule
@@ -190,12 +192,30 @@ func originSpec(name string) e2e.ServerPod {
 }
 
 const (
-	// unreachableAddress is in the reserved 240/4 block: a gateway that dialed
-	// it instead of the resolved SNI would reach nothing.
-	unreachableAddress = "240.0.0.1:443"
 	// systemRoot is the common name of a WebPKI root atelet's image ships.
 	systemRoot = "ISRG Root X1"
 )
+
+func unreachableAddress(originIP string) string {
+	if net.ParseIP(originIP).To4() == nil {
+		return "[2001:db8::1]:443"
+	}
+	return "240.0.0.1:443"
+}
+
+func TestUnreachableAddressMatchesOriginFamily(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		want   string
+	}{
+		{origin: "10.96.0.1", want: "240.0.0.1:443"},
+		{origin: "fd00:10:96::1", want: "[2001:db8::1]:443"},
+	} {
+		if got := unreachableAddress(tc.origin); got != tc.want {
+			t.Errorf("unreachableAddress(%q) = %q, want %q", tc.origin, got, tc.want)
+		}
+	}
+}
 
 type fetchResponse struct {
 	Status       string `json:"status"`

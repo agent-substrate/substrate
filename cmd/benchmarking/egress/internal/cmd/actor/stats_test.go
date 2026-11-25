@@ -16,17 +16,14 @@ package actor
 
 import (
 	"encoding/json"
-	"flag"
-	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
-)
 
-var updateGolden = flag.Bool("update", false, "rewrite testdata goldens")
+	"go.ate.dev/substrate/internal/testgolden"
+)
 
 // numberList matches an indented JSON array of numbers, so a golden can keep
 // each Point's bounds and counts on one line.
@@ -99,25 +96,13 @@ func TestStatsGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join("testdata", "collect.json")
-	if *updateGolden {
-		if err := os.WriteFile(path, got, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(want) {
-		t.Errorf("Stats JSON differs from %s (run with -update to accept):\n%s", path, got)
-	}
+	want := testgolden.Check(t, "collect.json", got)
 	var back Stats
 	if err := json.Unmarshal(want, &back); err != nil {
-		t.Fatalf("decoding %s: %v", path, err)
+		t.Fatalf("decoding golden: %v", err)
 	}
 	if !reflect.DeepEqual(back, in) {
-		t.Errorf("%s decodes to\n%+v\nwant\n%+v", path, back, in)
+		t.Errorf("golden decodes to\n%+v\nwant\n%+v", back, in)
 	}
 }
 

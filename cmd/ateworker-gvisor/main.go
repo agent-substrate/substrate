@@ -262,12 +262,18 @@ func do(ctx context.Context) error {
 		return err
 	}
 
+	workerPodIPs := register.ParsePodIPs(*podIPs)
+	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6)
+	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs, ipv6ActorNetworking)
+	if err != nil {
+		return err
+	}
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
 	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream, mp.Meter(serviceName))
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID)
+	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID, families)
 	ateworkerService.throttleMemory = cgroup.PSIEnabled(defaultCgroupRoot)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
@@ -324,7 +330,7 @@ func do(ctx context.Context) error {
 		TrustBundlePath:      tunnelConfig.TrustBundle,
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
-		PodIPs:               register.ParsePodIPs(*podIPs),
+		PodIPs:               workerPodIPs,
 		MemoryReservedBytes:  memoryReservedBytes,
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
@@ -421,7 +427,8 @@ type AteWorkerService struct {
 	terminateDead func(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxExited bool) error
 
 	// flags holds the watched JSON flag configuration.
-	flags *flagStore
+	flags    *flagStore
+	families actornet.IPFamilies
 
 	// checkpointWrites holds a slot per checkpoint writing its page cache,
 	// which memoryReservedBytes budgets for.
@@ -435,7 +442,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore, bootID string) *AteWorkerService {
+func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore, bootID string, families actornet.IPFamilies) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:            actorlock.New(),
 		inFlight:         actorlock.NewInFlight(),
@@ -445,6 +452,7 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 		actorLogger:      actorLogger,
 		cgroupRoot:       defaultCgroupRoot,
 		flags:            flags,
+		families:         families,
 		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
 		bootID:           bootID,
 		enableCoreTags:   checkCoreTagsSupported(),

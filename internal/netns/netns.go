@@ -152,7 +152,7 @@ func Listen(ctx context.Context, ns Handle, ports []uint16) (_ []net.Listener, r
 	}()
 	if err := Do(ctx, ns, func(context.Context) error {
 		for _, port := range ports {
-			l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+			l, err := net.Listen("tcp", net.JoinHostPort("", fmt.Sprint(port)))
 			if err != nil {
 				return fmt.Errorf("while listening on port %d: %w", port, err)
 			}

@@ -28,6 +28,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,5 +187,14 @@ func URL(probe *ateworkerpb.WakeupProbe, actorIP string) (string, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return fmt.Sprintf("http://%s:%d%s", actorIP, port, path), nil
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", path, err)
+	}
+	return (&url.URL{
+		Scheme:  "http",
+		Host:    net.JoinHostPort(actorIP, strconv.Itoa(int(port))),
+		Path:    decodedPath,
+		RawPath: path,
+	}).String(), nil
 }

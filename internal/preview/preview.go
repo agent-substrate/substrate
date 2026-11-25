@@ -41,6 +41,9 @@ type Gate string
 // Gates should always be named in UpperCamelCase.  Please keep this list
 // sorted alphabetically by value.
 const (
+	// GateActorIPv6 controls whether IPv6 is added to actor networks.
+	GateActorIPv6 Gate = "ActorIPv6"
+
 	// GateExternalVolumes controls whether external volumes are supported.
 	GateExternalVolumes Gate = "ExternalVolumes"
 
@@ -64,6 +67,7 @@ const All = "ALL"
 // realKnownGates lists all declared preview gates. Preview gates are disabled by
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
+	GateActorIPv6,
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
 	GatePerTemplateSnapshotLocation,

@@ -27,6 +27,10 @@ const (
 	// SchemaVersionV1 is the initial compatibility schema version.
 	SchemaVersionV1 = "v1"
 
+	// AttrActorIPFamilies identifies the address families configured in a
+	// microVM guest network.
+	AttrActorIPFamilies = "actor_ip_families"
+
 	// AttrArchitecture is the CPU architecture ("amd64", "arm64", etc.).
 	AttrArchitecture = "architecture"
 

@@ -21,6 +21,7 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
 reg_port="${KIND_REGISTRY_PORT:-5001}"
+dns_proxy_name="${KIND_CLUSTER_NAME}-dns-proxy"
 
 if [[ $# -gt 0 ]]; then
   case "$1" in
@@ -37,8 +38,8 @@ if [[ $# -gt 0 ]]; then
   esac
 fi
 
-# Only ipFamily is set; kind's per-family podSubnet/serviceSubnet defaults are
-# already what we want.
+# kind's singular ipFamily field accepts ipv4, ipv6, or dual. Its per-family
+# podSubnet and serviceSubnet defaults are already what we want.
 IP_FAMILY="${IP_FAMILY:-ipv4}"
 case "${IP_FAMILY}" in
   ipv4|ipv6|dual)
@@ -138,6 +139,14 @@ EOF
 fi
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
+if docker inspect "${dns_proxy_name}" >/dev/null 2>&1; then
+  dns_proxy_created_by="$(docker inspect --format '{{index .Config.Labels "created-by"}}' "${dns_proxy_name}" 2>/dev/null)"
+  if [[ "${dns_proxy_created_by}" != "agent-substrate" ]]; then
+    echo "Container '${dns_proxy_name}' already exists and was not created by this project." >&2
+    exit 1
+  fi
+  docker rm -f "${dns_proxy_name}" >/dev/null
+fi
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}" || true
 
 # kind reuses an existing "kind" network as-is and deleting the cluster does not
@@ -176,7 +185,8 @@ fi
 if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   server="$(kubectl config view \
     -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
-  if [[ "${server}" == "https://[::1]:"* ]]; then
+  if [[ "${server}" == "https://[::1]:"* ]] &&
+      ! kubectl --context="${KUBECTL_CONTEXT}" get --raw=/readyz >/dev/null 2>&1; then
     echo "Repointing the kubeconfig for '${KUBECTL_CONTEXT}' at localhost..."
     kubectl config set-cluster "${KUBECTL_CONTEXT}" \
       --server="https://localhost:${server##*:}" >/dev/null
@@ -227,6 +237,33 @@ done
 echo "Connecting local registry to cluster network..."
 if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}")" = "null" ]; then
   docker network connect "kind" "${reg_name}"
+fi
+
+if [[ "${IP_FAMILY}" == "ipv6" ]]; then
+  # Docker's resolver is IPv4-only, so proxy external queries for CoreDNS.
+  # The hosts entry gives IPv6-only pods the registry container's address.
+  cat <<'EOF' > "${ROOT}/bin/kind-dns-proxy.Corefile"
+.:53 {
+    forward . /etc/resolv.conf
+}
+EOF
+  docker run -d --restart=always \
+    --label created-by=agent-substrate \
+    --network kind --name "${dns_proxy_name}" \
+    --mount "type=bind,src=${ROOT}/bin/kind-dns-proxy.Corefile,dst=/Corefile,readonly" \
+    registry.k8s.io/coredns/coredns:v1.13.1@sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6 \
+    -conf /Corefile >/dev/null
+  dns_proxy_ip="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").GlobalIPv6Address}}' "${dns_proxy_name}")"
+  registry_ip="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").GlobalIPv6Address}}' "${reg_name}")"
+  corefile="$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get configmap coredns -o go-template='{{index .data "Corefile"}}')"
+  corefile="${corefile/\/etc\/resolv.conf/[${dns_proxy_ip}]:53}"
+  hosts=$'    hosts {\n        '"${registry_ip} ${reg_name}"$'\n        fallthrough\n    }\n'
+  corefile="${corefile/    forward/${hosts}    forward}"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system create configmap coredns \
+    --from-literal=Corefile="${corefile}" --dry-run=client -o yaml |
+    kubectl --context="${KUBECTL_CONTEXT}" apply -f -
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout restart deployment/coredns
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status deployment/coredns --timeout=120s
 fi
 
 # 5. Document the local registry in kube-public ConfigMap

@@ -17,6 +17,7 @@ package demo
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"testing"
 	"time"
 
@@ -31,25 +32,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 )
-
-// gvisorSecondReleaseAssets is a gVisor build with a sandbox_bundle_hash
-// other than the installed class default's: the first nightly after release
-// 20261026.0, which manifests/ate-install/sandboxconfig-gvisor.yaml ships, so
-// it has everything ateworker-gvisor needs from that release.
-var gvisorSecondReleaseAssets = map[string]map[string]atev1.AssetFile{
-	"amd64": {
-		"gvisor": {
-			URL:    "gs://gvisor/releases/nightly/2026-10-27/x86_64/gvisor.tar.zstd",
-			SHA256: "6cf41969e53892d8036d9a6470cbb2e870fbe719563fa15dbf9247bdd7911ba5",
-		},
-	},
-	"arm64": {
-		"gvisor": {
-			URL:    "gs://gvisor/releases/nightly/2026-10-27/aarch64/gvisor.tar.zstd",
-			SHA256: "8ffb0077d6db3d837a3790d1a43d2354ae79a216e6707452429bb9e52e2d545b",
-		},
-	},
-}
 
 // TestSandboxConfigEdit covers what a suspended actor's MEMORY snapshot
 // restores at after its pool's SandboxConfig is edited. Each case starts from
@@ -299,7 +281,7 @@ func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
 	}
 	baseConfig := newestClassDefault(t, ctx, clients, class)
 	v1 := defaultVersionFromConfig(t, baseConfig, "v1")
-	v2 := secondSandboxVersion(v1, "v2", class)
+	v2 := secondSandboxVersion(t, baseConfig, v1, "v2", class)
 
 	configName := "e2e-" + prefix + "-" + nsObj.Name
 	if _, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Create(ctx, &atev1.SandboxConfig{
@@ -662,13 +644,29 @@ func defaultVersionFromConfig(t *testing.T, sc *atev1.SandboxConfig, name string
 }
 
 // secondSandboxVersion returns an Enabled version named name whose assets
-// produce a different sandbox_bundle_hash than v1. On gVisor it uses a second
-// gVisor release tarball; on microVM it reuses v1's cached assets plus an
-// extra entry, so the bucket needs no second kata asset set.
-func secondSandboxVersion(v1 atev1.SandboxVersionConfig, name string, class atev1.SandboxClass) atev1.SandboxVersionConfig {
+// produce a different sandbox_bundle_hash than v1. On gVisor it uses another
+// installed release; on microVM it reuses v1's cached assets plus an extra
+// entry, so the bucket needs no second kata asset set.
+func secondSandboxVersion(t *testing.T, config *atev1.SandboxConfig, v1 atev1.SandboxVersionConfig, name string, class atev1.SandboxClass) atev1.SandboxVersionConfig {
+	t.Helper()
 	if class == atev1.SandboxClassGvisor {
-		// withName copies the assets, so no test shares the package-level map.
-		v1.Assets = gvisorSecondReleaseAssets
+		v1Assets, ok := v1.Assets[runtime.GOARCH]
+		if !ok {
+			t.Fatalf("SandboxConfig %s default version has no assets for %s", config.Name, runtime.GOARCH)
+		}
+		for _, version := range config.Spec.Versions {
+			assets, ok := version.Assets[runtime.GOARCH]
+			if !ok || version.State != nil && *version.State == atev1.SandboxVersionStateDisabled {
+				continue
+			}
+			if cmp.Equal(assets, v1Assets, cmp.Comparer(func(x, y atev1.AssetFile) bool {
+				return x.SHA256 == y.SHA256
+			})) {
+				continue
+			}
+			return withState(withName(version, name), atev1.SandboxVersionStateEnabled)
+		}
+		t.Fatalf("SandboxConfig %s has no second enabled version", config.Name)
 	}
 	v2 := withState(withName(v1, name), atev1.SandboxVersionStateEnabled)
 	if class != atev1.SandboxClassGvisor {
@@ -678,6 +676,29 @@ func secondSandboxVersion(v1 atev1.SandboxVersionConfig, name string, class atev
 		}
 	}
 	return v2
+}
+
+func TestSecondSandboxVersionUsesInstalledGVisorAssets(t *testing.T) {
+	installed := map[string]map[string]atev1.AssetFile{
+		runtime.GOARCH: {"gvisor": {URL: "s3://gvisor-assets/v6/gvisor.tar.zstd", SHA256: "v6"}},
+	}
+	config := &atev1.SandboxConfig{Spec: atev1.SandboxConfigSpec{
+		DefaultVersion: "v7",
+		Versions: []atev1.SandboxVersionConfig{
+			{Name: "v7-mirror", Assets: map[string]map[string]atev1.AssetFile{
+				runtime.GOARCH: {"gvisor": {URL: "s3://mirror/gvisor.tar.zstd", SHA256: "v7"}},
+			}},
+			{Name: "v6", Assets: installed},
+			{Name: "v7", Assets: map[string]map[string]atev1.AssetFile{
+				runtime.GOARCH: {"gvisor": {URL: "s3://gvisor-assets/v7/gvisor.tar.zstd", SHA256: "v7"}},
+			}},
+		},
+	}}
+
+	got := secondSandboxVersion(t, config, defaultVersionFromConfig(t, config, "v1"), "v2", atev1.SandboxClassGvisor)
+	if diff := cmp.Diff(installed, got.Assets); diff != "" {
+		t.Fatalf("second version assets (-want +got):\n%s", diff)
+	}
 }
 
 // withName returns a copy of v named name.

@@ -378,7 +378,7 @@ Handles actor-aware ingress routing, on-demand resumption, and policy-enforced e
     Actor is tunneled through `atunnel` to `atenet-egress`, which enforces
     destination policy and resolves credential replacement effects without
     placing ambient secrets in the sandbox (see the
-    [Network Egress Contract](../guides/network-egress.md) and
+    [Egress PEP contract](../guides/egress-traffic.md#egress-pep-contract) and
     [Egress Credential Injection](../guides/egress-credential-injection.md)).
 
   * **Latency**: The data plane is optimized for low-latency activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.

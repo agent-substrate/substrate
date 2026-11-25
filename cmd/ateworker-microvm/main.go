@@ -50,11 +50,13 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/bootid"
+	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxruntimes"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/workerstats"
@@ -234,11 +236,17 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while delegating the worker cgroup: %w", err)
 	}
 
+	workerPodIPs := register.ParsePodIPs(*podIPs)
+	ipv6ActorNetworking := preview.IsEnabled(preview.GateActorIPv6)
+	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs, ipv6ActorNetworking)
+	if err != nil {
+		return err
+	}
 	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream, mp.Meter(serviceName))
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID)
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID, families)
 	ateworkerService.throttleMemory = cgroup.PSIEnabled(cgroup.Root)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so actor cgroups get no memory limit and an actor over its booking can restart the worker")
@@ -293,15 +301,20 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
+	var runtimeAttributes sandboxruntimes.Attributes
+	if families.Has(actornet.IPv6) {
+		runtimeAttributes = sandboxruntimes.Attributes{hardware.AttrActorIPFamilies: families.String()}
+	}
 	reportConfig := register.ReportConfig{
 		SocketPath:           nodepath.WorkerSupportSocket,
 		CredentialBundlePath: tunnelConfig.CredentialBundle,
 		TrustBundlePath:      tunnelConfig.TrustBundle,
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
-		PodIPs:               register.ParsePodIPs(*podIPs),
+		PodIPs:               workerPodIPs,
 		MemoryReservedBytes:  memoryReservedBytes,
 		ActorOverhead:        actorOverhead,
+		RuntimeAttributes:    runtimeAttributes,
 		SandboxClass:         string(atev1.SandboxClassMicroVM),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
@@ -390,6 +403,7 @@ type AteWorkerService struct {
 	podUID     string
 	chBinary   string
 	guestDebug bool
+	families   actornet.IPFamilies
 
 	// snapshotWrites holds a slot per CH snapshot write in flight, whose page
 	// cache memoryReservedBytes budgets for.
@@ -422,7 +436,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string, families actornet.IPFamilies) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:          actorlock.New(),
 		inFlight:       actorlock.NewInFlight(),
@@ -432,6 +446,7 @@ func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel 
 		podUID:         podUID,
 		chBinary:       chBinary,
 		guestDebug:     guestDebug,
+		families:       families,
 		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
 		tunnel:         tunnel,
 		actorLogger:    actorLogger,

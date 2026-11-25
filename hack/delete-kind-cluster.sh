@@ -19,12 +19,13 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 reg_name="kind-registry"
+dns_proxy_name="${KIND_CLUSTER_NAME}-dns-proxy"
 
 if [ "$#" -gt 0 ]; then
   case "$1" in
     -h|--help)
       echo "Usage: $0"
-      echo "Deletes the kind cluster '${KIND_CLUSTER_NAME}' and cleans up the registry container if created by this project."
+      echo "Deletes the kind cluster '${KIND_CLUSTER_NAME}' and cleans up helper containers created by this project."
       exit 0
       ;;
   esac
@@ -48,6 +49,16 @@ done
 
 echo "Deleting kind cluster '${KIND_CLUSTER_NAME}'..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}"
+
+if docker inspect "${dns_proxy_name}" >/dev/null 2>&1; then
+  dns_proxy_created_by="$(docker inspect --format '{{index .Config.Labels "created-by"}}' "${dns_proxy_name}" 2>/dev/null)"
+  if [ "${dns_proxy_created_by}" = "agent-substrate" ]; then
+    echo "Deleting DNS proxy container '${dns_proxy_name}' (created by us)..."
+    docker rm -f "${dns_proxy_name}" || true
+  else
+    echo "DNS proxy container '${dns_proxy_name}' was not created by us (${dns_proxy_created_by}), leaving it running."
+  fi
+fi
 
 reg_exists=false
 if docker inspect "${reg_name}" >/dev/null 2>&1; then

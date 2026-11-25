@@ -34,6 +34,8 @@ hack/create-kind-cluster.sh
 
 # 2. Target the local kind cluster in every shell that runs ate-setup
 export ATE_INSTALL_KIND=true
+# IPv6-only clusters require IPv6 actor networking.
+# export ATE_PREVIEW=ActorIPv6
 
 # 3. Install Agent Substrate, PostgreSQL, and snapshot storage (rustfs)
 go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
@@ -52,6 +54,9 @@ kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 
 > [!IMPORTANT]
 > `{"name":"k8s.io"}` deploys the bundled credential provider with an empty, default-deny namespace policy. Before an actor can have a credential injected, grant its atespace the namespaces whose Secrets it may read; see [Egress Credential Injection](../guides/egress-credential-injection.md#enable-it).
+
+> [!IMPORTANT]
+> An IPv6-only kind cluster needs working DNS and outbound HTTPS from its worker Pods to every sandbox asset URL. The default gVisor configuration uses `storage.googleapis.com`. Kind configures IPv6 Pod and Service addresses but does not provide public IPv6 routing or NAT64. Configure native IPv6 egress, NAT64, or an HTTP proxy before installing Substrate.
 
 **Teardown:** When finished, remove the local cluster and registry with:
 

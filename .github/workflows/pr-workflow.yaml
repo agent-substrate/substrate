@@ -130,6 +130,8 @@ jobs:
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
+    - name: Verify goldens
+      run: hack/verify-goldens.sh
     - name: root-gated tests
       env:
         ROOT_JUNIT_FILE: ${{ github.workspace }}/_artifacts/root.xml
@@ -217,7 +219,9 @@ jobs:
   # preview mode. The e2e-test job below reports the required checks.
   e2e:
     name: >-
-      ${{ format('e2e ({0}, {1}{2})', matrix.dataplane, matrix.sandbox, matrix.preview == 'on' && ', preview' || '') }}
+      ${{ format('e2e ({0}, {1}{2}{3})', matrix.dataplane, matrix.sandbox,
+        matrix.ip_family != 'ipv4' && format(', {0}', matrix.ip_family) || '',
+        matrix.preview == 'on' && ', preview' || '') }}
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and one lane; generous, but far short of
     # the six-hour platform default a hung lane would otherwise consume.
@@ -237,11 +241,24 @@ jobs:
             && '["envoy", "agentgateway"]'
             || '["envoy"]'
           ) }}
-        # "off" is the default install, and proves the suites pass without
-        # preview features; "on" enables every one of them.
+        # "off" enables no unrelated preview features; "on" enables all of them.
         preview: ['off', 'on']
         sandbox: [gvisor, microvm]
+        # IPv4 and IPv6-only run presubmit. Dual-stack joins them after merge
+        # and on the weekly schedule.
+        ip_family: >-
+          ${{ fromJSON(
+            (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+            && '["ipv4", "ipv6", "dual"]'
+            || '["ipv4", "ipv6"]'
+          ) }}
+        exclude:
+        - preview: 'on'
+          ip_family: ipv6
+        - preview: 'on'
+          ip_family: dual
     env:
+      IP_FAMILY: ${{ matrix.ip_family }}
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # Apply the e2e test component (short atelet snapshot delays) during the
       # control-plane install.
@@ -250,25 +267,28 @@ jobs:
       # bundled Kubernetes Secrets provider with the control plane. Job-wide so
       # every ate-setup invocation in this job sees the same selection.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
-      # Job-wide for the same reason. Empty is an explicit "no preview
-      # features", not an unset value. The e2e steps pass it to the suites as
-      # --preview, so tests of a disabled gate skip themselves (see
-      # internal/e2e/preview.go).
-      ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
+      # Job-wide for the same reason. The e2e steps pass it to the suites as
+      # --preview, so tests see the same gates as the install.
+      ATE_PREVIEW: >-
+        ${{ matrix.preview == 'on' && 'ALL'
+          || matrix.ip_family != 'ipv4' && 'ActorIPv6'
+          || '' }}
       # The suites' router client (internal/e2e/ingressauth.go). Only e2e
       # installs allowlist it, so the suites can reach actors through the
       # router's mTLS listeners.
       ATE_INGRESS_ALLOWED_SPIFFE_IDS: spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
-      # The lane name, also used for its JUnit file: e2e-gvisor runs without
-      # preview features, e2e-gvisor-preview with them.
-      LANE: e2e-${{ matrix.sandbox }}${{ matrix.preview == 'on' && '-preview' || '' }}
+      # The lane name is also used for its JUnit file.
+      LANE: >-
+        ${{ format('e2e-{0}{1}{2}', matrix.sandbox,
+          matrix.ip_family != 'ipv4' && format('-{0}', matrix.ip_family) || '',
+          matrix.preview == 'on' && '-preview' || '') }}
       ARTIFACTS: ${{ github.workspace }}/_artifacts
       # Cache the envoy-dataplane Rust build. Only main writes it, so PRs
       # share one copy instead of each storing their own.
       DOCKER_BUILD_FLAGS: >-
         --cache-from type=gha,scope=envoy-dataplane
         ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off'
-          && matrix.sandbox == 'gvisor'
+          && matrix.sandbox == 'gvisor' && matrix.ip_family == 'ipv4'
           && '--cache-to type=gha,mode=max,scope=envoy-dataplane,ignore-error=true' || '' }}
     steps:
     - name: Checkout
@@ -334,10 +354,14 @@ jobs:
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: go run ./cmd/ate-setup --kind deploy ate-system
+    - name: Stage gVisor assets for IPv6-only CI
+      if: ${{ matrix.ip_family == 'ipv6' && matrix.sandbox == 'gvisor' }}
+      run: .github/scripts/stage-gvisor-assets-kind.sh
     - name: Save microVM assets
       if: >-
         ${{ github.ref == 'refs/heads/main' && steps.microvm-assets.outputs.cache-hit != 'true'
-          && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'microvm' }}
+          && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'microvm'
+          && matrix.ip_family == 'ipv4' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: bin/microvm-assets
@@ -378,7 +402,9 @@ jobs:
       if: always()
       run: go -C tools/junittool run . report "${ARTIFACTS}"
     - name: Save Go build cache
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'gvisor' }}
+      # Main only, so PRs restore the latest main build rather than each
+      # storing its own copy.
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.sandbox == 'gvisor' && matrix.ip_family == 'ipv4' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
@@ -389,7 +415,10 @@ jobs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-e2e-${{ matrix.dataplane }}-${{ matrix.sandbox }}${{ matrix.preview == 'on' && '-preview' || '' }}
+        name: >-
+          ${{ format('test-results-e2e-{0}-{1}{2}{3}', matrix.dataplane, matrix.sandbox,
+            matrix.ip_family != 'ipv4' && format('-{0}', matrix.ip_family) || '',
+            matrix.preview == 'on' && '-preview' || '') }}
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: Dump diagnostics on failure
