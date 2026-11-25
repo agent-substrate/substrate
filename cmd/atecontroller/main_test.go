@@ -40,6 +40,143 @@ func TestDNSEgressPolicyFlagDefault(t *testing.T) {
 	}
 }
 
+func TestLoadFlagsFromEnvWorkerPprof(t *testing.T) {
+	tests := []struct {
+		name      string
+		env       map[string]string
+		setFlag   map[string]string
+		wantPprof bool
+		wantMut   int
+		wantBlk   int
+		wantErr   string
+	}{
+		{
+			name: "unset leaves defaults",
+		},
+		{
+			name: "ATE_WORKER_PPROF true enables worker pprof",
+			env: map[string]string{
+				"ATE_WORKER_PPROF": "true",
+			},
+			wantPprof: true,
+		},
+		{
+			name: "ATE_WORKER_PPROF 1 enables worker pprof",
+			env: map[string]string{
+				"ATE_WORKER_PPROF": "1",
+			},
+			wantPprof: true,
+		},
+		{
+			name: "invalid ATE_WORKER_PPROF fails startup",
+			env: map[string]string{
+				"ATE_WORKER_PPROF": "invalid",
+			},
+			wantErr: "ATE_WORKER_PPROF must be a boolean",
+		},
+		{
+			name: "explicit worker-pprof flag overrides invalid ATE_WORKER_PPROF",
+			env: map[string]string{
+				"ATE_WORKER_PPROF": "invalid",
+			},
+			setFlag: map[string]string{
+				"worker-pprof": "false",
+			},
+			wantPprof: false,
+		},
+		{
+			name: "valid env vars populate flags",
+			env: map[string]string{
+				"ATE_WORKER_PPROF":                "true",
+				"ATE_WORKER_PPROF_MUTEX_FRACTION": "10",
+				"ATE_WORKER_PPROF_BLOCK_RATE":     "1000000",
+			},
+			wantPprof: true,
+			wantMut:   10,
+			wantBlk:   1000000,
+		},
+		{
+			name: "explicit flag overrides env var",
+			env: map[string]string{
+				"ATE_WORKER_PPROF_MUTEX_FRACTION": "invalid",
+				"ATE_WORKER_PPROF_BLOCK_RATE":     "1000000",
+			},
+			setFlag: map[string]string{
+				"worker-pprof-mutex-fraction": "5",
+			},
+			wantMut: 5,
+			wantBlk: 1000000,
+		},
+		{
+			name: "invalid mutex fraction fails startup",
+			env: map[string]string{
+				"ATE_WORKER_PPROF_MUTEX_FRACTION": "invalid",
+			},
+			wantErr: "ATE_WORKER_PPROF_MUTEX_FRACTION must be a positive integer",
+		},
+		{
+			name: "zero block rate fails startup",
+			env: map[string]string{
+				"ATE_WORKER_PPROF_BLOCK_RATE": "0",
+			},
+			wantErr: "ATE_WORKER_PPROF_BLOCK_RATE must be a positive integer",
+		},
+		{
+			name: "negative mutex fraction flag fails startup",
+			setFlag: map[string]string{
+				"worker-pprof-mutex-fraction": "-1",
+			},
+			wantErr: "--worker-pprof-mutex-fraction must not be negative",
+		},
+		{
+			name: "negative block rate flag fails startup",
+			setFlag: map[string]string{
+				"worker-pprof-block-rate": "-1",
+			},
+			wantErr: "--worker-pprof-block-rate must not be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldPprof, oldMut, oldBlk := *workerPprof, *workerPprofMutexFraction, *workerPprofBlockRate
+			t.Cleanup(func() {
+				*workerPprof, *workerPprofMutexFraction, *workerPprofBlockRate = oldPprof, oldMut, oldBlk
+			})
+			*workerPprof, *workerPprofMutexFraction, *workerPprofBlockRate = false, 0, 0
+
+			for name, val := range tt.setFlag {
+				f := pflag.CommandLine.Lookup(name)
+				oldChanged := f.Changed
+				t.Cleanup(func() { f.Changed = oldChanged })
+				if err := pflag.CommandLine.Set(name, val); err != nil {
+					t.Fatalf("Set(%q, %q): %v", name, val, err)
+				}
+			}
+
+			for _, k := range []string{"ATE_WORKER_PPROF", "ATE_WORKER_PPROF_MUTEX_FRACTION", "ATE_WORKER_PPROF_BLOCK_RATE"} {
+				t.Setenv(k, tt.env[k])
+			}
+
+			err := loadFlagsFromEnv()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("loadFlagsFromEnv() error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadFlagsFromEnv() unexpected error: %v", err)
+			}
+			if *workerPprof != tt.wantPprof || *workerPprofMutexFraction != tt.wantMut || *workerPprofBlockRate != tt.wantBlk {
+				t.Errorf("got (%v, %d, %d), want (%v, %d, %d)",
+					*workerPprof, *workerPprofMutexFraction, *workerPprofBlockRate,
+					tt.wantPprof, tt.wantMut, tt.wantBlk)
+			}
+		})
+	}
+}
+
 func TestNewControllerRuntimeLoggerVerbosity(t *testing.T) {
 	const probe = "verbosity-probe"
 

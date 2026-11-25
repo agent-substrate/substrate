@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -92,6 +93,14 @@ type workerOTelSettings struct {
 	MetricsExporter string
 }
 
+// WorkerPprofSettings is the pprof configuration propagated to worker pods.
+// Zero value disables worker pprof.
+type WorkerPprofSettings struct {
+	Enabled       bool
+	MutexFraction int
+	BlockRate     int
+}
+
 // workerPoolLabel names the WorkerPool on each of its worker pods.
 const workerPoolLabel = "ate.dev/worker-pool"
 
@@ -105,9 +114,9 @@ const (
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here. otel is propagated to the worker container (see
-// workerContainerEnv).
-func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
+// are declared here. otel and pprof are propagated to the worker container
+// (see workerContainerEnv).
+func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, pprof WorkerPprofSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -182,7 +191,7 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 				WithPath("/readyz").
 				WithPort(intstr.FromString("readyz")))).
 		WithSecurityContext(workerSecurityContext(wp.Spec.DefaultSandboxClass())).
-		WithEnv(workerContainerEnv(otel)...).
+		WithEnv(workerContainerEnv(otel, pprof)...).
 		WithVolumeMounts(
 			corev1ac.VolumeMount().
 				WithName(workerCapacityVolume).
@@ -201,6 +210,12 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 				WithMountPath(atunnelEgressTrustMountPath).
 				WithReadOnly(true),
 		)
+	if pprof.Enabled {
+		containerAC.WithPorts(corev1ac.ContainerPort().
+			WithName("pprof").
+			WithContainerPort(6060).
+			WithProtocol(corev1.ProtocolTCP))
+	}
 
 	podSpecAC := corev1ac.PodSpec().
 		WithSecurityContext(corev1ac.PodSecurityContext().
@@ -286,7 +301,7 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 // exports through atelet's relay whenever atelet has a collector, and adds the
 // OTLP endpoint only when one is configured. Every ref precedes
 // OTEL_RESOURCE_ATTRIBUTES so its $(...) substitutions resolve.
-func workerContainerEnv(otel workerOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
+func workerContainerEnv(otel workerOTelSettings, pprof WorkerPprofSettings) []*corev1ac.EnvVarApplyConfiguration {
 	// The pool pair also labels every usage record. A worker pod runs in its
 	// WorkerPool's namespace.
 	envs := []*corev1ac.EnvVarApplyConfiguration{
@@ -337,6 +352,26 @@ func workerContainerEnv(otel workerOTelSettings) []*corev1ac.EnvVarApplyConfigur
 		envs = append(envs, corev1ac.EnvVar().
 			WithName("OTEL_METRICS_EXPORTER").
 			WithValue(otel.MetricsExporter))
+	}
+	if pprof.Enabled {
+		envs = append(envs,
+			corev1ac.EnvVar().
+				WithName("ATE_PPROF_LISTEN_ADDR").
+				WithValue(":6060"),
+			corev1ac.EnvVar().
+				WithName("GRPC_GO_SERVER_GOROUTINE_LABELS").
+				WithValue("grpc.method=true"),
+		)
+		if pprof.MutexFraction > 0 {
+			envs = append(envs, corev1ac.EnvVar().
+				WithName("ATE_PPROF_MUTEX_FRACTION").
+				WithValue(strconv.Itoa(pprof.MutexFraction)))
+		}
+		if pprof.BlockRate > 0 {
+			envs = append(envs, corev1ac.EnvVar().
+				WithName("ATE_PPROF_BLOCK_RATE").
+				WithValue(strconv.Itoa(pprof.BlockRate)))
+		}
 	}
 	return envs
 }

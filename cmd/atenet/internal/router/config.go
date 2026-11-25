@@ -22,6 +22,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 )
 
 type atenetRouter string
@@ -192,6 +193,7 @@ type routerConfig struct {
 	LogLevel    string
 	MetricsAddr string
 	HealthAddr  string
+	Pprof       *pprofserver.Config
 	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
 	// tracing spans to, as host:port or an http:// URL. It defaults to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — Envoy gets its whole configuration over
@@ -309,6 +311,9 @@ func (c routerConfig) validate() error {
 		return err
 	}
 	if err := c.CredentialProvider.validate(); err != nil {
+		return err
+	}
+	if err := c.Pprof.Validate(); err != nil {
 		return err
 	}
 

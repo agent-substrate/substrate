@@ -56,6 +56,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/workerstats"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -78,6 +79,7 @@ var (
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
 	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
+	pprofCfg     = pprofserver.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -117,6 +119,9 @@ func do(ctx context.Context) error {
 	}
 	if err := preview.Init(*previewFlags...); err != nil {
 		return fmt.Errorf("invalid --preview: %w", err)
+	}
+	if err := pprofCfg.Validate(); err != nil {
+		return fmt.Errorf("invalid pprof configuration: %w", err)
 	}
 	slog.InfoContext(ctx, "ateworker-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
@@ -169,6 +174,7 @@ func do(ctx context.Context) error {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	go pprofserver.Start(ctx, pprofCfg)
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,

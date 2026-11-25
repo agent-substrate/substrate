@@ -46,6 +46,7 @@ import (
 	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/version"
 )
 
@@ -166,6 +167,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// stays 200 for liveness.
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, s.cfg.MetricsAddr)
+	go pprofserver.Start(ctx, s.cfg.Pprof)
 	go serverboot.StartHealthServer(ctx, s.cfg.HealthAddr, readiness)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{

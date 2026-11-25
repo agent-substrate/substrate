@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
@@ -31,6 +32,7 @@ import (
 	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
@@ -63,6 +65,7 @@ var (
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
+	pprofCfg     = pprofserver.RegisterFlags(pflag.CommandLine)
 
 	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		"OTLP endpoint set on worker pods, which export to it directly when their node's atelet serves no OTLP relay. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
@@ -98,6 +101,15 @@ var (
 	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", 2, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry. Defaults to 2.")
 
 	dnsEgressPolicy = pflag.String("dns-egress-policy", "", "DNS egress policy enforcement mode propagated to worker pods (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+").")
+
+	workerPprof = pflag.Bool("worker-pprof", false,
+		"Enable net/http/pprof on :6060 and gRPC method goroutine labels on worker pods. Defaults to ATE_WORKER_PPROF. Never enable pprof on a cluster that serves real actors.")
+
+	workerPprofMutexFraction = pflag.Int("worker-pprof-mutex-fraction", 0,
+		"Mutex contention sampling rate (ATE_PPROF_MUTEX_FRACTION) set on worker pods when --worker-pprof is enabled. Defaults to ATE_WORKER_PPROF_MUTEX_FRACTION.")
+
+	workerPprofBlockRate = pflag.Int("worker-pprof-block-rate", 0,
+		"Blocking profile rate in nanoseconds (ATE_PPROF_BLOCK_RATE) set on worker pods when --worker-pprof is enabled. Defaults to ATE_WORKER_PPROF_BLOCK_RATE.")
 )
 
 func init() {
@@ -162,6 +174,12 @@ func main() {
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+	if err := pprofCfg.Validate(); err != nil {
+		serverboot.Fatal(ctx, "Invalid pprof configuration", err)
+	}
+	if err := loadFlagsFromEnv(); err != nil {
+		serverboot.Fatal(ctx, "Invalid worker pprof configuration", err)
+	}
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
@@ -196,6 +214,7 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsBindAddr(servePull)))
+	go pprofserver.Start(ctx, pprofCfg)
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
@@ -262,12 +281,17 @@ func main() {
 		OTelLogsExporter:         *otelLogsExporter,
 		OTelTracesExporter:       *otelTracesExporter,
 		OTelMetricsExporter:      *otelMetricsExporter,
-		SystemNamespace:          systemNamespace,
-		AteletServiceAccount:     *ateletServiceAccount,
-		RouterServiceAccount:     *routerServiceAccount,
-		DNSEgressPolicy:          *dnsEgressPolicy,
-		Recorder:                 mgr.GetEventRecorder("workerpool-controller"),
-		APIReader:                mgr.GetAPIReader(),
+		WorkerPprof: controllers.WorkerPprofSettings{
+			Enabled:       *workerPprof,
+			MutexFraction: *workerPprofMutexFraction,
+			BlockRate:     *workerPprofBlockRate,
+		},
+		SystemNamespace:      systemNamespace,
+		AteletServiceAccount: *ateletServiceAccount,
+		RouterServiceAccount: *routerServiceAccount,
+		DNSEgressPolicy:      *dnsEgressPolicy,
+		Recorder:             mgr.GetEventRecorder("workerpool-controller"),
+		APIReader:            mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
 		os.Exit(1)
@@ -336,4 +360,42 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func loadFlagsFromEnv() error {
+	if !pflag.CommandLine.Changed("worker-pprof") {
+		if raw := os.Getenv("ATE_WORKER_PPROF"); raw != "" {
+			v, err := strconv.ParseBool(raw)
+			if err != nil {
+				return fmt.Errorf("ATE_WORKER_PPROF must be a boolean: %w", err)
+			}
+			*workerPprof = v
+		}
+	}
+	for _, envFlag := range []struct {
+		name string
+		env  string
+		dst  *int
+	}{
+		{"worker-pprof-mutex-fraction", "ATE_WORKER_PPROF_MUTEX_FRACTION", workerPprofMutexFraction},
+		{"worker-pprof-block-rate", "ATE_WORKER_PPROF_BLOCK_RATE", workerPprofBlockRate},
+	} {
+		if pflag.CommandLine.Changed(envFlag.name) {
+			continue
+		}
+		v, err := pprofserver.IntFromEnv(envFlag.env)
+		if err != nil {
+			return err
+		}
+		if v > 0 {
+			*envFlag.dst = v
+		}
+	}
+	if *workerPprofMutexFraction < 0 {
+		return fmt.Errorf("--worker-pprof-mutex-fraction must not be negative, got %d", *workerPprofMutexFraction)
+	}
+	if *workerPprofBlockRate < 0 {
+		return fmt.Errorf("--worker-pprof-block-rate must not be negative, got %d", *workerPprofBlockRate)
+	}
+	return nil
 }
