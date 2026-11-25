@@ -34,10 +34,9 @@ const (
 	// sha256 over a SandboxConfig version's asset digests, computed by atelet.
 	AttrSandboxBundleHash = "sandbox_bundle_hash"
 
-	// AttrCPUFeatures is the set of CPU features `runsc cpu-features` reports
-	// for a gVisor runtime, encoded by EncodeCPUFeatures as a hex bitmask over
-	// the architecture's feature table. A snapshot's set must be a subset of
-	// the worker's.
+	// AttrCPUFeatures is the set of CPU features `runsc cpu-features --bitmask`
+	// reports for a gVisor runtime, as the hex bitmask EncodeCPUFeatureMask
+	// returns. A snapshot's set must be a subset of the worker's.
 	AttrCPUFeatures = "cpu_features"
 
 	// AttrCPUVendor identifies the host CPU vendor (e.g. "GenuineIntel",
