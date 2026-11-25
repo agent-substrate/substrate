@@ -10,10 +10,11 @@ cause with evidence.
 
 Rules:
 
-1. **Read-only.** Run only `get`, `describe`, `logs`, and `top`, plus
-   `gcloud` `describe` and `list`. Ask before anything that changes state,
-   including restarts and `kubectl ate` lifecycle commands (`resume`,
-   `suspend`, `revert`, `delete`).
+1. **Read-only.** For cluster and cloud commands, run only read-only queries
+   (`kubectl` `get`/`describe`/`logs`/`top`, `kubectl ate` `get`/`logs`, and
+   `gcloud` `describe`/`list`). Ask before anything that changes cluster or
+   actor state, including restarts and `kubectl ate` lifecycle commands
+   (`resume`, `suspend`, `revert`, `delete`).
 2. **No `kubectl ate` access.** `ate-api-server` enforces the installation's
    access policy on every call. If `kubectl ate` fails with `permission denied`,
    give the user the commands to hand to someone with access and keep going
