@@ -82,8 +82,8 @@ func fatal(err error) {
 // downloading it on first use via `setup-envtest`, and returns its path.
 //
 // The setup is guarded by a cross-process file lock. `go test ./...` runs the
-// envtest-backed packages (cmd/ateapi/internal/controlapi,
-// cmd/atecontroller/internal/controllers, api/infra/k8s/ate/v1) as separate test
+// envtest-backed packages (cmd/atecontroller/internal/controllers,
+// api/infra/k8s/ate/v1) as separate test
 // binaries in parallel, and each one calls this during TestMain. On a cold
 // cache, concurrent `setup-envtest use` invocations would otherwise race to
 // download, extract, and exec the *shared* kubebuilder binaries — intermittently
