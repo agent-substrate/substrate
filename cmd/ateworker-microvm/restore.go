@@ -190,9 +190,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 
 	// Restore the durable-dir volumes before anything can observe them: for MEMORY
 	// that means before the share's virtiofsd starts, for the lower fidelities
-	// before the workload cold-starts.
+	// before the workload cold-starts. Only MEMORY brings the daemons back, so
+	// only it recreates the socket inodes the tars dropped.
 	if hasDurableVolumes(p.containers) {
-		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers)); err != nil {
+		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers), includesMemory(req.GetFidelity())); err != nil {
 			return nil, err
 		}
 	}
@@ -311,7 +312,9 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
+		// The guest comes back with its daemons still listening, so the untar
+		// recreates the socket inodes the upper tars dropped (snapshotsockets.go).
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers), true)
 	}()
 	defer func() {
 		if !untarJoined {
