@@ -75,6 +75,24 @@ func TestApplyToOCISpec(t *testing.T) {
 	}
 }
 
+func TestApplyToOCISpecCPUQuota(t *testing.T) {
+	for _, tc := range []struct {
+		milli int64
+		want  int64
+	}{
+		{500, 50000},
+		{10, 1000},
+		// Below the kernel's 1ms floor.
+		{5, 1000},
+	} {
+		spec := &specs.Spec{}
+		(SandboxSize{MilliCPU: tc.milli}).ApplyToOCISpec(spec)
+		if got := *spec.Linux.Resources.CPU.Quota; got != tc.want {
+			t.Errorf("MilliCPU %d: quota = %d, want %d", tc.milli, got, tc.want)
+		}
+	}
+}
+
 func TestApplyToOCISpecPreservesExistingAndSkipsUnset(t *testing.T) {
 	shares := uint64(1024)
 	spec := &specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{
