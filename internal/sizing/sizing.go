@@ -31,6 +31,8 @@ const (
 	// cpuQuotaPeriodMicros is the cgroup v2 cpu.max period (100ms, the kernel
 	// default) against which the CPU quota is expressed.
 	cpuQuotaPeriodMicros = 100000
+	// cpuQuotaMinMicros is the smallest quota the kernel accepts.
+	cpuQuotaMinMicros = 1000
 )
 
 // SandboxSize is the sandbox's target size, derived from the actor's declared
@@ -84,7 +86,7 @@ func (s SandboxSize) ApplyToOCISpec(spec *specs.Spec) {
 			spec.Linux.Resources.CPU = &specs.LinuxCPU{}
 		}
 		period := uint64(cpuQuotaPeriodMicros)
-		quota := s.MilliCPU * cpuQuotaPeriodMicros / 1000
+		quota := max(s.MilliCPU*cpuQuotaPeriodMicros/1000, cpuQuotaMinMicros)
 		spec.Linux.Resources.CPU.Period = &period
 		spec.Linux.Resources.CPU.Quota = &quota
 	}
