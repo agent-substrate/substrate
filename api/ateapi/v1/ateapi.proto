@@ -445,7 +445,7 @@ message ResourceMetadata {
   // for update operations.
   //
   // +k8s:optional
-  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:monotonic
   // +k8s:minimum=1
   // +k8s:update=NoUnset
   int64 version = 4;
@@ -942,7 +942,7 @@ message ActorStatus {
   // that have become stale and need to be cleaned up.
   //
   // +k8s:optional
-  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:monotonic
   // +k8s:minimum=0
   // +k8s:update=NoUnset
   int32 last_assigned_generation = 7;
@@ -981,7 +981,7 @@ message WorkerAssignment {
   //
   // Workers are global-scoped, so this carries no atespace.
   //
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   // +k8s:required
   // +k8s:update=NoModify
   ObjectRef worker = 6;
@@ -1143,7 +1143,7 @@ message Atespace {
   // Common resource metadata: name, uid, version, timestamps.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ResourceMetadata metadata = 1;
 }
 
@@ -1707,7 +1707,7 @@ message CreateAtespaceRequest {
 
 message GetAtespaceRequest {
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef atespace = 1;
 }
 
@@ -1728,7 +1728,7 @@ message ListAtespacesResponse {
 
 message DeleteAtespaceRequest {
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef atespace = 1;
 
   // Optional per-delete preconditions.
@@ -2138,7 +2138,7 @@ message ListWorkerActorAssignmentsRequest {
   // The Worker under which to list Actors.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 
   // Pagination controls.
@@ -2175,7 +2175,7 @@ message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 }
 
@@ -2211,7 +2211,7 @@ message DeleteWorkerRequest {
   // The Worker to deregister.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 
   // Optional per-delete preconditions.
@@ -2224,7 +2224,7 @@ message DrainWorkerRequest {
   // The Worker to mark as terminating.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 }
 
@@ -2239,7 +2239,7 @@ message MarkWorkerAvailableRequest {
   // The Worker to mark ACTIVE.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 }
 
@@ -2254,7 +2254,7 @@ message MarkWorkerUnavailableRequest {
   // The Worker to mark UNAVAILABLE.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 }
 
@@ -2307,7 +2307,7 @@ message Worker {
   // uid and version are echoed back on UpdateWorker as preconditions.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ResourceMetadata metadata = 1;
 
   // Kubernetes coordinates. Immutable, set at creation.
@@ -2633,7 +2633,7 @@ message ActorAssignment {
   // that caused an assignment is what addresses it.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ResourceMetadata metadata = 1;
 
   // actor is the Actor that is assigned to the Worker.
@@ -2771,7 +2771,7 @@ message AcquireWorkerEpochRequest {
   // Workers are global-scoped.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 }
 
@@ -2785,7 +2785,7 @@ message RegisterWorkerRequest {
   // global-scoped.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 
   // The epoch the worker process acquired through AcquireWorkerEpoch.
@@ -2821,7 +2821,7 @@ message SetWorkerSandboxRuntimesRequest {
   // global-scoped.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 
   // The epoch the worker process registered with.
@@ -2879,7 +2879,7 @@ message MintWorkerActorCertificateRequest {
   // must be the Worker that the actor is assigned to.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 4;
 }
 
@@ -2951,7 +2951,7 @@ message RequestActorSuspendRequest {
   // names the Worker that certificate proves the request came from.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 
   // The Actor to suspend. It must be assigned to worker; a Worker may speak
@@ -2980,7 +2980,7 @@ message ReportActorCrashedRequest {
   // global-scoped. atelet fills this in from its caller's certificate.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef worker = 1;
 
   // The Actor whose sandbox died. It must be assigned to worker.
@@ -3187,7 +3187,7 @@ message GetAtespaceAccessPolicyRequest {
   // The parent Atespace of the access policy resource to retrieve.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef atespace = 1;
 
   // Name of the singleton access policy. Must be "default".
@@ -3202,7 +3202,7 @@ message CreateAtespaceAccessPolicyRequest {
   // Parent Atespace under which to create the policy resource.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef atespace = 1;
 
   // The policy to create. metadata.name must be "default" and
@@ -3217,7 +3217,7 @@ message UpdateAtespaceAccessPolicyRequest {
   // Parent Atespace under which to update the policy resource.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef atespace = 1;
 
   // Full replacement. Metadata UID and version are required preconditions;
@@ -3232,7 +3232,7 @@ message DeleteAtespaceAccessPolicyRequest {
   // The parent Atespace of the access policy resource to delete.
   //
   // +k8s:required
-  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:subfield(atespace)=+k8s:forbidden
   ObjectRef atespace = 1;
 
   // Name of the singleton access policy. Must be "default".
