@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"k8s.io/gengo/v2/codetags"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
@@ -186,6 +187,69 @@ message Widget {
 	}
 }
 
+func TestBuild_Tags(t *testing.T) {
+	got := buildAPI(t, `
+service Widgets {
+  // +k8s:customValidation
+  rpc GetWidget(Widget) returns (Widget);
+}
+
+// +k8s:customValidation
+message Widget {
+  // size is the size.
+  //
+  // +k8s:ifDisabled(Sizes)=+k8s:forbidden
+  // +k8s:optional
+  // +k8s:maximum=2 # keep this in sync with the Size enum
+  Size size = 1;
+}
+
+// +k8s:customValidation
+enum Size {
+  // +k8s:customValidation
+  SIZE_UNSPECIFIED = 0;
+}
+`)
+
+	custom := []codetags.Tag{{Name: "k8s:customValidation"}}
+	wantFieldTags := []codetags.Tag{
+		{
+			Name:      "k8s:ifDisabled",
+			Args:      []codetags.Arg{{Value: "Sizes", Type: codetags.ArgTypeString}},
+			ValueType: codetags.ValueTypeTag,
+			ValueTag:  &codetags.Tag{Name: "k8s:forbidden"},
+		},
+		{Name: "k8s:optional"},
+		{Name: "k8s:maximum", Value: "2", ValueType: codetags.ValueTypeInt},
+	}
+	checks := map[string]struct{ got, want []codetags.Tag }{
+		"method":     {got.Services[0].Methods[0].Tags, custom},
+		"message":    {got.Messages[0].Tags, custom},
+		"field":      {got.Messages[0].Fields[0].Tags, wantFieldTags},
+		"enum":       {got.Enums[0].Tags, custom},
+		"enum value": {got.Enums[0].Values[0].Tags, custom},
+	}
+	for elem, tc := range checks {
+		if diff := cmp.Diff(tc.want, tc.got); diff != "" {
+			t.Errorf("%s tags mismatch (-want +got):\n%s", elem, diff)
+		}
+	}
+}
+
+func TestBuild_InvalidTag(t *testing.T) {
+	source := `syntax = "proto3";
+package fixture;
+
+message Widget {
+  // +k8s:ifDisabled(Sizes=+k8s:forbidden
+  string size = 1;
+}
+`
+	if _, err := model.Build(t.Context(), source); err == nil {
+		t.Error("Build() error = nil, want an error for the unparseable directive")
+	}
+}
+
 func TestBuild_Proto3Optional(t *testing.T) {
 	got := buildAPI(t, `
 message Widget {
@@ -269,6 +333,23 @@ func TestBuild_Annotations(t *testing.T) {
 	if diff := cmp.Diff(wantMethods, gotMethods); diff != "" {
 		t.Errorf("method annotations mismatch (-want +got):\n%s", diff)
 	}
+
+	wantFieldGates := map[string]string{
+		"ActorTemplate.golden_egress_policy": "GoldenEgressPolicy",
+		"SnapshotConfig.storage_location":    "PerTemplateSnapshotLocation",
+		"Volume.external":                    "ExternalVolumes",
+	}
+	gotFieldGates := map[string]string{}
+	for _, m := range api.Messages {
+		for _, f := range m.Fields {
+			if f.PreviewGate != "" {
+				gotFieldGates[m.Name+"."+string(f.Name)] = f.PreviewGate
+			}
+		}
+	}
+	if diff := cmp.Diff(wantFieldGates, gotFieldGates); diff != "" {
+		t.Errorf("field preview gates mismatch (-want +got):\n%s", diff)
+	}
 }
 
 // Older releases declare the annotations in another package, so Build can't
@@ -283,6 +364,9 @@ extend google.protobuf.MessageOptions {
 extend google.protobuf.MethodOptions {
   MethodAnnotation method = 50000;
 }
+extend google.protobuf.FieldOptions {
+  string preview_gate = 50000;
+}
 message ResourceAnnotation {
   repeated string parents = 1;
   bool singleton = 2;
@@ -291,6 +375,7 @@ message ResourceAnnotation {
 }
 message MethodAnnotation {
   string resource = 1;
+  string preview_gate = 2;
 }
 enum Scope {
   SCOPE_UNSPECIFIED = 0;
@@ -299,7 +384,10 @@ enum Scope {
 
 service Svc {
   rpc GetWidget(Widget) returns (Widget) {
-    option (method).resource = "Widget";
+    option (method) = {
+      resource: "Widget"
+      preview_gate: "Sizes"
+    };
   }
 }
 message Widget {
@@ -307,21 +395,24 @@ message Widget {
     scope: SCOPE_ATESPACE
     plural: "Widgets"
   };
+  int32 size = 1 [ (preview_gate) = "Sizes" ];
 }
 `)
 
-	var gotResource *model.ResourceAnnotation
-	for _, m := range got.Messages {
-		if m.Name == "Widget" {
-			gotResource = m.ResourceAnnotation
-		}
-	}
+	widget := got.MessagesByFullName()["fixture.Widget"]
 	wantResource := &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Widgets"}
-	if diff := cmp.Diff(wantResource, gotResource); diff != "" {
+	if diff := cmp.Diff(wantResource, widget.ResourceAnnotation); diff != "" {
 		t.Errorf("Widget annotation mismatch (-want +got):\n%s", diff)
 	}
-	if got := got.Services[0].Methods[0].Resource; got != "Widget" {
-		t.Errorf("GetWidget resource = %q, want %q", got, "Widget")
+	if got := widget.Fields[0].PreviewGate; got != "Sizes" {
+		t.Errorf("Widget.size preview gate = %q, want %q", got, "Sizes")
+	}
+	method := got.Services[0].Methods[0]
+	if method.Resource != "Widget" {
+		t.Errorf("GetWidget resource = %q, want %q", method.Resource, "Widget")
+	}
+	if method.PreviewGate != "Sizes" {
+		t.Errorf("GetWidget preview gate = %q, want %q", method.PreviewGate, "Sizes")
 	}
 }
 
@@ -556,7 +647,7 @@ func TestPublicDoc(t *testing.T) {
 			want: "content_scope is what the snapshot captured.",
 		},
 		{
-			name: "ate directives are removed",
+			name: "ate directives from older releases are removed",
 			comment: "volumes are the actor's volumes.\n" +
 				"\n" +
 				"+ate:preview=ExternalVolumes\n" +

@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
+	"k8s.io/gengo/v2/codetags"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 )
@@ -89,6 +90,8 @@ type Method struct {
 	// Comment is the method's leading doc comment. For example, "Create a
 	// new Actor deriving from a given ActorTemplate."
 	Comment string
+	// Tags are Comment's directives, parsed as for Field.Tags.
+	Tags []codetags.Tag
 	// InputName is the full name of the request message, for linking. For
 	// example, "substrate.ateapi.v1.CreateActorRequest" for CreateActor.
 	InputName protoreflect.FullName
@@ -101,6 +104,9 @@ type Method struct {
 	// names, or "" if the method has none. For example, "Actor" for
 	// SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
 	Resource string
+	// PreviewGate is the preview gate the method annotation names, or "" if
+	// the method needs none. For example, "ExternalVolumes".
+	PreviewGate string
 
 	// ServiceFullName is the declaring service's full name. For example,
 	// "substrate.ateapi.v1.Control".
@@ -127,6 +133,8 @@ type Message struct {
 	// "ResourceMetadata holds the common fields carried by every Substrate
 	// resource."
 	Comment string
+	// Tags are Comment's directives, parsed as for Field.Tags.
+	Tags []codetags.Tag
 	// Fields lists the message's fields, in declaration order. For
 	// example, ResourceMetadata's atespace, name, uid, version,
 	// create_time, update_time.
@@ -172,6 +180,14 @@ type Field struct {
 	// Comment is the field's leading doc comment. For example, "version is
 	// increased on every mutation." for ResourceMetadata.version.
 	Comment string
+	// Tags are Comment's +k8s: directives, parsed as validation-gen parses
+	// them. For example, Name "k8s:maxLength" and Value "1024" for
+	// "+k8s:maxLength=1024".
+	Tags []codetags.Tag
+	// PreviewGate is the field's (substrate.ateapi.v1.preview_gate) option,
+	// or "" if it has none. For example, "ExternalVolumes" for
+	// Volume.external.
+	PreviewGate string
 
 	// Repeated is true for a `repeated` field, not a map - see
 	// MapValueKind for those. For example, true for
@@ -250,6 +266,8 @@ type Enum struct {
 	// has none today, so this is often "" in practice even though the field
 	// is populated the same way as for a message or field.
 	Comment string
+	// Tags are Comment's directives, parsed as for Field.Tags.
+	Tags []codetags.Tag
 	// Values lists the enum's values, in declaration order. For example,
 	// ActorState's ACTOR_STATE_UNSPECIFIED, ACTOR_STATE_RESUMING,
 	// ACTOR_STATE_RUNNING, and so on.
@@ -277,6 +295,8 @@ type EnumValue struct {
 	Number int32
 	// Comment is the value's leading doc comment, or "" when it has none.
 	Comment string
+	// Tags are Comment's directives, parsed as for Field.Tags.
+	Tags []codetags.Tag
 }
 
 // Build compiles source - a single, self-contained proto3 file's raw text -
@@ -316,7 +336,9 @@ func fromDescriptor(fd protoreflect.FileDescriptor) (*API, error) {
 	if err := collectMessages(fd, fd.Messages(), api); err != nil {
 		return nil, err
 	}
-	collectEnums(fd, fd.Enums(), api)
+	if err := collectEnums(fd, fd.Enums(), api); err != nil {
+		return nil, err
+	}
 
 	return api, nil
 }
@@ -415,15 +437,22 @@ func collectMessages(fd protoreflect.FileDescriptor, mds protoreflect.MessageDes
 		if err := collectMessages(fd, md.Messages(), api); err != nil {
 			return err
 		}
-		collectEnums(fd, md.Enums(), api)
+		if err := collectEnums(fd, md.Enums(), api); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func collectEnums(fd protoreflect.FileDescriptor, eds protoreflect.EnumDescriptors, api *API) {
+func collectEnums(fd protoreflect.FileDescriptor, eds protoreflect.EnumDescriptors, api *API) error {
 	for i := range eds.Len() {
-		api.Enums = append(api.Enums, buildEnum(fd, eds.Get(i)))
+		e, err := buildEnum(fd, eds.Get(i))
+		if err != nil {
+			return err
+		}
+		api.Enums = append(api.Enums, e)
 	}
+	return nil
 }
 
 func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescriptor) (Service, error) {
@@ -435,16 +464,23 @@ func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescrip
 	methods := sd.Methods()
 	for i := range methods.Len() {
 		md := methods.Get(i)
-		resource, err := methodResource(md)
+		annotation, err := methodAnnotation(md)
+		if err != nil {
+			return Service{}, err
+		}
+		c := comment(fd, md)
+		tags, err := parseTags(md, c)
 		if err != nil {
 			return Service{}, err
 		}
 		svc.Methods = append(svc.Methods, Method{
 			Name:            md.Name(),
-			Comment:         comment(fd, md),
+			Comment:         c,
+			Tags:            tags,
 			InputName:       md.Input().FullName(),
 			OutputName:      md.Output().FullName(),
-			Resource:        resource,
+			Resource:        annotation.GetResource(),
+			PreviewGate:     annotation.GetPreviewGate(),
 			ServiceFullName: svc.FullName,
 			ServiceName:     svc.Name,
 		})
@@ -457,16 +493,26 @@ func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescrip
 	if err != nil {
 		return Message{}, err
 	}
+	c := comment(fd, md)
+	tags, err := parseTags(md, c)
+	if err != nil {
+		return Message{}, err
+	}
 	m := Message{
 		FullName:           md.FullName(),
 		Name:               shortName(fd, md.FullName()),
 		ParentFullName:     parentFullName(md),
-		Comment:            comment(fd, md),
+		Comment:            c,
+		Tags:               tags,
 		ResourceAnnotation: annotation,
 	}
 	fields := md.Fields()
 	for i := range fields.Len() {
-		m.Fields = append(m.Fields, buildField(fd, fields.Get(i)))
+		f, err := buildField(fd, fields.Get(i))
+		if err != nil {
+			return Message{}, err
+		}
+		m.Fields = append(m.Fields, f)
 	}
 	return m, nil
 }
@@ -494,16 +540,16 @@ func sourceOptions(d protoreflect.Descriptor) (proto.Message, error) {
 	return opts, nil
 }
 
-func methodResource(md protoreflect.MethodDescriptor) (string, error) {
+func methodAnnotation(md protoreflect.MethodDescriptor) (*ateapi.MethodAnnotation, error) {
 	opts, err := sourceOptions(md)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	a := proto.GetExtension(opts, ateapi.E_Method).(*ateapi.MethodAnnotation)
 	if len(a.ProtoReflect().GetUnknown()) > 0 {
-		return "", fmt.Errorf("%s has a method annotation with fields this apitool doesn't know", md.FullName())
+		return nil, fmt.Errorf("%s has a method annotation with fields this apitool doesn't know", md.FullName())
 	}
-	return a.GetResource(), nil
+	return a, nil
 }
 
 func resourceAnnotation(md protoreflect.MessageDescriptor) (*ResourceAnnotation, error) {
@@ -526,14 +572,25 @@ func resourceAnnotation(md protoreflect.MessageDescriptor) (*ResourceAnnotation,
 	}, nil
 }
 
-func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescriptor) Field {
+func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescriptor) (Field, error) {
+	c := comment(fd, field)
+	tags, err := parseTags(field, c)
+	if err != nil {
+		return Field{}, err
+	}
+	opts, err := sourceOptions(field)
+	if err != nil {
+		return Field{}, err
+	}
 	f := Field{
-		Name:     field.Name(),
-		Number:   int32(field.Number()),
-		Comment:  comment(fd, field),
-		Repeated: field.IsList(),
-		Kind:     field.Kind(),
-		Redacted: field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
+		Name:        field.Name(),
+		Number:      int32(field.Number()),
+		Comment:     c,
+		Tags:        tags,
+		PreviewGate: proto.GetExtension(opts, ateapi.E_PreviewGate).(string),
+		Repeated:    field.IsList(),
+		Kind:        field.Kind(),
+		Redacted:    field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
 	}
 
 	switch {
@@ -568,26 +625,38 @@ func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescript
 		}
 	}
 
-	return f
+	return f, nil
 }
 
-func buildEnum(fd protoreflect.FileDescriptor, ed protoreflect.EnumDescriptor) Enum {
+func buildEnum(fd protoreflect.FileDescriptor, ed protoreflect.EnumDescriptor) (Enum, error) {
+	c := comment(fd, ed)
+	tags, err := parseTags(ed, c)
+	if err != nil {
+		return Enum{}, err
+	}
 	e := Enum{
 		FullName:       ed.FullName(),
 		Name:           shortName(fd, ed.FullName()),
 		ParentFullName: parentFullName(ed),
-		Comment:        comment(fd, ed),
+		Comment:        c,
+		Tags:           tags,
 	}
 	values := ed.Values()
 	for i := range values.Len() {
 		v := values.Get(i)
+		c := comment(fd, v)
+		tags, err := parseTags(v, c)
+		if err != nil {
+			return Enum{}, err
+		}
 		e.Values = append(e.Values, EnumValue{
 			Name:    v.Name(),
 			Number:  int32(v.Number()),
-			Comment: comment(fd, v),
+			Comment: c,
+			Tags:    tags,
 		})
 	}
-	return e
+	return e, nil
 }
 
 func repeatedPrefix(field protoreflect.FieldDescriptor) string {
@@ -629,12 +698,31 @@ func comment(fd protoreflect.FileDescriptor, d protoreflect.Descriptor) string {
 	return strings.TrimSpace(fd.SourceLocations().ByDescriptor(d).LeadingComments)
 }
 
+// parseTags parses the directives in d's doc comment with codetags, as
+// validation-gen does.
+func parseTags(d protoreflect.Descriptor, comment string) ([]codetags.Tag, error) {
+	var lines []string
+	for line := range strings.SplitSeq(comment, "\n") {
+		if IsDirective(line) {
+			lines = append(lines, strings.TrimPrefix(strings.TrimSpace(line), "+"))
+		}
+	}
+	tags, err := codetags.ParseAll(lines)
+	if err != nil {
+		return nil, fmt.Errorf("while parsing the directives of %s: %w", d.FullName(), err)
+	}
+	return tags, nil
+}
+
 // PublicDoc returns the part of a doc comment meant for readers of the API:
 // the comment without its internal notes, written between "(--" and "--)",
-// and without its lines starting with a "+k8s:" or "+ate:" directive.
+// and without its directive lines. Older releases (v1.0.x) also wrote
+// "+ate:preview=..." directives, so "+ate:" lines are stripped here too.
 func PublicDoc(comment string) string {
 	lines := strings.Split(internalNote.ReplaceAllString(comment, ""), "\n")
-	lines = slices.DeleteFunc(lines, isDirective)
+	lines = slices.DeleteFunc(lines, func(line string) bool {
+		return IsDirective(line) || strings.HasPrefix(strings.TrimSpace(line), "+ate:")
+	})
 	lines = collapseBlankRuns(lines)
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -653,11 +741,10 @@ func Summary(comment string) string {
 	return strings.Join(lines, "\n")
 }
 
-// isDirective reports whether line is a validation-gen directive, e.g.
-// "+k8s:required", or one of our own metadata tags, e.g. "+ate:preview".
-func isDirective(line string) bool {
-	line = strings.TrimSpace(line)
-	return strings.HasPrefix(line, "+k8s:") || strings.HasPrefix(line, "+ate:")
+// IsDirective reports whether line is a validation-gen directive, e.g.
+// "+k8s:required".
+func IsDirective(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "+k8s:")
 }
 
 // collapseBlankRuns replaces each run of consecutive blank lines with one.

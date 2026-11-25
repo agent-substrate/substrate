@@ -236,11 +236,18 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testStorageLocation,
 	)
 
+	methodGates, err := controlapi.PreviewMethodGates(ateapi.File_api_ateapi_v1_ateapi_proto.Services())
+	if err != nil {
+		cancel()
+		cleanupStore()
+		t.Fatalf("failed to read preview gates of methods: %v", err)
+	}
+
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		ateinterceptors.ServerUnaryInterceptor,
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		preview.UnaryServerInterceptor,
+		preview.UnaryServerInterceptor(methodGates),
 	))
 	ateapi.RegisterControlServer(grpcServer, service)
 

@@ -2122,7 +2122,6 @@ type ActorStatus struct {
 	// actor. These volumes only live as long as the actor and are deleted with
 	// it.
 	//
-	// +ate:preview=ExternalVolumes
 	// +k8s:optional
 	ExternalVolumes *ExternalVolumes `protobuf:"bytes,3,opt,name=external_volumes,json=externalVolumes,proto3" json:"external_volumes,omitempty"`
 	// crash records why and when the Actor entered CRASHED. It is set with the
@@ -2831,7 +2830,6 @@ type ActorTemplate struct {
 	// If absent, no policy is created. When set, at least one rule is required.
 	// May not be set when snapshot_config.golden_snapshot_config.mode is DISABLED.
 	//
-	// +ate:preview=GoldenEgressPolicy
 	// +k8s:ifDisabled(GoldenEgressPolicy)=+k8s:forbidden
 	// +k8s:optional
 	GoldenEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,9,opt,name=golden_egress_policy,json=goldenEgressPolicy,proto3" json:"golden_egress_policy,omitempty"`
@@ -3167,7 +3165,6 @@ type SnapshotConfig struct {
 	// <storage_location>/atespaces/..., so no segment may be "atespaces" in any
 	// letter case.
 	//
-	// +ate:preview=PerTemplateSnapshotLocation
 	// +k8s:ifDisabled(PerTemplateSnapshotLocation)=+k8s:forbidden
 	// +k8s:optional
 	// +k8s:maxLength=1024
@@ -3785,7 +3782,6 @@ type Volume struct {
 	DurableDir *DurableDirVolumeSource `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
 	// external is a CSI volume: provisioned for this actor from a template.
 	//
-	// +ate:preview=ExternalVolumes
 	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
 	// +k8s:optional
 	// +k8s:unionMember
@@ -9960,7 +9956,10 @@ type MethodAnnotation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The message name of the resource the method operates on. For example,
 	// "Actor" for SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
-	Resource      string `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	Resource string `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	// The preview gate that must be enabled to call the method. Empty if the
+	// method is generally available.
+	PreviewGate   string `protobuf:"bytes,2,opt,name=preview_gate,json=previewGate,proto3" json:"preview_gate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -10002,6 +10001,13 @@ func (x *MethodAnnotation) GetResource() string {
 	return ""
 }
 
+func (x *MethodAnnotation) GetPreviewGate() string {
+	if x != nil {
+		return x.PreviewGate
+	}
+	return ""
+}
+
 var file_api_ateapi_v1_ateapi_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
@@ -10019,6 +10025,14 @@ var file_api_ateapi_v1_ateapi_proto_extTypes = []protoimpl.ExtensionInfo{
 		Tag:           "bytes,50000,opt,name=method",
 		Filename:      "api/ateapi/v1/ateapi.proto",
 	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: (*string)(nil),
+		Field:         50000,
+		Name:          "substrate.ateapi.v1.preview_gate",
+		Tag:           "bytes,50000,opt,name=preview_gate",
+		Filename:      "api/ateapi/v1/ateapi.proto",
+	},
 }
 
 // Extension fields to descriptorpb.MessageOptions.
@@ -10031,6 +10045,12 @@ var (
 var (
 	// optional substrate.ateapi.v1.MethodAnnotation method = 50000;
 	E_Method = &file_api_ateapi_v1_ateapi_proto_extTypes[1]
+)
+
+// Extension fields to descriptorpb.FieldOptions.
+var (
+	// optional string preview_gate = 50000;
+	E_PreviewGate = &file_api_ateapi_v1_ateapi_proto_extTypes[2]
 )
 
 var File_api_ateapi_v1_ateapi_proto protoreflect.FileDescriptor
@@ -10166,7 +10186,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata:\x11\x82\xb5\x18\r\x18\x02\"\tAtespaces\";\n" +
 	"\tObjectRef\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xdf\x04\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xf7\x04\n" +
 	"\rActorTemplate\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata\x12F\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x1d.substrate.ateapi.v1.SelectorR\x0eworkerSelector\x12>\n" +
@@ -10175,8 +10195,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"containers\x125\n" +
 	"\avolumes\x18\x04 \x03(\v2\x1b.substrate.ateapi.v1.VolumeR\avolumes\x12L\n" +
 	"\x0fsnapshot_config\x18\x05 \x01(\v2#.substrate.ateapi.v1.SnapshotConfigR\x0esnapshotConfig\x12G\n" +
-	"\tresources\x18\x06 \x01(\v2).substrate.ateapi.v1.ResourceRequirementsR\tresources\x12[\n" +
-	"\x14golden_egress_policy\x18\t \x01(\v2).substrate.ateapi.v1.EgressPolicyTemplateR\x12goldenEgressPolicy\x12@\n" +
+	"\tresources\x18\x06 \x01(\v2).substrate.ateapi.v1.ResourceRequirementsR\tresources\x12s\n" +
+	"\x14golden_egress_policy\x18\t \x01(\v2).substrate.ateapi.v1.EgressPolicyTemplateB\x16\x82\xb5\x18\x12GoldenEgressPolicyR\x12goldenEgressPolicy\x12@\n" +
 	"\x06status\x18\a \x01(\v2(.substrate.ateapi.v1.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"N\n" +
 	"\x14ResourceRequirements\x126\n" +
 	"\x06limits\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ResourcesR\x06limits\"U\n" +
@@ -10189,9 +10209,9 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\rsnapshot_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\fsnapshotTime\x12#\n" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"v\n" +
 	"\x13ActorTemplateStatus\x12_\n" +
-	"\x16golden_snapshot_status\x18\x01 \x01(\v2).substrate.ateapi.v1.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"\xf2\x01\n" +
-	"\x0eSnapshotConfig\x12)\n" +
-	"\x10storage_location\x18\x01 \x01(\tR\x0fstorageLocation\x12T\n" +
+	"\x16golden_snapshot_status\x18\x01 \x01(\v2).substrate.ateapi.v1.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"\x93\x02\n" +
+	"\x0eSnapshotConfig\x12J\n" +
+	"\x10storage_location\x18\x01 \x01(\tB\x1f\x82\xb5\x18\x1bPerTemplateSnapshotLocationR\x0fstorageLocation\x12T\n" +
 	"\x12preferred_fidelity\x18\x02 \x01(\x0e2%.substrate.ateapi.v1.SnapshotFidelityR\x11preferredFidelity\x12_\n" +
 	"\x16golden_snapshot_config\x18\x03 \x01(\v2).substrate.ateapi.v1.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"S\n" +
 	"\x14GoldenSnapshotConfig\x12;\n" +
@@ -10219,12 +10239,12 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"\xbd\x02\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"\xd2\x02\n" +
 	"\x06Volume\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12L\n" +
 	"\vdurable_dir\x18\x02 \x01(\v2+.substrate.ateapi.v1.DurableDirVolumeSourceR\n" +
-	"durableDir\x12E\n" +
-	"\bexternal\x18\x03 \x01(\v2).substrate.ateapi.v1.ExternalVolumeSourceR\bexternal\x12L\n" +
+	"durableDir\x12Z\n" +
+	"\bexternal\x18\x03 \x01(\v2).substrate.ateapi.v1.ExternalVolumeSourceB\x13\x82\xb5\x18\x0fExternalVolumesR\bexternal\x12L\n" +
 	"\vsystem_info\x18\x04 \x01(\v2+.substrate.ateapi.v1.SystemInfoVolumeSourceR\n" +
 	"systemInfo\x12<\n" +
 	"\x05image\x18\x05 \x01(\v2&.substrate.ateapi.v1.ImageVolumeSourceR\x05image\"_\n" +
@@ -10535,9 +10555,10 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\aparents\x18\x01 \x03(\tR\aparents\x12\x1c\n" +
 	"\tsingleton\x18\x02 \x01(\bR\tsingleton\x120\n" +
 	"\x05scope\x18\x03 \x01(\x0e2\x1a.substrate.ateapi.v1.ScopeR\x05scope\x12\x16\n" +
-	"\x06plural\x18\x04 \x01(\tR\x06plural\".\n" +
+	"\x06plural\x18\x04 \x01(\tR\x06plural\"Q\n" +
 	"\x10MethodAnnotation\x12\x1a\n" +
-	"\bresource\x18\x01 \x01(\tR\bresource*a\n" +
+	"\bresource\x18\x01 \x01(\tR\bresource\x12!\n" +
+	"\fpreview_gate\x18\x02 \x01(\tR\vpreviewGate*a\n" +
 	"\rSnapshotOwner\x12\x1e\n" +
 	"\x1aSNAPSHOT_OWNER_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SNAPSHOT_OWNER_ACTOR\x10\x01\x12\x16\n" +
@@ -10687,7 +10708,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x18ReportActorSnapshotState\x124.substrate.ateapi.v1.ReportActorSnapshotStateRequest\x1a5.substrate.ateapi.v1.ReportActorSnapshotStateResponse\x12u\n" +
 	"\x12ReportActorCrashed\x12..substrate.ateapi.v1.ReportActorCrashedRequest\x1a/.substrate.ateapi.v1.ReportActorCrashedResponse:f\n" +
 	"\bresource\x12\x1f.google.protobuf.MessageOptions\x18І\x03 \x01(\v2'.substrate.ateapi.v1.ResourceAnnotationR\bresource:_\n" +
-	"\x06method\x12\x1e.google.protobuf.MethodOptions\x18І\x03 \x01(\v2%.substrate.ateapi.v1.MethodAnnotationR\x06methodB+Z)go.ate.dev/substrate/api/ateapi/v1;ateapib\x06proto3"
+	"\x06method\x12\x1e.google.protobuf.MethodOptions\x18І\x03 \x01(\v2%.substrate.ateapi.v1.MethodAnnotationR\x06method:B\n" +
+	"\fpreview_gate\x12\x1d.google.protobuf.FieldOptions\x18І\x03 \x01(\tR\vpreviewGateB+Z)go.ate.dev/substrate/api/ateapi/v1;ateapib\x06proto3"
 
 var (
 	file_api_ateapi_v1_ateapi_proto_rawDescOnce sync.Once
@@ -10860,6 +10882,7 @@ var file_api_ateapi_v1_ateapi_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),              // 153: google.protobuf.Timestamp
 	(*descriptorpb.MessageOptions)(nil),        // 154: google.protobuf.MessageOptions
 	(*descriptorpb.MethodOptions)(nil),         // 155: google.protobuf.MethodOptions
+	(*descriptorpb.FieldOptions)(nil),          // 156: google.protobuf.FieldOptions
 }
 var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	1,   // 0: substrate.ateapi.v1.SnapshotStorage.state:type_name -> substrate.ateapi.v1.SnapshotStorageState
@@ -11055,112 +11078,113 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	9,   // 190: substrate.ateapi.v1.ResourceAnnotation.scope:type_name -> substrate.ateapi.v1.Scope
 	154, // 191: substrate.ateapi.v1.resource:extendee -> google.protobuf.MessageOptions
 	155, // 192: substrate.ateapi.v1.method:extendee -> google.protobuf.MethodOptions
-	148, // 193: substrate.ateapi.v1.resource:type_name -> substrate.ateapi.v1.ResourceAnnotation
-	149, // 194: substrate.ateapi.v1.method:type_name -> substrate.ateapi.v1.MethodAnnotation
-	70,  // 195: substrate.ateapi.v1.Control.GetActor:input_type -> substrate.ateapi.v1.GetActorRequest
-	71,  // 196: substrate.ateapi.v1.Control.CreateActor:input_type -> substrate.ateapi.v1.CreateActorRequest
-	72,  // 197: substrate.ateapi.v1.Control.UpdateActor:input_type -> substrate.ateapi.v1.UpdateActorRequest
-	73,  // 198: substrate.ateapi.v1.Control.SuspendActor:input_type -> substrate.ateapi.v1.SuspendActorRequest
-	76,  // 199: substrate.ateapi.v1.Control.ResumeActor:input_type -> substrate.ateapi.v1.ResumeActorRequest
-	78,  // 200: substrate.ateapi.v1.Control.RevertActor:input_type -> substrate.ateapi.v1.RevertActorRequest
-	80,  // 201: substrate.ateapi.v1.Control.DeleteActor:input_type -> substrate.ateapi.v1.DeleteActorRequest
-	81,  // 202: substrate.ateapi.v1.Control.GetActorEgressPolicy:input_type -> substrate.ateapi.v1.GetActorEgressPolicyRequest
-	82,  // 203: substrate.ateapi.v1.Control.CreateActorEgressPolicy:input_type -> substrate.ateapi.v1.CreateActorEgressPolicyRequest
-	83,  // 204: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:input_type -> substrate.ateapi.v1.UpdateActorEgressPolicyRequest
-	84,  // 205: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:input_type -> substrate.ateapi.v1.DeleteActorEgressPolicyRequest
-	86,  // 206: substrate.ateapi.v1.Control.MintActorJwt:input_type -> substrate.ateapi.v1.MintActorJwtRequest
-	90,  // 207: substrate.ateapi.v1.Control.CreateTag:input_type -> substrate.ateapi.v1.CreateTagRequest
-	85,  // 208: substrate.ateapi.v1.Control.GetTag:input_type -> substrate.ateapi.v1.GetTagRequest
-	88,  // 209: substrate.ateapi.v1.Control.ListTags:input_type -> substrate.ateapi.v1.ListTagsRequest
-	91,  // 210: substrate.ateapi.v1.Control.UpdateTag:input_type -> substrate.ateapi.v1.UpdateTagRequest
-	92,  // 211: substrate.ateapi.v1.Control.DeleteTag:input_type -> substrate.ateapi.v1.DeleteTagRequest
-	97,  // 212: substrate.ateapi.v1.Control.ListWorkers:input_type -> substrate.ateapi.v1.ListWorkersRequest
-	99,  // 213: substrate.ateapi.v1.Control.GetWorker:input_type -> substrate.ateapi.v1.GetWorkerRequest
-	100, // 214: substrate.ateapi.v1.Control.CreateWorker:input_type -> substrate.ateapi.v1.CreateWorkerRequest
-	101, // 215: substrate.ateapi.v1.Control.UpdateWorker:input_type -> substrate.ateapi.v1.UpdateWorkerRequest
-	102, // 216: substrate.ateapi.v1.Control.DeleteWorker:input_type -> substrate.ateapi.v1.DeleteWorkerRequest
-	103, // 217: substrate.ateapi.v1.Control.DrainWorker:input_type -> substrate.ateapi.v1.DrainWorkerRequest
-	105, // 218: substrate.ateapi.v1.Control.MarkWorkerAvailable:input_type -> substrate.ateapi.v1.MarkWorkerAvailableRequest
-	107, // 219: substrate.ateapi.v1.Control.MarkWorkerUnavailable:input_type -> substrate.ateapi.v1.MarkWorkerUnavailableRequest
-	95,  // 220: substrate.ateapi.v1.Control.ListWorkerActorAssignments:input_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsRequest
-	109, // 221: substrate.ateapi.v1.Control.ListActors:input_type -> substrate.ateapi.v1.ListActorsRequest
-	60,  // 222: substrate.ateapi.v1.Control.CreateAtespace:input_type -> substrate.ateapi.v1.CreateAtespaceRequest
-	61,  // 223: substrate.ateapi.v1.Control.GetAtespace:input_type -> substrate.ateapi.v1.GetAtespaceRequest
-	62,  // 224: substrate.ateapi.v1.Control.ListAtespaces:input_type -> substrate.ateapi.v1.ListAtespacesRequest
-	64,  // 225: substrate.ateapi.v1.Control.DeleteAtespace:input_type -> substrate.ateapi.v1.DeleteAtespaceRequest
-	65,  // 226: substrate.ateapi.v1.Control.CreateActorTemplate:input_type -> substrate.ateapi.v1.CreateActorTemplateRequest
-	66,  // 227: substrate.ateapi.v1.Control.GetActorTemplate:input_type -> substrate.ateapi.v1.GetActorTemplateRequest
-	67,  // 228: substrate.ateapi.v1.Control.ListActorTemplates:input_type -> substrate.ateapi.v1.ListActorTemplatesRequest
-	69,  // 229: substrate.ateapi.v1.Control.DeleteActorTemplate:input_type -> substrate.ateapi.v1.DeleteActorTemplateRequest
-	141, // 230: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:input_type -> substrate.ateapi.v1.GetGlobalAccessPolicyRequest
-	142, // 231: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.CreateGlobalAccessPolicyRequest
-	143, // 232: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest
-	144, // 233: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.GetAtespaceAccessPolicyRequest
-	145, // 234: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest
-	146, // 235: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest
-	147, // 236: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest
-	121, // 237: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:input_type -> substrate.ateapi.v1.AcquireWorkerEpochRequest
-	123, // 238: substrate.ateapi.v1.WorkerService.RegisterWorker:input_type -> substrate.ateapi.v1.RegisterWorkerRequest
-	125, // 239: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:input_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest
-	127, // 240: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:input_type -> substrate.ateapi.v1.MintWorkerActorCertificateRequest
-	129, // 241: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:input_type -> substrate.ateapi.v1.MintWorkerActorJwtRequest
-	131, // 242: substrate.ateapi.v1.WorkerService.RequestActorSuspend:input_type -> substrate.ateapi.v1.RequestActorSuspendRequest
-	135, // 243: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:input_type -> substrate.ateapi.v1.ReportActorSnapshotStateRequest
-	133, // 244: substrate.ateapi.v1.WorkerService.ReportActorCrashed:input_type -> substrate.ateapi.v1.ReportActorCrashedRequest
-	17,  // 245: substrate.ateapi.v1.Control.GetActor:output_type -> substrate.ateapi.v1.Actor
-	17,  // 246: substrate.ateapi.v1.Control.CreateActor:output_type -> substrate.ateapi.v1.Actor
-	17,  // 247: substrate.ateapi.v1.Control.UpdateActor:output_type -> substrate.ateapi.v1.Actor
-	74,  // 248: substrate.ateapi.v1.Control.SuspendActor:output_type -> substrate.ateapi.v1.SuspendActorResponse
-	77,  // 249: substrate.ateapi.v1.Control.ResumeActor:output_type -> substrate.ateapi.v1.ResumeActorResponse
-	79,  // 250: substrate.ateapi.v1.Control.RevertActor:output_type -> substrate.ateapi.v1.RevertActorResponse
-	17,  // 251: substrate.ateapi.v1.Control.DeleteActor:output_type -> substrate.ateapi.v1.Actor
-	18,  // 252: substrate.ateapi.v1.Control.GetActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	18,  // 253: substrate.ateapi.v1.Control.CreateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	18,  // 254: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	18,  // 255: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	87,  // 256: substrate.ateapi.v1.Control.MintActorJwt:output_type -> substrate.ateapi.v1.MintActorJwtResponse
-	33,  // 257: substrate.ateapi.v1.Control.CreateTag:output_type -> substrate.ateapi.v1.Tag
-	33,  // 258: substrate.ateapi.v1.Control.GetTag:output_type -> substrate.ateapi.v1.Tag
-	89,  // 259: substrate.ateapi.v1.Control.ListTags:output_type -> substrate.ateapi.v1.ListTagsResponse
-	33,  // 260: substrate.ateapi.v1.Control.UpdateTag:output_type -> substrate.ateapi.v1.Tag
-	33,  // 261: substrate.ateapi.v1.Control.DeleteTag:output_type -> substrate.ateapi.v1.Tag
-	98,  // 262: substrate.ateapi.v1.Control.ListWorkers:output_type -> substrate.ateapi.v1.ListWorkersResponse
-	111, // 263: substrate.ateapi.v1.Control.GetWorker:output_type -> substrate.ateapi.v1.Worker
-	111, // 264: substrate.ateapi.v1.Control.CreateWorker:output_type -> substrate.ateapi.v1.Worker
-	111, // 265: substrate.ateapi.v1.Control.UpdateWorker:output_type -> substrate.ateapi.v1.Worker
-	111, // 266: substrate.ateapi.v1.Control.DeleteWorker:output_type -> substrate.ateapi.v1.Worker
-	104, // 267: substrate.ateapi.v1.Control.DrainWorker:output_type -> substrate.ateapi.v1.DrainWorkerResponse
-	106, // 268: substrate.ateapi.v1.Control.MarkWorkerAvailable:output_type -> substrate.ateapi.v1.MarkWorkerAvailableResponse
-	108, // 269: substrate.ateapi.v1.Control.MarkWorkerUnavailable:output_type -> substrate.ateapi.v1.MarkWorkerUnavailableResponse
-	96,  // 270: substrate.ateapi.v1.Control.ListWorkerActorAssignments:output_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsResponse
-	110, // 271: substrate.ateapi.v1.Control.ListActors:output_type -> substrate.ateapi.v1.ListActorsResponse
-	34,  // 272: substrate.ateapi.v1.Control.CreateAtespace:output_type -> substrate.ateapi.v1.Atespace
-	34,  // 273: substrate.ateapi.v1.Control.GetAtespace:output_type -> substrate.ateapi.v1.Atespace
-	63,  // 274: substrate.ateapi.v1.Control.ListAtespaces:output_type -> substrate.ateapi.v1.ListAtespacesResponse
-	34,  // 275: substrate.ateapi.v1.Control.DeleteAtespace:output_type -> substrate.ateapi.v1.Atespace
-	36,  // 276: substrate.ateapi.v1.Control.CreateActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
-	36,  // 277: substrate.ateapi.v1.Control.GetActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
-	68,  // 278: substrate.ateapi.v1.Control.ListActorTemplates:output_type -> substrate.ateapi.v1.ListActorTemplatesResponse
-	36,  // 279: substrate.ateapi.v1.Control.DeleteActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
-	139, // 280: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	139, // 281: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	139, // 282: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	139, // 283: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	139, // 284: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	139, // 285: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	139, // 286: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	122, // 287: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:output_type -> substrate.ateapi.v1.AcquireWorkerEpochResponse
-	124, // 288: substrate.ateapi.v1.WorkerService.RegisterWorker:output_type -> substrate.ateapi.v1.RegisterWorkerResponse
-	126, // 289: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:output_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse
-	128, // 290: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:output_type -> substrate.ateapi.v1.MintWorkerActorCertificateResponse
-	130, // 291: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:output_type -> substrate.ateapi.v1.MintWorkerActorJwtResponse
-	132, // 292: substrate.ateapi.v1.WorkerService.RequestActorSuspend:output_type -> substrate.ateapi.v1.RequestActorSuspendResponse
-	136, // 293: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:output_type -> substrate.ateapi.v1.ReportActorSnapshotStateResponse
-	134, // 294: substrate.ateapi.v1.WorkerService.ReportActorCrashed:output_type -> substrate.ateapi.v1.ReportActorCrashedResponse
-	245, // [245:295] is the sub-list for method output_type
-	195, // [195:245] is the sub-list for method input_type
-	193, // [193:195] is the sub-list for extension type_name
-	191, // [191:193] is the sub-list for extension extendee
+	156, // 193: substrate.ateapi.v1.preview_gate:extendee -> google.protobuf.FieldOptions
+	148, // 194: substrate.ateapi.v1.resource:type_name -> substrate.ateapi.v1.ResourceAnnotation
+	149, // 195: substrate.ateapi.v1.method:type_name -> substrate.ateapi.v1.MethodAnnotation
+	70,  // 196: substrate.ateapi.v1.Control.GetActor:input_type -> substrate.ateapi.v1.GetActorRequest
+	71,  // 197: substrate.ateapi.v1.Control.CreateActor:input_type -> substrate.ateapi.v1.CreateActorRequest
+	72,  // 198: substrate.ateapi.v1.Control.UpdateActor:input_type -> substrate.ateapi.v1.UpdateActorRequest
+	73,  // 199: substrate.ateapi.v1.Control.SuspendActor:input_type -> substrate.ateapi.v1.SuspendActorRequest
+	76,  // 200: substrate.ateapi.v1.Control.ResumeActor:input_type -> substrate.ateapi.v1.ResumeActorRequest
+	78,  // 201: substrate.ateapi.v1.Control.RevertActor:input_type -> substrate.ateapi.v1.RevertActorRequest
+	80,  // 202: substrate.ateapi.v1.Control.DeleteActor:input_type -> substrate.ateapi.v1.DeleteActorRequest
+	81,  // 203: substrate.ateapi.v1.Control.GetActorEgressPolicy:input_type -> substrate.ateapi.v1.GetActorEgressPolicyRequest
+	82,  // 204: substrate.ateapi.v1.Control.CreateActorEgressPolicy:input_type -> substrate.ateapi.v1.CreateActorEgressPolicyRequest
+	83,  // 205: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:input_type -> substrate.ateapi.v1.UpdateActorEgressPolicyRequest
+	84,  // 206: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:input_type -> substrate.ateapi.v1.DeleteActorEgressPolicyRequest
+	86,  // 207: substrate.ateapi.v1.Control.MintActorJwt:input_type -> substrate.ateapi.v1.MintActorJwtRequest
+	90,  // 208: substrate.ateapi.v1.Control.CreateTag:input_type -> substrate.ateapi.v1.CreateTagRequest
+	85,  // 209: substrate.ateapi.v1.Control.GetTag:input_type -> substrate.ateapi.v1.GetTagRequest
+	88,  // 210: substrate.ateapi.v1.Control.ListTags:input_type -> substrate.ateapi.v1.ListTagsRequest
+	91,  // 211: substrate.ateapi.v1.Control.UpdateTag:input_type -> substrate.ateapi.v1.UpdateTagRequest
+	92,  // 212: substrate.ateapi.v1.Control.DeleteTag:input_type -> substrate.ateapi.v1.DeleteTagRequest
+	97,  // 213: substrate.ateapi.v1.Control.ListWorkers:input_type -> substrate.ateapi.v1.ListWorkersRequest
+	99,  // 214: substrate.ateapi.v1.Control.GetWorker:input_type -> substrate.ateapi.v1.GetWorkerRequest
+	100, // 215: substrate.ateapi.v1.Control.CreateWorker:input_type -> substrate.ateapi.v1.CreateWorkerRequest
+	101, // 216: substrate.ateapi.v1.Control.UpdateWorker:input_type -> substrate.ateapi.v1.UpdateWorkerRequest
+	102, // 217: substrate.ateapi.v1.Control.DeleteWorker:input_type -> substrate.ateapi.v1.DeleteWorkerRequest
+	103, // 218: substrate.ateapi.v1.Control.DrainWorker:input_type -> substrate.ateapi.v1.DrainWorkerRequest
+	105, // 219: substrate.ateapi.v1.Control.MarkWorkerAvailable:input_type -> substrate.ateapi.v1.MarkWorkerAvailableRequest
+	107, // 220: substrate.ateapi.v1.Control.MarkWorkerUnavailable:input_type -> substrate.ateapi.v1.MarkWorkerUnavailableRequest
+	95,  // 221: substrate.ateapi.v1.Control.ListWorkerActorAssignments:input_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsRequest
+	109, // 222: substrate.ateapi.v1.Control.ListActors:input_type -> substrate.ateapi.v1.ListActorsRequest
+	60,  // 223: substrate.ateapi.v1.Control.CreateAtespace:input_type -> substrate.ateapi.v1.CreateAtespaceRequest
+	61,  // 224: substrate.ateapi.v1.Control.GetAtespace:input_type -> substrate.ateapi.v1.GetAtespaceRequest
+	62,  // 225: substrate.ateapi.v1.Control.ListAtespaces:input_type -> substrate.ateapi.v1.ListAtespacesRequest
+	64,  // 226: substrate.ateapi.v1.Control.DeleteAtespace:input_type -> substrate.ateapi.v1.DeleteAtespaceRequest
+	65,  // 227: substrate.ateapi.v1.Control.CreateActorTemplate:input_type -> substrate.ateapi.v1.CreateActorTemplateRequest
+	66,  // 228: substrate.ateapi.v1.Control.GetActorTemplate:input_type -> substrate.ateapi.v1.GetActorTemplateRequest
+	67,  // 229: substrate.ateapi.v1.Control.ListActorTemplates:input_type -> substrate.ateapi.v1.ListActorTemplatesRequest
+	69,  // 230: substrate.ateapi.v1.Control.DeleteActorTemplate:input_type -> substrate.ateapi.v1.DeleteActorTemplateRequest
+	141, // 231: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:input_type -> substrate.ateapi.v1.GetGlobalAccessPolicyRequest
+	142, // 232: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.CreateGlobalAccessPolicyRequest
+	143, // 233: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest
+	144, // 234: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.GetAtespaceAccessPolicyRequest
+	145, // 235: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest
+	146, // 236: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest
+	147, // 237: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest
+	121, // 238: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:input_type -> substrate.ateapi.v1.AcquireWorkerEpochRequest
+	123, // 239: substrate.ateapi.v1.WorkerService.RegisterWorker:input_type -> substrate.ateapi.v1.RegisterWorkerRequest
+	125, // 240: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:input_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest
+	127, // 241: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:input_type -> substrate.ateapi.v1.MintWorkerActorCertificateRequest
+	129, // 242: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:input_type -> substrate.ateapi.v1.MintWorkerActorJwtRequest
+	131, // 243: substrate.ateapi.v1.WorkerService.RequestActorSuspend:input_type -> substrate.ateapi.v1.RequestActorSuspendRequest
+	135, // 244: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:input_type -> substrate.ateapi.v1.ReportActorSnapshotStateRequest
+	133, // 245: substrate.ateapi.v1.WorkerService.ReportActorCrashed:input_type -> substrate.ateapi.v1.ReportActorCrashedRequest
+	17,  // 246: substrate.ateapi.v1.Control.GetActor:output_type -> substrate.ateapi.v1.Actor
+	17,  // 247: substrate.ateapi.v1.Control.CreateActor:output_type -> substrate.ateapi.v1.Actor
+	17,  // 248: substrate.ateapi.v1.Control.UpdateActor:output_type -> substrate.ateapi.v1.Actor
+	74,  // 249: substrate.ateapi.v1.Control.SuspendActor:output_type -> substrate.ateapi.v1.SuspendActorResponse
+	77,  // 250: substrate.ateapi.v1.Control.ResumeActor:output_type -> substrate.ateapi.v1.ResumeActorResponse
+	79,  // 251: substrate.ateapi.v1.Control.RevertActor:output_type -> substrate.ateapi.v1.RevertActorResponse
+	17,  // 252: substrate.ateapi.v1.Control.DeleteActor:output_type -> substrate.ateapi.v1.Actor
+	18,  // 253: substrate.ateapi.v1.Control.GetActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	18,  // 254: substrate.ateapi.v1.Control.CreateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	18,  // 255: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	18,  // 256: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	87,  // 257: substrate.ateapi.v1.Control.MintActorJwt:output_type -> substrate.ateapi.v1.MintActorJwtResponse
+	33,  // 258: substrate.ateapi.v1.Control.CreateTag:output_type -> substrate.ateapi.v1.Tag
+	33,  // 259: substrate.ateapi.v1.Control.GetTag:output_type -> substrate.ateapi.v1.Tag
+	89,  // 260: substrate.ateapi.v1.Control.ListTags:output_type -> substrate.ateapi.v1.ListTagsResponse
+	33,  // 261: substrate.ateapi.v1.Control.UpdateTag:output_type -> substrate.ateapi.v1.Tag
+	33,  // 262: substrate.ateapi.v1.Control.DeleteTag:output_type -> substrate.ateapi.v1.Tag
+	98,  // 263: substrate.ateapi.v1.Control.ListWorkers:output_type -> substrate.ateapi.v1.ListWorkersResponse
+	111, // 264: substrate.ateapi.v1.Control.GetWorker:output_type -> substrate.ateapi.v1.Worker
+	111, // 265: substrate.ateapi.v1.Control.CreateWorker:output_type -> substrate.ateapi.v1.Worker
+	111, // 266: substrate.ateapi.v1.Control.UpdateWorker:output_type -> substrate.ateapi.v1.Worker
+	111, // 267: substrate.ateapi.v1.Control.DeleteWorker:output_type -> substrate.ateapi.v1.Worker
+	104, // 268: substrate.ateapi.v1.Control.DrainWorker:output_type -> substrate.ateapi.v1.DrainWorkerResponse
+	106, // 269: substrate.ateapi.v1.Control.MarkWorkerAvailable:output_type -> substrate.ateapi.v1.MarkWorkerAvailableResponse
+	108, // 270: substrate.ateapi.v1.Control.MarkWorkerUnavailable:output_type -> substrate.ateapi.v1.MarkWorkerUnavailableResponse
+	96,  // 271: substrate.ateapi.v1.Control.ListWorkerActorAssignments:output_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsResponse
+	110, // 272: substrate.ateapi.v1.Control.ListActors:output_type -> substrate.ateapi.v1.ListActorsResponse
+	34,  // 273: substrate.ateapi.v1.Control.CreateAtespace:output_type -> substrate.ateapi.v1.Atespace
+	34,  // 274: substrate.ateapi.v1.Control.GetAtespace:output_type -> substrate.ateapi.v1.Atespace
+	63,  // 275: substrate.ateapi.v1.Control.ListAtespaces:output_type -> substrate.ateapi.v1.ListAtespacesResponse
+	34,  // 276: substrate.ateapi.v1.Control.DeleteAtespace:output_type -> substrate.ateapi.v1.Atespace
+	36,  // 277: substrate.ateapi.v1.Control.CreateActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
+	36,  // 278: substrate.ateapi.v1.Control.GetActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
+	68,  // 279: substrate.ateapi.v1.Control.ListActorTemplates:output_type -> substrate.ateapi.v1.ListActorTemplatesResponse
+	36,  // 280: substrate.ateapi.v1.Control.DeleteActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
+	139, // 281: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	139, // 282: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	139, // 283: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	139, // 284: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	139, // 285: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	139, // 286: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	139, // 287: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	122, // 288: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:output_type -> substrate.ateapi.v1.AcquireWorkerEpochResponse
+	124, // 289: substrate.ateapi.v1.WorkerService.RegisterWorker:output_type -> substrate.ateapi.v1.RegisterWorkerResponse
+	126, // 290: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:output_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse
+	128, // 291: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:output_type -> substrate.ateapi.v1.MintWorkerActorCertificateResponse
+	130, // 292: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:output_type -> substrate.ateapi.v1.MintWorkerActorJwtResponse
+	132, // 293: substrate.ateapi.v1.WorkerService.RequestActorSuspend:output_type -> substrate.ateapi.v1.RequestActorSuspendResponse
+	136, // 294: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:output_type -> substrate.ateapi.v1.ReportActorSnapshotStateResponse
+	134, // 295: substrate.ateapi.v1.WorkerService.ReportActorCrashed:output_type -> substrate.ateapi.v1.ReportActorCrashedResponse
+	246, // [246:296] is the sub-list for method output_type
+	196, // [196:246] is the sub-list for method input_type
+	194, // [194:196] is the sub-list for extension type_name
+	191, // [191:194] is the sub-list for extension extendee
 	0,   // [0:191] is the sub-list for field type_name
 }
 
@@ -11176,7 +11200,7 @@ func file_api_ateapi_v1_ateapi_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_ateapi_v1_ateapi_proto_rawDesc), len(file_api_ateapi_v1_ateapi_proto_rawDesc)),
 			NumEnums:      10,
 			NumMessages:   143,
-			NumExtensions: 2,
+			NumExtensions: 3,
 			NumServices:   2,
 		},
 		GoTypes:           file_api_ateapi_v1_ateapi_proto_goTypes,

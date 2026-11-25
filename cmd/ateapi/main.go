@@ -375,13 +375,18 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
+	methodGates, err := controlapi.PreviewMethodGates(ateapi.File_api_ateapi_v1_ateapi_proto.Services())
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid preview gate on a method", err)
+	}
+
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.NewServerUnaryInterceptor(config.GetIncludeErrorDebugInfo()),
 		authz.UnaryServerInterceptor(authorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		preview.UnaryServerInterceptor,
+		preview.UnaryServerInterceptor(methodGates),
 	}
 
 	mux := grpc.NewServer(

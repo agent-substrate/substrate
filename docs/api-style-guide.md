@@ -668,7 +668,7 @@ All fields of all APIs must be validated.  We use
 
 ## 11. Annotations
 
-Resources and methods carry proto options that say which messages are resources, how they nest, and which resource each RPC operates on.
+Resources, methods, and fields carry proto options that say which messages are resources, how they nest, which resource each RPC operates on, and which elements are in preview.
 
 ### 11.1 Resources
 
@@ -731,6 +731,29 @@ Rules:
 - `resource` is the resource's message name, and that message **must** carry a `(resource)` option.
 - A subresource's method names the subresource, not its parent: `EgressPolicy` for `GetActorEgressPolicy`.
 
+### 11.3 Preview gates
+
+A method or field that is part of a preview feature **must** name its gate:
+
+```proto
+rpc ResizeActor(ResizeActorRequest) returns (ResizeActorResponse) {
+  option (method) = {
+    resource : "Actor"
+    preview_gate : "MyFeature"
+  };
+}
+
+// +k8s:ifDisabled(MyFeature)=+k8s:forbidden
+// +k8s:optional
+MyFeatureConfig my_feature = 7 [ (preview_gate) = "MyFeature" ];
+```
+
+Rules:
+- The gate **must** be declared in `internal/preview`.
+- A field with `(preview_gate) = "<Gate>"` **must** also have `+k8s:ifDisabled(<Gate>)=+k8s:forbidden`, and vice versa.
+
+See [Preview gates](dev/preview-gates.md) for how gates are enforced.
+
 ---
 
 ## 12. Sensitive Fields (`debug_redact`)
@@ -781,7 +804,7 @@ Selector worker_selector = 2;
 1. **Summary**: the first paragraph, one or two sentences saying what the element is or does. It stands on its own: a reader who stops after it knows what the element is for. Every element's comment starts with one, fields and enum values included.
 2. **Details**: any further paragraphs, for what a user needs beyond the summary, such as constraints, defaults, and how the element interacts with others.
 3. **Internal notes**: text for API maintainers rather than API users, such as why a bound was chosen or a `TODO`, wrapped in `(--` and `--)`, as in [AIP-192](https://google.aip.dev/192#internal-comments). A note may span lines and may sit anywhere before the directives, including between paragraphs. Only the note is left out of the API's documentation. Text after it is still documented.
-4. **Directives**: the `+k8s:` validation directives (see section #10) and `+ate:` tags such as `+ate:preview` (see [Preview Gates](dev/preview-gates.md)), last. Nothing may follow them: a `#` note on a directive stays on that directive's line.
+4. **Directives**: the `+k8s:` validation directives (see section #10), last. Nothing may follow them: a `#` note on a directive stays on that directive's line.
 
 ### 13.2 Formatting
 
