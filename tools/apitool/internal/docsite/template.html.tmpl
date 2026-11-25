@@ -126,8 +126,8 @@
         <thead><tr><th>Field</th><th>Description</th><th>Type</th></tr></thead>
         <tbody>
           {{range .Fields}}
-          <tr>
-            <td class="mono">{{.Name}}{{if .OneofName}} <span class="tag">oneof {{.OneofName}}</span>{{end}}{{if .Proto3Optional}} <span class="tag">optional</span>{{end}}</td>
+          <tr{{if .PreviewGate}} class="preview-field"{{end}}>
+            <td class="mono">{{.Name}}{{if .PreviewGate}} <span class="tag tag-preview">preview: {{.PreviewGate}}</span>{{end}}{{if .OneofName}} <span class="tag">oneof {{.OneofName}}</span>{{end}}{{if .Proto3Optional}} <span class="tag">optional</span>{{end}}</td>
             <td>{{fullDoc .Comment}}</td>
             <td class="mono">{{template "fieldType" .}}</td>
           </tr>
@@ -171,9 +171,9 @@
      description below, and a toggle revealing its Children, if any. */}}
 
 {{define "attrRow"}}
-<div class="attr-row">
+<div class="attr-row{{if .PreviewGate}} preview-field{{end}}">
   <div class="attr-head">
-    <span class="attr-name">{{.Name}}{{range .Tags}} <span class="tag">{{.}}</span>{{end}}</span>
+    <span class="attr-name">{{.Name}}{{if .PreviewGate}} <span class="tag tag-preview">preview: {{.PreviewGate}}</span>{{end}}{{range .Tags}} <span class="tag">{{.}}</span>{{end}}</span>
     <span class="attr-type">{{if .TypeAnchor}}<a href="#{{.TypeAnchor}}">{{.Type}}</a>{{else}}{{.Type}}{{end}}</span>
   </div>
   {{if .Doc}}<div class="attr-desc">{{fullDoc .Doc}}</div>{{end}}
@@ -202,7 +202,7 @@
 
 {{define "messageSource" -}}
 <span class="line" style="--indent: 0"><span class="tok-keyword">message</span> {{.Name}} <span class="tok-punct">{</span></span>
-{{- range .Fields}}<span class="line" style="--indent: 2">  {{template "fieldSource" .}}</span>{{end -}}
+{{- range .Fields}}<span class="line{{if .PreviewGate}} preview-field{{end}}" style="--indent: 2">  {{template "fieldSource" .}}</span>{{end -}}
 <span class="line" style="--indent: 0"><span class="tok-punct">}</span></span>
 {{- end}}
 

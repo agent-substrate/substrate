@@ -162,7 +162,7 @@ The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a micro
 > `goldenEgressPolicy` is a **preview** feature. Enable
 > `--preview=GoldenEgressPolicy` on the server (or through
 > ate-setup's `preview` setting), and opt in on the client with `kubectl ate --preview`
-> or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview gates](../dev/preview-gates.md).
+> or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview Gates](preview-gates.md).
 
 Set `goldenEgressPolicy` on an ActorTemplate to give its golden actor network
 access during initialization. For example, this template field
