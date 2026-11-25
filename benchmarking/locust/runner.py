@@ -30,6 +30,7 @@ class, thus this module finds the test in the list; see test_file().
 
 import argparse
 import csv
+import functools
 import json
 import os
 import re
@@ -41,7 +42,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, TextIO
+from typing import IO, TYPE_CHECKING, Any, Callable, TextIO
 
 from cluster_facts import (
     EMPTY_FACTS,
@@ -56,6 +57,9 @@ from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
 from ladder_steps import append_ladder_steps
 from turnover_window import append_turnover_window, fill_done_ts
+
+if TYPE_CHECKING:
+    import evaluate
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -105,12 +109,25 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--tag", required=True, help="Tag for this run")
     p.add_argument(
-        "--name", required=True, help="Name for this run; used as locust --csv prefix"
+        "--name", required=True, help="Name for this run (the test's name in tests.yaml)"
     )
     p.add_argument(
         "--dest",
         required=True,
         help="Root destination (gs://bucket/path or local path)",
+    )
+    p.add_argument(
+        "--run-ts",
+        type=int,
+        default=None,
+        help=(
+            "Unix seconds that name where the run is stored "
+            "(<dest>/runs/<name>/run_date=.../run_ts=.../run_tag=<tag>). The "
+            "orchestrator passes every run of one invocation the same value, so "
+            "a run finds another test's run of the invocation by it. Default: "
+            "now. Used for nothing else: time windows, such as the Prometheus "
+            "queries, use the runner's clock"
+        ),
     )
     p.add_argument(
         "--allow-empty-stats",
@@ -195,6 +212,18 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--test-entry",
+        type=json_object,
+        default={},
+        help=(
+            "The run's test entry from tests.yaml, as a JSON object. The runner "
+            "reads its `evaluations` (see benchmarking/evaluate/README.md): "
+            "their sources are set up before the run; after it they judge the "
+            "run, and the verdicts are written to evaluation.json, plus rows "
+            "in stats.jsonl. They never change the exit code or status.json"
+        ),
+    )
+    p.add_argument(
         "--phase-breakdown",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -208,6 +237,17 @@ def parse_args() -> argparse.Namespace:
     args, extra = p.parse_known_args()
     args.locust_extra = extra
     return args
+
+
+def json_object(value: str) -> dict[str, Any]:
+    """An argparse type: a JSON object."""
+    try:
+        obj = json.loads(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"not JSON: {e}") from None
+    if not isinstance(obj, dict):
+        raise argparse.ArgumentTypeError("not a JSON object")
+    return obj
 
 
 # Tests whose User class is implemented in Python. Closed set: new load
@@ -296,8 +336,72 @@ def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, l
         "  extra flags:",
     ]
     lines += [f"    {flag}" for flag in pair_flags(args.locust_extra)] or ["    (none)"]
+    lines.append("  test entry:")
+    entry = json.dumps(args.test_entry, indent=2) if args.test_entry else "(none)"
+    lines += [f"    {line}" for line in entry.splitlines()]
     lines.append("====================")
     for line in lines:
+        tee(logs, line)
+
+
+def prepare_evaluations(
+    args: argparse.Namespace, artifacts_dir: Path, uri: str, tmp: Path, logs: TextIO
+) -> Callable[[], "evaluate.Report"] | None:
+    """What judges the run once it has finished; None when the test entry
+    has no evaluations or the evaluate package can't be imported.
+
+    Evaluations judge whether the run's results meet the test entry's
+    conditions (benchmarking/evaluate/README.md).
+
+    They are loaded here, before the run, so a config error is at the top of
+    logs.txt. An error is only logged: the run goes ahead, and the returned
+    callable gives the report saying why the run wasn't judged.
+
+    Their sources read the run's artifacts in artifacts_dir, under the names
+    they are stored under at uri, and the runs of other tests from the same
+    invocation, stored next to uri (evaluate/rundir.py). tmp holds what is
+    downloaded.
+    """
+    evaluations = args.test_entry.get("evaluations")
+    if evaluations is None:
+        return None
+    # Imported here, not at the top: the runner works without the package.
+    try:
+        import evaluate  # benchmarking/evaluate, at /app/evaluate in the image
+        from evaluate import rundir
+    except ImportError as e:
+        tee(logs, f"Warning: evaluations will not be judged: can't import evaluate: {e}")
+        return None
+    run = evaluate.BenchmarkRunContext(
+        rundir.identity_from_uri(uri),
+        evaluate.LocalArtifacts(artifacts_dir),
+        run_of=rundir.same_invocation(uri, tmp),
+    )
+    try:
+        return evaluate.prepare(evaluations, run).evaluate
+    except evaluate.ConfigError as e:
+        error = f"config: {e}"
+    except Exception as e:  # never cost the run its load test
+        error = f"evaluate failed to load or prepare the evaluations: {type(e).__name__}: {e}"
+    tee(logs, f"Warning: evaluations will not be judged: {error}")
+    return functools.partial(evaluate.error_report, run.identity, error)
+
+
+def run_evaluations(
+    judge: Callable[[], "evaluate.Report"],
+    artifacts_dir: Path,
+    stats_generated: bool,
+    data_ts: str,
+    logs: TextIO,
+) -> None:
+    """Judges the finished run with judge from prepare_evaluations, and
+    writes the report: evaluation.json, and rows in stats.jsonl when the run
+    has stats."""
+    report = judge()
+    report.write_json(artifacts_dir / "evaluation.json")
+    if stats_generated:
+        report.append_stats_rows(artifacts_dir / "stats.jsonl", data_ts)
+    for line in report.summary_lines():
         tee(logs, line)
 
 
@@ -556,36 +660,45 @@ def main() -> None:
     path_ts = now.strftime("%Y%m%dT%H%M%SZ")
     # RFC 3339 / ISO 8601 extended for the JSONL data column
     data_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    # Hive partition values for the GCS layout
-    run_date = now.strftime("%Y-%m-%d")
-    run_ts = int(now.timestamp())
-
-    work_dir = Path(f"/tmp/{path_ts}-locust-runner")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    csv_prefix = work_dir / args.name
-    stats_csv = work_dir / f"{args.name}_stats.csv"
-    jsonl_path = work_dir / f"{args.name}.jsonl"
-    logs_path = work_dir / f"{args.name}_logs.txt"
-    traces_path = work_dir / f"{args.name}_traces.txt"
-    status_path = work_dir / f"{args.name}_status.json"
-    server_summary_json = work_dir / f"{args.name}_server_summary.json"
-
+    start_ts = int(now.timestamp())
+    # Hive partition values for the GCS layout, from the orchestrator's
+    # --run-ts, which every run of one invocation shares.
+    stored_at = now if args.run_ts is None else datetime.fromtimestamp(args.run_ts, timezone.utc)
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
-        f"/run_date={run_date}/run_ts={run_ts}/run_tag={args.tag}"
+        f"/run_date={stored_at.strftime('%Y-%m-%d')}/run_ts={int(stored_at.timestamp())}"
+        f"/run_tag={args.tag}"
     )
+
+    work_dir = Path(f"/tmp/{path_ts}-locust-runner")
+    # Everything in artifacts/ is uploaded under prefix, by the same name.
+    artifacts = work_dir / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    # locust names its CSVs <prefix>_stats.csv etc.; they are moved into
+    # artifacts/ under the stored names once it exits.
+    csv_prefix = work_dir / "locust"
+    stats_csv = artifacts / "stats.csv"
+    stats_history_csv = artifacts / "stats_history.csv"
+    jsonl_path = artifacts / "stats.jsonl"
+    logs_path = artifacts / "logs.txt"
+    traces_path = artifacts / "traces.txt"
+    status_path = artifacts / "status.json"
+    server_summary_json = artifacts / "server_summary.json"
 
     with open(logs_path, "w") as logs, open(traces_path, "w") as traces:
         traces.write("\t".join(TRACE_COLUMNS) + "\n")
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
+        judge = prepare_evaluations(args, artifacts, prefix, work_dir / "evaluate", logs)
         # Worker pods around the run, for OOMKilled restarts and evictions.
         pods_before = read_worker_pods(args, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
+        for csv_path in work_dir.glob(f"{csv_prefix.name}_*.csv"):
+            csv_path.replace(artifacts / csv_path.name.removeprefix(f"{csv_prefix.name}_"))
         run_end_ts = int(datetime.now(timezone.utc).timestamp())
         pods_after = read_worker_pods(args, logs)
         # Right after the run, as Evicted events expire after about 1h.
-        evicted_uids = read_evictions(args, run_ts, logs)
+        evicted_uids = read_evictions(args, start_ts, logs)
 
         stats_generated = False
         if stats_csv.exists():
@@ -613,7 +726,6 @@ def main() -> None:
         # Density frontiers and server-side telemetry are additive. They are
         # kept out of the block above so that a failure here cannot discard
         # the measurements the trial actually came for.
-        stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
         # Seeded up front so that a discovery failure still leaves a usable
         # value for the frontier summary below.
         facts = dict(EMPTY_FACTS)
@@ -633,7 +745,7 @@ def main() -> None:
                     data_ts,
                     facts,
                     logs,
-                    run_start=run_ts,
+                    run_start=start_ts,
                     run_end=run_end_ts,
                 )
             except Exception as e:
@@ -657,7 +769,7 @@ def main() -> None:
         try:
             extract_and_record_server_telemetry(
                 prom_url=args.prometheus_url,
-                start_ts=run_ts,
+                start_ts=start_ts,
                 end_ts=run_end_ts,
                 stats_history_csv=stats_history_csv,
                 output_json_path=server_summary_json,
@@ -716,28 +828,25 @@ def main() -> None:
         elif stats_generated:
             tee(logs, "Skipping phase breakdown (--no-phase-breakdown)")
 
+    # Evaluations come last: their sources read the finished logs.txt and
+    # stats.jsonl, so they run once logs.txt is closed, and append their own
+    # lines to it. Additive like the steps above: a failure here costs no
+    # measurement, and the rows are appended only to a run's stats.
+    if judge is not None:
+        with open(logs_path, "a") as logs:
+            try:
+                run_evaluations(judge, artifacts, stats_generated, data_ts, logs)
+            except Exception as e:
+                tee(logs, f"Warning: Failed to run the evaluations: {e}")
+
     status_path.write_text(
         json.dumps(
             {"locust_exit_code": exit_code, "stats_generated": stats_generated}
         )
     )
 
-    files: list[tuple[Path, str]] = [
-        (status_path, "status.json"),
-        (logs_path, "logs.txt"),
-        (traces_path, "traces.txt"),
-        (jsonl_path, "stats.jsonl"),
-        (stats_csv, "stats.csv"),
-        (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
-        (work_dir / f"{args.name}_failures.csv", "failures.csv"),
-        (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
-        (server_summary_json, "server_summary.json"),
-    ]
-    for src, basename in files:
-        if not src.exists():
-            print(f"Skipping {src}: not produced", flush=True)
-            continue
-        dest = f"{prefix}/{basename}"
+    for src in sorted(p for p in artifacts.rglob("*") if p.is_file()):
+        dest = f"{prefix}/{src.relative_to(artifacts).as_posix()}"
         upload(src, dest)
         print(f"Uploaded {src} -> {dest}", flush=True)
 

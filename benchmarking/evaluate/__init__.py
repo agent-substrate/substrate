@@ -16,6 +16,22 @@
 
 A test entry's `evaluations:` (config.py) name sources, which read the run's
 files into values (sources/), and CEL conditions over those values
-(cel_env.py). evaluator.py judges them into a Report. Depends on
+(cel_env.py). evaluator.py judges them into a Report, which writes
+evaluation.json and stats.jsonl rows. runner.py calls prepare when a run
+starts, and writes the Report once the run has finished. rundir.py is the
+runner's storage layout, where the runs of one invocation are found. Depends on
 cel-expr-python and pydantic (requirements.txt). See README.md.
 """
+
+from typing import Any
+
+from . import config
+from .config import ConfigError  # noqa: F401
+from .evaluator import Evaluator, Report, error_report  # noqa: F401
+from .sources.base import BenchmarkRunContext, LocalArtifacts, RunIdentity  # noqa: F401
+
+
+def prepare(evaluations: Any, run: BenchmarkRunContext) -> Evaluator:
+    """The evaluator of run, whose sources have run their init hook. Raises ConfigError when evaluations
+    (a test entry's block, as parsed) is invalid."""
+    return Evaluator(config.load(evaluations), run)

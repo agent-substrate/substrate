@@ -804,7 +804,7 @@ class ServerTelemetryTest(unittest.TestCase):
                                                     "--prometheus-url", "http://x:9090"]), \
              contextlib.redirect_stdout(out):
             runner.main()
-        self.assertEqual(calls, ["telemetry", ("ladder", "unit-run_logs.txt", "http://x:9090")])
+        self.assertEqual(calls, ["telemetry", ("ladder", "logs.txt", "http://x:9090")])
         self.assertIn("Failed to summarize ladder steps: prometheus down", out.getvalue())
         self.assertTrue(upload.called)
 

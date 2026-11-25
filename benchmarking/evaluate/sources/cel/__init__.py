@@ -17,6 +17,7 @@
   source_cfg:
     inputs:                        # the data: each is a CEL variable
       - {name: stats, reader: json_lines, reader_cfg: {file: stats.jsonl}}
+      - {name: other, from_test: some_other_test, reader: json_lines, reader_cfg: {file: stats.jsonl}}
     locals:                        # optional: ordered list of named in-between results
       - {name: rows, cel: "stats.lines.filter(l, l.metric == 'trial_summary')"}
     checks:                        # optional: what must hold for the values to mean anything
@@ -24,7 +25,9 @@
     values:                        # the outputs: each a double, bool, string or null
       - {name: cores, cel: "size(rows) > 0 ? dyn(rows[size(rows) - 1].measurements.allocatable_cores) : null"}
 
-An input names a reader (READERS) and its reader_cfg, and reads this run. Locals are evaluated top to bottom, each
+An input names a reader (READERS) and its reader_cfg. By default it reads this
+run; with `from_test:` it reads that test's run from the same invocation
+(BenchmarkRunContext.run_of). Locals are evaluated top to bottom, each
 reading inputs and earlier locals by name. The source knows nothing about what
 the data means: what is good, which run to compare against and every formula
 live in the config.
@@ -56,8 +59,9 @@ EXTENSIONS = (ext_math.ExtMath(),)
 
 
 class Input(Model):
-    """An input: its name, a reader and the reader's config."""
+    """An input: its name, the test whose run it reads (None: this run), a reader and the reader's config."""
     name: Name
+    from_test: Optional[Annotated[str, Field(min_length=1)]] = None
     reader: str
     reader_cfg: dict[str, JsonValue] = {}
 
@@ -187,7 +191,7 @@ class Cel(Source):
 
     def init(self, run: BenchmarkRunContext) -> None:
         super().init(run)
-        self._reads: dict[tuple[str, str], Mapping[str, Any] | ReadError] = {}
+        self._reads: dict[tuple[Optional[str], str, str], Mapping[str, Any] | ReadError] = {}
 
     def query(self, cfg: Mapping[str, Any]) -> Mapping[str, Scalar]:
         program = compile_cfg(cfg)
@@ -199,11 +203,11 @@ class Cel(Source):
 
     def _read(self, i: Input) -> Mapping[str, Any]:
         """The data of input i, read once per run and reader config; SourceInvalid naming it when it can't be read."""
-        key = (i.reader, json.dumps(i.reader_cfg, sort_keys=True))
+        key = (i.from_test, i.reader, json.dumps(i.reader_cfg, sort_keys=True))
         if key not in self._reads:
             try:
                 reader = READERS[i.reader]
-                data = reader().read(self.run, parse(reader.Config, i.reader_cfg))
+                data = reader().read(self._run_to_read(i), parse(reader.Config, i.reader_cfg))
                 check_data(reader, data)
                 self._reads[key] = data
             except ReadError as e:
@@ -212,3 +216,12 @@ class Cel(Source):
         if isinstance(found, ReadError):
             raise SourceInvalid(f"input {i.name!r}: {found}")
         return found
+
+    def _run_to_read(self, i: Input) -> BenchmarkRunContext:
+        """This run, or the run of i.from_test; ReadError when there is none."""
+        if i.from_test is None:
+            return self.run
+        try:
+            return self.run.run_of(i.from_test)
+        except LookupError as e:
+            raise ReadError(str(e)) from None

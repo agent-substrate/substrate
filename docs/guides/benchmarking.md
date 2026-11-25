@@ -686,7 +686,8 @@ gcloud storage cat "$RUN/stats.jsonl" | grep '"metric": "ladder_step_'
 ```
 
 `<dest>` is the orchestrator's `--dest`, and its log has the full `RUN` path
-on each `Uploaded ... -> gs://...` line.
+on each `Uploaded ... -> gs://...` line. All runs of one orchestrator invocation
+share its `run_ts`.
 
 ### Isolate Mode
 
@@ -855,6 +856,12 @@ them are checked into the repository.
   [analysis/README.md](../../benchmarking/analysis/README.md#automated-runs)).
 * `server_summary.json`: server-side telemetry harvested from Prometheus,
   including the per-sample bin-packing timeseries.
+* `evaluation.json`: for a test entry with `evaluations`, the run judged
+  against them: a summary verdict, and per evaluation each condition with its
+  CEL expression and verdict and every value its sources read. `stats.jsonl`
+  then also has one `evaluation_<name>` row per evaluation and an
+  `evaluations` row for the summary. Evaluations never change `status.json` or
+  the exit code. See [evaluate/README.md](../../benchmarking/evaluate/README.md).
 
 ### Density frontiers
 

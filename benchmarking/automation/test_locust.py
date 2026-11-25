@@ -60,6 +60,13 @@ class ValidateTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             locust.validate(test)
 
+    # Shape only: the runner validates the rest (benchmarking/evaluate).
+    def test_evaluations_shape(self):
+        locust.validate(entry(evaluations=[{"name": "e", "anything": "else"}]))
+        for bad in ({"evaluations": {"name": "e"}}, {"evaluations": [{"name": ""}]}, {"evaluations": ["e"]}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "locust test 't': evaluations must"):
+                locust.validate(entry(**bad))
+
 
 class PreTestTest(unittest.TestCase):
     def shaped(self, test):
@@ -80,7 +87,7 @@ class PreTestTest(unittest.TestCase):
 class JobTest(unittest.TestCase):
     def render(self, test):
         subs = {
-            "JOB_NAME": "j", "NAME": "t", "TAG": "c", "IMAGE": "i", "DEST": "d",
+            "JOB_NAME": "j", "NAME": "t", "TAG": "c", "IMAGE": "i", "DEST": "d", "RUN_TS": 1,
             **locust.job_subs(test),
         }
         tmpl = locust.job_tmpl(os.path.join(os.path.dirname(__file__), "manifests"))

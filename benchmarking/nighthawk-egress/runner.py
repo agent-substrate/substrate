@@ -68,6 +68,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--name", required=True)
     p.add_argument("--tag", required=True)
     p.add_argument("--dest", required=True)
+    p.add_argument(
+        "--run-ts",
+        type=int,
+        default=None,
+        help="Unix seconds that name where the run is stored, shared by every run of one invocation. Default: now",
+    )
     p.add_argument("--mode", required=True, choices=sorted(MODE_URIS))
     p.add_argument("--envoy-cpu", required=True, type=int, dest="envoy_cpu")
     return p.parse_args(argv)
@@ -113,9 +119,10 @@ def main(argv: list[str] | None = None) -> int:
     now = datetime.now(timezone.utc)
     work_dir = Path(f"/tmp/{now.strftime('%Y%m%dT%H%M%SZ')}-nighthawk-egress-{args.mode}")
     work_dir.mkdir(parents=True, exist_ok=True)
+    stored_at = now if args.run_ts is None else datetime.fromtimestamp(args.run_ts, timezone.utc)
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
-        f"/run_date={now.strftime('%Y-%m-%d')}/run_ts={int(now.timestamp())}/run_tag={args.tag}"
+        f"/run_date={stored_at.strftime('%Y-%m-%d')}/run_ts={int(stored_at.timestamp())}/run_tag={args.tag}"
     )
     print(f"Uploading to {prefix}", flush=True)
     logs_path = work_dir / "logs.txt"
