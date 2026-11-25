@@ -429,29 +429,78 @@ func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapi.R
 	return &ateapi.RequestActorSuspendResponse{}, nil
 }
 
-func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
+func TestRequestActorSuspendForwards(t *testing.T) {
+	tests := []struct {
+		name         string
+		options      *ateletpb.SuspendOptions
+		want         *ateapi.SuspendOptions
+		executionUID string
+	}{
+		{name: "no options"},
+		{name: "execution uid", executionUID: "fedcba98-7654-3210-fedc-ba9876543210"},
+		{
+			name:    "synchronous",
+			options: &ateletpb.SuspendOptions{Mode: ateletpb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			want:    &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		},
+		{
+			name:    "asynchronous",
+			options: &ateletpb.SuspendOptions{Mode: ateletpb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			want:    &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		},
+		{
+			name:    "unspecified mode",
+			options: &ateletpb.SuspendOptions{},
+			want:    &ateapi.SuspendOptions{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workers := &fakeSuspendService{}
+			svc := &workerSupportServer{workers: workers}
+
+			if _, err := svc.RequestActorSuspend(workerContext(t, "pod-a"), &ateletpb.RequestActorSuspendRequest{
+				ActorAtespace: "team-a",
+				ActorName:     "actor-1",
+				ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
+				Options:       tc.options,
+				ExecutionUid:  tc.executionUID,
+			}); err != nil {
+				t.Fatalf("RequestActorSuspend() failed: %v", err)
+			}
+
+			want := []*ateapi.RequestActorSuspendRequest{{
+				// The Worker is named after the worker pod UID, taken from the
+				// certificate rather than the request: a worker may speak for the
+				// actors it hosts, and only the control plane knows which those are.
+				Worker:       &ateapi.ObjectRef{Name: "pod-a"},
+				Actor:        &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+				ActorUid:     "01234567-89ab-cdef-0123-456789abcdef",
+				Options:      tc.want,
+				ExecutionUid: tc.executionUID,
+			}}
+			if diff := cmp.Diff(want, workers.got, protocmp.Transform()); diff != "" {
+				t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestRequestActorSuspendRejectsUnknownMode(t *testing.T) {
 	workers := &fakeSuspendService{}
 	svc := &workerSupportServer{workers: workers}
 
-	ctx := workerContext(t, "pod-a")
-	if _, err := svc.RequestActorSuspend(ctx, &ateletpb.RequestActorSuspendRequest{
+	_, err := svc.RequestActorSuspend(workerContext(t, "pod-a"), &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: "team-a",
 		ActorName:     "actor-1",
 		ActorUid:      "01234567-89ab-cdef-0123-456789abcdef",
-	}); err != nil {
-		t.Fatalf("RequestActorSuspend() failed: %v", err)
+		Options:       &ateletpb.SuspendOptions{Mode: 3},
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v (err %v), want InvalidArgument", got, err)
 	}
-
-	want := []*ateapi.RequestActorSuspendRequest{{
-		// The Worker is named after the worker pod UID, taken from the
-		// certificate rather than the request: a worker may speak for the
-		// actors it hosts, and only the control plane knows which those are.
-		Worker:   &ateapi.ObjectRef{Name: "pod-a"},
-		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid: "01234567-89ab-cdef-0123-456789abcdef",
-	}}
-	if diff := cmp.Diff(want, workers.got, protocmp.Transform()); diff != "" {
-		t.Errorf("forwarded request mismatch (-want +got):\n%s", diff)
+	if len(workers.got) != 0 {
+		t.Errorf("invalid request was still forwarded: %v", workers.got)
 	}
 }
 

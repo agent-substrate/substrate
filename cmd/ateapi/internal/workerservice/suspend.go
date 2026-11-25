@@ -41,8 +41,20 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 
 	workerName := req.GetWorker().GetName()
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	if err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid()); err != nil {
+	actor, err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid())
+	if err != nil {
 		return nil, err
+	}
+	// Either UID may be empty. Compare them only when both are set.
+	//
+	// TODO: use the precondition once #3065 is fixed.
+	if want, got := req.GetExecutionUid(), actor.GetStatus().GetWorkerAssignment().GetActorExecutionUid(); want != "" && got != "" && want != got {
+		slog.WarnContext(ctx, "Refusing a suspend request from a stale actor execution",
+			slog.String("worker", workerName),
+			slog.String("actor", actorRef.String()),
+			slog.String("requested_execution_uid", want),
+			slog.String("actual_execution_uid", got))
+		return nil, apierror.FailedPrecondition("Actor %s is running a different execution", actorRef)
 	}
 
 	// From here it is an ordinary suspend. Running the same workflow Control
@@ -55,7 +67,10 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 	// the workflow to acquire the lease, the Actor can be resumed onto another
 	// Worker, or deleted and recreated under the same name, and the workflow
 	// suspends whatever the reference resolves to by then. See #1773.
-	resp, err := s.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: req.GetActor()})
+	resp, err := s.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   req.GetActor(),
+		Options: req.GetOptions(),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -69,15 +84,16 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestAct
 
 // authorizeHostedActor checks that the calling atelet may speak for actorRef:
 // workerName must be on the caller's node, and the actor must be assigned to it.
-func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Caller, workerName string, actorRef resources.ActorRef, actorUID string) error {
+// It returns the actor it checked.
+func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Caller, workerName string, actorRef resources.ActorRef, actorUID string) (*ateapi.Actor, error) {
 	// Use authoritative state to authorize the request, never the request
 	// itself: the caller proves which node it is on, and nothing else.
 	worker, err := s.store.GetWorker(ctx, workerName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Worker %s not found", workerName).WithCause(err)
+			return nil, apierror.NotFound("Worker %s not found", workerName).WithCause(err)
 		}
-		return fmt.Errorf("while fetching worker %s: %w", workerName, err)
+		return nil, fmt.Errorf("while fetching worker %s: %w", workerName, err)
 	}
 	if worker.GetNodeName() != caller.NodeName {
 		// Do not disclose Workers on other nodes.
@@ -86,17 +102,20 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 			slog.String("worker_node", worker.GetNodeName()),
 			slog.String("caller_node", caller.NodeName),
 			slog.String("caller_pod", caller.PodName))
-		return apierror.NotFound("Worker %s not found", workerName)
+		return nil, apierror.NotFound("Worker %s not found", workerName)
 	}
 
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
+			return nil, apierror.NotFound("Actor %s not found", actorRef).WithCause(err)
 		}
-		return fmt.Errorf("while fetching actor %s: %w", actorRef, err)
+		return nil, fmt.Errorf("while fetching actor %s: %w", actorRef, err)
 	}
-	return checkActorHostedBy(ctx, actor, workerName, actorUID)
+	if err := checkActorHostedBy(ctx, actor, workerName, actorUID); err != nil {
+		return nil, err
+	}
+	return actor, nil
 }
 
 // checkActorHostedBy reports whether the Worker may speak for this Actor: the
