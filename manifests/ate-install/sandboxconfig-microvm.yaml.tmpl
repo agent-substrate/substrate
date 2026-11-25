@@ -30,9 +30,12 @@
 # boots cloud-hypervisor itself and gives the actor an overlay rootfs
 # (virtio-fs RO lower + guest-tmpfs upper), so it fetches virtiofsd too.
 #
-# cmd/ate-setup/internal/steps/microvm.go reads the per-arch sha256 values
-# below to verify the assembled binaries and stages them at these digest-keyed
-# paths so newer releases do not overwrite kept versions.
+# cmd/ate-setup/internal/steps/microvm.go reads the default version's per-arch
+# sha256 values below to verify and stage the assembled binaries at these
+# digest-keyed paths so newer releases do not overwrite kept versions. Kept
+# non-default versions are applied only when already present on the cluster, so
+# upgrades keep restorable snapshots without staging older Kata releases on
+# fresh clusters.
 
 apiVersion: ate.dev/v1
 kind: SandboxConfig
@@ -42,8 +45,9 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: microvm
-  defaultVersion: v2
+  defaultVersion: v3
   versions:
+  # Kata 4.3.1, kept so v2 MEMORY snapshots restore across upgrades.
   - name: v2
     state: Enabled
     assets:
@@ -51,7 +55,6 @@ spec:
         cloud-hypervisor:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
           sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
-        # virtiofsd serves the overlay RO lower (virtio-fs).
         virtiofsd:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f"
           sha256: "4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f"
@@ -74,3 +77,33 @@ spec:
         kata-image:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d"
           sha256: "6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d"
+  # Kata 4.4.0 (kata-static-substrate guest bundle + kata-static virtiofsd).
+  - name: v3
+    state: Enabled
+    assets:
+      arm64:
+        cloud-hypervisor:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
+          sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
+        virtiofsd:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f"
+          sha256: "4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f"
+        kata-kernel:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/daa09cde28472ee6afad203a20c94a6ce1c96c9d8dffafdd4c0e87c59262d64a"
+          sha256: "daa09cde28472ee6afad203a20c94a6ce1c96c9d8dffafdd4c0e87c59262d64a"
+        kata-image:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/6362419bd8e8a5be77d30d9a7ad520ac0cbe923caf49d39ccbae0d0226a39ab4"
+          sha256: "6362419bd8e8a5be77d30d9a7ad520ac0cbe923caf49d39ccbae0d0226a39ab4"
+      amd64:
+        cloud-hypervisor:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
+          sha256: "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
+        virtiofsd:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
+          sha256: "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
+        kata-kernel:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/011100a36d401b7eff9c4ab132bd570c9a4f9bd7a70550d32b0aaa6cb1455027"
+          sha256: "011100a36d401b7eff9c4ab132bd570c9a4f9bd7a70550d32b0aaa6cb1455027"
+        kata-image:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/aa68ad3e59041b00ccaf02a67ad5a40b142eb3c3dec2e1856f73a391b3c8c220"
+          sha256: "aa68ad3e59041b00ccaf02a67ad5a40b142eb3c3dec2e1856f73a391b3c8c220"
