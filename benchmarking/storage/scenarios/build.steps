@@ -1,0 +1,14 @@
+# Scenario 3: a coding agent builds the Linux kernel. wakestorm -phase script
+# runs each line in the actor with sh -c. build.sh sets MIRROR and JOBS.
+# After clone, build and edit-commit, the actor suspends, stays idle and
+# resumes, then git status runs on the remounted volume.
+run clone git clone --quiet "$MIRROR/linux-head.git" /data/linux
+cycle
+run git-status-after-resume git -C /data/linux status --porcelain > /dev/null
+run build make -s -C /data/linux O=/data/build defconfig && make -s -C /data/linux O=/data/build -j"$JOBS"
+cycle
+run git-status-after-resume git -C /data/linux status --porcelain > /dev/null
+run edit-commit for f in kernel/fork.c mm/mmap.c fs/namei.c net/core/dev.c drivers/base/core.c block/blk-core.c ipc/msg.c lib/string.c init/main.c security/commoncap.c; do echo '/* bench edit */' >> "/data/linux/$f"; done && git -C /data/linux commit -q -am 'bench edit'
+cycle
+run git-status-after-resume git -C /data/linux status --porcelain > /dev/null
+run incremental-build make -s -C /data/linux O=/data/build -j"$JOBS"

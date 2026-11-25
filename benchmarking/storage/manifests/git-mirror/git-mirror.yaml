@@ -1,0 +1,80 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Git mirror for the coding scenarios, so clones never depend on GitHub's
+# speed or rate limits. fetch.sh fetches the repository once, and serve.sh
+# serves it. Both come from the git-mirror-scripts ConfigMap.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: git-mirror
+  namespace: benchmarking
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-mirror
+  namespace: benchmarking
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: git-mirror}
+  template:
+    metadata:
+      labels: {app: git-mirror}
+    spec:
+      # An infra node from isolate_infra.sh, so serving clones doesn't take
+      # CPU from the actors.
+      nodeSelector: {bench-role: infra}
+      initContainers:
+      - name: fetch
+        image: debian:bookworm@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+        command: [sh, /scripts/fetch.sh]
+        resources:
+          requests: {cpu: "2", memory: 6Gi}
+        volumeMounts:
+        - {name: srv, mountPath: /srv}
+        - {name: scripts, mountPath: /scripts}
+      containers:
+      - name: http
+        image: debian:bookworm@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+        command: [sh, /scripts/serve.sh]
+        ports: [{containerPort: 80}]
+        readinessProbe:
+          httpGet: {path: "/linux-head.git/info/refs?service=git-upload-pack", port: 80}
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+        volumeMounts:
+        - {name: srv, mountPath: /srv, readOnly: true}
+        - {name: scripts, mountPath: /scripts}
+      volumes:
+      - name: srv
+        persistentVolumeClaim: {claimName: git-mirror}
+      - name: scripts
+        configMap: {name: git-mirror-scripts}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-mirror
+  namespace: benchmarking
+spec:
+  selector: {app: git-mirror}
+  ports: [{port: 80, targetPort: 80}]
