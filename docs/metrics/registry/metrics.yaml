@@ -1427,6 +1427,27 @@ groups:
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
 
+  - id: metric.ate.imagecache.size
+    type: metric
+    metric_name: ate.imagecache.size
+    instrument: updowncounter
+    unit: By
+    stability: development
+    brief: The bytes that the layers of the image cache on the node hold.
+    note: >
+      atelet sums the size recorded for each layer on every collection. The
+      sizes are file sizes, not allocated blocks. This instrument has no
+      labels. Compare the value with the volume's usage to see how much of the
+      disk the image cache holds, and with --image-cache-max-bytes when that
+      is set.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: internal/imagecache/metrics.go
+        cuj: The disk of a worker node fills. Is it the image cache?
+    attributes: []
+
   - id: metric.ate.filecache.size
     type: metric
     metric_name: ate.filecache.size
