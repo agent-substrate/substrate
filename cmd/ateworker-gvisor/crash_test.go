@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -208,5 +209,61 @@ func TestEndActivationLiveFinalKeepsMemory(t *testing.T) {
 		if rec.Value(0, string(key)) == "" {
 			t.Errorf("final %s absent, want it measured", key)
 		}
+	}
+}
+
+func TestCrashMessage(t *testing.T) {
+	hosted := &hostedActor{attribution: resources.ActorAttribution{UID: "actor-a"}, outputs: newOutputTails()}
+	if got, want := crashMessage(hosted), "gVisor sandbox exited"; got != want {
+		t.Errorf("crashMessage() = %q, want %q", got, want)
+	}
+}
+
+// A memory kill keeps its established wording without appended output:
+// clients distinguish it by those words.
+func TestCrashMessageMemoryKillKeepsWording(t *testing.T) {
+	outputs := newOutputTails()
+	outputs.record("app", []byte("cannot allocate memory\n"))
+	if got, want := crashMessageFor(true, outputs), "killed for exceeding its memory limit"; got != want {
+		t.Errorf("crashMessageFor(memoryKilled=true) = %q, want %q", got, want)
+	}
+}
+
+// The crash message carries the last line each container wrote, so a
+// container's stated reason reaches the client.
+func TestAppendLastOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		writes  map[string]string
+		want    string
+	}{
+		{
+			name:    "nothing written",
+			message: "gVisor sandbox exited",
+			want:    "gVisor sandbox exited",
+		},
+		{
+			name:    "the container's own reason",
+			message: "gVisor sandbox exited",
+			writes:  map[string]string{"app": "booting\nstigmer runner: missing from PATH: git\n"},
+			want:    `gVisor sandbox exited: container "app" last wrote: stigmer runner: missing from PATH: git`,
+		},
+		{
+			name:    "every container, in name order",
+			message: "gVisor sandbox exited",
+			writes:  map[string]string{"sidecar": "proxy stopped\n", "app": "refusing\n"},
+			want:    `gVisor sandbox exited: container "app" last wrote: refusing: container "sidecar" last wrote: proxy stopped`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := newOutputTails()
+			for name, s := range tc.writes {
+				_, _ = io.WriteString(outputs.watch(name), s)
+			}
+			if got := appendLastOutput(tc.message, outputs); got != tc.want {
+				t.Errorf("appendLastOutput() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

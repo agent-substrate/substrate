@@ -248,6 +248,43 @@ func TestSandboxLogAttribution(t *testing.T) {
 	}
 }
 
+// The tee on an application container's log pipe sees the container's output
+// the way the log does. The pipe's write end is pinned to *os.File: os/exec
+// hands that to runsc directly, while any other writer makes it copy through
+// a goroutine that blocks until the container exits.
+func TestContainerLogPipeTee(t *testing.T) {
+	attribution := resources.ActorAttribution{
+		Ref:              resources.ActorRef{Atespace: "default", Name: "act-1"},
+		UID:              "uid-1",
+		TemplateAtespace: "tmpl-ns",
+		TemplateName:     "tmpl-1",
+	}
+	var buf syncLogBuffer
+	logger := actorlog.NewActorLogger(&buf, false)
+
+	tails := newOutputTails()
+	pw, err := logger.StartJSONLogPipeTee(attribution, "app", tails.watch("app"))
+	if err != nil {
+		t.Fatalf("StartJSONLogPipeTee: %v", err)
+	}
+	if _, ok := pw.(*os.File); !ok {
+		t.Fatalf("log pipe write end is %T, want *os.File", pw)
+	}
+	if _, err := fmt.Fprintln(pw, "container says hi"); err != nil {
+		t.Fatalf("write to the pipe: %v", err)
+	}
+	pw.Close()
+
+	records := waitRecords(t, &buf, 1)
+	if got := decodeRecord(t, records[0])["message"]; got != "container says hi" {
+		t.Errorf("log message = %v, want the container's line", got)
+	}
+	want := []namedLine{{container: "app", line: "container says hi"}}
+	if got := tails.lines(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("tails.lines() = %v, want %v", got, want)
+	}
+}
+
 type syncLogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
