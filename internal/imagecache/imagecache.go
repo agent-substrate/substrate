@@ -85,13 +85,16 @@ const (
 	layerFSDirName           = "fs"
 	layerWhiteoutsFileName   = "whiteouts.json"
 	layerFinalizedMarkerName = "finalized"
-	// layerSizeFileName holds the layer's byte count, recorded at unpack so
-	// sizing the pool never walks a tree. Absent for layers unpacked by
-	// older atelets (backfilled lazily, see layerSize). An estimate: the
-	// value is the tar-stream length when written at unpack, or the summed
-	// file sizes when backfilled, so it may differ from disk usage and
-	// across nodes.
+	// layerSizeFileName holds the layer's tar-stream length. Only older
+	// atelets read it; it's still written so a rollback doesn't walk
+	// every layer.
 	layerSizeFileName = "size"
+	// layerAllocatedFileName holds the disk blocks the layer's tree
+	// allocates, in bytes, recorded at unpack so sizing the pool never
+	// walks a tree. Absent for layers unpacked by older atelets
+	// (backfilled lazily, see layerSize). A backfill can't read
+	// directories the image made unreadable, so it may under-count.
+	layerAllocatedFileName = "allocated"
 
 	// defaultMinAge is the default eviction minimum age (see WithMinAge).
 	defaultMinAge = 2 * time.Minute
@@ -792,10 +795,9 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 	defer root.Close()
 
 	var layerMetadata *whiteoutSet
-	// The tar bytes untar read are the recorded size: an optimistic
-	// estimate (tar framing vs. block rounding), cheap to capture here.
+	var allocated int64
 	size, err := readVerifiedLayer(layer, diffID, func(r io.Reader) (err error) {
-		layerMetadata, err = unpackLayer(ctx, r, root)
+		layerMetadata, allocated, err = unpackLayer(ctx, r, root)
 		return err
 	})
 	if err != nil {
@@ -805,9 +807,11 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 	}
 	// Non-fatal: a missing size file is recovered by layerSize's backfill,
 	// so a metadata write must not discard a successful unpack.
-	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(size, 10)+"\n"), 0o600); err != nil {
-		slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
-			slog.String("diffid", diffID.String()), slog.Any("err", err))
+	for name, byteCount := range map[string]int64{layerAllocatedFileName: allocated, layerSizeFileName: size} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(strconv.FormatInt(byteCount, 10)+"\n"), 0o600); err != nil {
+			slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
+				slog.String("diffid", diffID.String()), slog.String("file", name), slog.Any("err", err))
+		}
 	}
 
 	layerMetadataJSON, err := json.Marshal(layerMetadata)

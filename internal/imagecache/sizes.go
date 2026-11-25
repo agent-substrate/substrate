@@ -15,7 +15,7 @@
 package imagecache
 
 // Size accounting and last-use recording: the data foundations for cache
-// eviction. Both facts live in the filesystem — a per-layer "size" file
+// eviction. Both facts live in the filesystem — a per-layer "allocated" file
 // and the image record's mtime — so they survive atelet restarts without
 // in-memory state.
 
@@ -29,10 +29,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
+
+// statBlockSize is the size of one st_blocks unit. Linux and macOS count
+// st_blocks in 512-byte units, not in the filesystem's block size.
+const statBlockSize = 512
 
 // countingReader counts bytes read through it.
 type countingReader struct {
@@ -55,8 +60,8 @@ func (s *Store) touchRecord(digest v1.Hash) {
 	}
 }
 
-// layerSize returns the layer's recorded byte count, backfilling the size
-// file for layers unpacked before sizes were recorded.
+// layerSize returns the layer's recorded allocated bytes, backfilling the
+// record for layers unpacked before it existed.
 func (s *Store) layerSize(layerDir string) (int64, error) {
 	if n, ok, err := recordedLayerSize(layerDir); err != nil || ok {
 		return n, err
@@ -67,7 +72,7 @@ func (s *Store) layerSize(layerDir string) (int64, error) {
 	// could rewind a concurrent ensureLayer reuse-touch and defeat
 	// retireLayer's freshness veto. The bump just makes a freshly
 	// backfilled layer read as recently used for one min-age window.
-	_ = os.WriteFile(filepath.Join(layerDir, layerSizeFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(layerDir, layerAllocatedFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600)
 	return total, nil
 }
 
@@ -80,10 +85,10 @@ func (s *Store) layerSizeReadOnly(layerDir string) (int64, error) {
 	return walkLayerSize(layerDir), nil
 }
 
-// recordedLayerSize reads the layer's size file. ok is false when the file
-// is absent or corrupt (the caller falls back to walking the tree).
+// recordedLayerSize reads the layer's allocated-bytes file. ok is false when
+// the file is absent or corrupt (the caller falls back to walking the tree).
 func recordedLayerSize(layerDir string) (n int64, ok bool, err error) {
-	b, err := os.ReadFile(filepath.Join(layerDir, layerSizeFileName))
+	b, err := os.ReadFile(filepath.Join(layerDir, layerAllocatedFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, false, nil
@@ -97,35 +102,50 @@ func recordedLayerSize(layerDir string) (n int64, ok bool, err error) {
 	return n, true, nil
 }
 
-// walkLayerSize sums regular-file sizes under the layer's fs tree.
+// walkLayerSize returns the allocated bytes of the layer's fs tree.
 func walkLayerSize(layerDir string) int64 {
+	return allocatedBytes(os.DirFS(filepath.Join(layerDir, layerFSDirName)))
+}
+
+// allocatedBytes sums the disk blocks allocated to every entry in fsys,
+// directories included, counting each inode once so hardlinks count once.
+// Blocks, not file sizes, because GC compares the result with statfs.
+func allocatedBytes(fsys fs.FS) int64 {
 	var total int64
-	fsRoot := filepath.Join(layerDir, layerFSDirName)
+	seen := map[[2]uint64]bool{}
 	// The callback swallows every error (skip-and-under-count contract),
 	// so WalkDir cannot return one.
-	_ = filepath.WalkDir(fsRoot, func(p string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Images legitimately ship unreadable dirs (0111, 0000) and
 			// atelet lacks CAP_DAC_READ_SEARCH, so skip and under-count
 			// rather than abort.
-			if p != fsRoot && d != nil && d.IsDir() {
+			if p != "." && d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if d.Type().IsRegular() {
-			if info, err := d.Info(); err == nil {
-				total += info.Size()
-			}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			total += info.Size()
+			return nil
+		}
+		key := [2]uint64{uint64(stat.Dev), stat.Ino}
+		if !seen[key] {
+			seen[key] = true
+			total += int64(stat.Blocks) * statBlockSize
 		}
 		return nil
 	})
 	return total
 }
 
-// CacheSize returns the sum of recorded sizes of every layer in the pool
-// (the accounting behind --image-cache-max-bytes, distinct from volume
-// usage).
+// CacheSize returns the sum of every layer's recorded allocated bytes (the
+// accounting behind --image-cache-max-bytes, distinct from volume usage).
 func (s *Store) CacheSize() (int64, error) {
 	entries, err := os.ReadDir(s.layersDir())
 	if err != nil {

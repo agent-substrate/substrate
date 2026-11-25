@@ -198,7 +198,8 @@ it — called from the checkpoint cleanup path in ateworker-gvisor and
 (`--image-cache-gc-period`, default 5m; `0` disables the periodic pass,
 but startup orphan recovery still runs at every atelet start). Each tick
 measures the cache volume with `statfs` and the pool's own size from the
-per-layer `size` files, then computes a byte target: free down to
+per-layer `allocated` files (disk blocks, so they roughly compare with
+`statfs`), then computes a byte target: free down to
 `--image-cache-low-percent` when volume usage reaches
 `--image-cache-high-percent`, and/or down to `--image-cache-max-bytes` —
 **capped at the pool's own size**, because this cache is one tenant of a

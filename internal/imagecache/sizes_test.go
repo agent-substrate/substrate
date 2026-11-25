@@ -16,6 +16,7 @@ package imagecache
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -54,9 +55,13 @@ func TestLayerSizeRecordedAndBackfilled(t *testing.T) {
 	store := newTestStore(t)
 	img := mustEnsure(t, store, ref)
 
-	sizePath := filepath.Join(img.LayerDirs[0], layerSizeFileName)
-	if _, err := os.Stat(sizePath); err != nil {
+	// The tar-stream size is still written, for older atelets.
+	if _, err := os.Stat(filepath.Join(img.LayerDirs[0], layerSizeFileName)); err != nil {
 		t.Fatalf("size file not written at unpack: %v", err)
+	}
+	sizePath := filepath.Join(img.LayerDirs[0], layerAllocatedFileName)
+	if _, err := os.Stat(sizePath); err != nil {
+		t.Fatalf("allocated file not written at unpack: %v", err)
 	}
 	recorded, err := store.layerSize(img.LayerDirs[0])
 	if err != nil {
@@ -66,10 +71,8 @@ func TestLayerSizeRecordedAndBackfilled(t *testing.T) {
 		t.Errorf("recorded size = %d, want >= 4096 (content bytes)", recorded)
 	}
 
-	// Backfill: delete the size file (simulating a pre-size-file layer) and
-	// backdate the dir, since the delete itself bumps its mtime. Backfill
-	// counts file content bytes, so it may be smaller than the unpack-time
-	// tar-stream count; both are valid optimistic estimates.
+	// Backfill: delete the allocated file (simulating a layer from an older
+	// atelet) and backdate the dir, since the delete itself bumps its mtime.
 	if err := os.Remove(sizePath); err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +82,8 @@ func TestLayerSizeRecordedAndBackfilled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("layerSize backfill: %v", err)
 	}
-	if refilled < 4096 {
-		t.Errorf("backfilled size = %d, want >= 4096", refilled)
+	if refilled != recorded {
+		t.Errorf("backfilled size = %d, want %d (the size recorded at unpack)", refilled, recorded)
 	}
 	if _, err := os.Stat(sizePath); err != nil {
 		t.Errorf("backfill did not rewrite the size file: %v", err)
@@ -172,8 +175,8 @@ func TestLayerSizeBackfillSkipsUnreadableDirs(t *testing.T) {
 	}
 
 	// The size file must still be written, so the walk happens once ever.
-	if _, err := os.Stat(filepath.Join(dir, layerSizeFileName)); err != nil {
-		t.Errorf("backfill did not persist a size file: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, layerAllocatedFileName)); err != nil {
+		t.Errorf("backfill did not persist an allocated file: %v", err)
 	}
 	total, err := store.CacheSize()
 	if err != nil {
@@ -181,5 +184,74 @@ func TestLayerSizeBackfillSkipsUnreadableDirs(t *testing.T) {
 	}
 	if total < 4096 {
 		t.Errorf("CacheSize = %d, want >= 4096: layer omitted from the pool total", total)
+	}
+}
+
+// unpackAllocated unpacks entries into a fresh dir and returns the allocated
+// bytes unpackLayer reports.
+func unpackAllocated(t *testing.T, entries []tarEntry) int64 {
+	t.Helper()
+	dir := t.TempDir()
+	// Plain os.RemoveAll (t.TempDir's cleanup) can't delete under a 0111 dir.
+	t.Cleanup(func() {
+		if err := RemoveAllWritable(dir); err != nil {
+			t.Errorf("RemoveAllWritable: %v", err)
+		}
+	})
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	_, allocated, err := unpackLayer(context.Background(), bytes.NewReader(buildTar(t, entries)), root)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	return allocated
+}
+
+func TestUnpackRecordsAllocatedBytes(t *testing.T) {
+	body := strings.Repeat("x", 64<<10)
+	base := unpackAllocated(t, []tarEntry{
+		{name: "a", typeflag: tar.TypeReg, body: body},
+	})
+	if base < int64(len(body)) {
+		t.Fatalf("allocated = %d, want >= %d", base, len(body))
+	}
+
+	for _, tc := range []struct {
+		name    string
+		entries []tarEntry
+		want    []tarEntry
+	}{{
+		name: "hardlink counts once",
+		entries: []tarEntry{
+			{name: "a", typeflag: tar.TypeReg, body: body},
+			{name: "b", typeflag: tar.TypeLink, linkname: "a"},
+		},
+		want: []tarEntry{{name: "a", typeflag: tar.TypeReg, body: body}},
+	}, {
+		name: "replaced entry not counted",
+		entries: []tarEntry{
+			{name: "a", typeflag: tar.TypeReg, body: strings.Repeat("y", 1<<20)},
+			{name: "a", typeflag: tar.TypeReg, body: body},
+		},
+		want: []tarEntry{{name: "a", typeflag: tar.TypeReg, body: body}},
+	}, {
+		name: "unreadable dir counted",
+		entries: []tarEntry{
+			{name: "d/", typeflag: tar.TypeDir, mode: 0o111},
+			{name: "d/a", typeflag: tar.TypeReg, body: body},
+		},
+		want: []tarEntry{
+			{name: "d/", typeflag: tar.TypeDir},
+			{name: "d/a", typeflag: tar.TypeReg, body: body},
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, want := unpackAllocated(t, tc.entries), unpackAllocated(t, tc.want); got != want {
+				t.Errorf("allocated = %d, want %d", got, want)
+			}
+		})
 	}
 }
