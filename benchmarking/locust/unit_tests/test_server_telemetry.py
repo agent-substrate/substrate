@@ -40,16 +40,18 @@ WINDOW = {"prom_url": "http://localhost:9090", "start_ts": 100,
           "end_ts": 105, "steady_start_ts": 100}
 
 
-def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=()):
-    """A query_prometheus_range fake: packing, PSI, active actors, working set.
+def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=(), disk=((), ())):
+    """A query_prometheus_range fake: packing, PSI, active actors, working set, disk.
 
     Pod PSI only answers the pod-slice selector, so a query that loses the id
     regex (and would also sum the pause container) gets nothing back. Node PSI
-    only answers when kept to nodes hosting a worker pod.
+    only answers when kept to nodes hosting a worker pod, and node disk, given
+    as (reads, writes), only when kept to nodes with a live worker.
     """
     pod_slice = ('{pod=~"benchmark-worker.*", container="", '
                  'id=~".*[/-]pod[^/]+(\\\\.slice)?"}')
     worker_nodes = "and on (instance) sum by (instance) (rate("
+    live_workers = "and on (instance) count by (instance) (rate("
 
     def fake(_url, query, *_args, **_kwargs):
         if "ate_workerpool_workers" in query:
@@ -58,9 +60,12 @@ def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=()):
             return list(active)
         if "ate_actor_stats_memory_working_set_bytes" in query:
             return list(actor_ws)
-        # Before the PSI branch: the node working set query has container="node".
+        # Before PSI: the node working set and disk queries have container="node".
         if "container_memory_working_set_bytes" in query:
             return list(ws)
+        if "container_fs_" in query:
+            series = disk[0] if "container_fs_reads_" in query else disk[1]
+            return list(series) if live_workers in query else []
         if 'container="node"' in query:
             return list(node) if worker_nodes in query and pod_slice in query else []
         return list(pod) if pod_slice in query else []
@@ -251,13 +256,16 @@ class ServerTelemetryTest(unittest.TestCase):
                   "values": [[100, "0.0"], [105, "0.0"]]} for n in "ab"]
         pods = [{"metric": {"pod": f"benchmark-worker-{p}"},
                  "values": [[100, "0.5"], [105, "0.5"]]} for p in "ab"]
+        boot = [{"metric": {"instance": "node-a", "device": "/dev/nvme0n1"},
+                 "values": [[100, "300.0"], [105, "300.0"]]}]
         mock_range.side_effect = ranges(
             [partial, full, idle], node=quiet, pod=pods,
             active=[{"metric": {"instance": "atelet-a"}, "values": [[135, "3"]]}],
             ws=[{"metric": {"instance": "node-a"},
                  "values": [[100, str(2**30)], [105, str(2**30)]]}],
             actor_ws=[{"metric": {"instance": "atelet-a"},
-                       "values": [[135, str(6 * 2**30)]]}])
+                       "values": [[135, str(6 * 2**30)]]}],
+            disk=(boot, boot))
         # The default 70s lag reads the snapshot window at 135 and 140.
         mock_instant.side_effect = snapshot_prom(
             "11.5",
@@ -299,8 +307,8 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(windows, {(False, (100, 105)), (True, (135, 140))})
         self.assertEqual(
             set(summary),
-            {"metadata", "cluster_packing", "node_psi", "pod_psi", "snapshots",
-             "active_actors", "working_set", "oom_events"},
+            {"metadata", "cluster_packing", "node_psi", "pod_psi", "node_disk",
+             "snapshots", "active_actors", "working_set", "oom_events"},
         )
         packing = summary["cluster_packing"]
         self.assertEqual(packing["summary"]["p50"], 0.8)  # 3 + 1 busy / 5 workers
@@ -312,6 +320,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(summary["pod_psi"]["cpu_stall_pct"]["p99"], 0.5)
         self.assertEqual(summary["node_psi"]["nodes"], 2)
         self.assertEqual(summary["node_psi"]["cpu_stall_pct"]["p99"], 0.0)
+        self.assertEqual(summary["node_disk"]["nodes"], 1)
 
         snapshots = summary["snapshots"]
         self.assertEqual(snapshots["checkpoints_in_window"], 50)  # 150 - 100
@@ -320,13 +329,14 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(row["metric"], "server_summary")
         m = row["measurements"]
         # Every source answered, so a key wired to a wrong name would read None.
-        self.assertEqual(len(m), 80)
+        self.assertEqual(len(m), 88)
         self.assertEqual([k for k, v in m.items() if v is None], [])
         # Every value a string, so one row's types match every other row's.
         self.assertTrue(all(isinstance(v, str) for v in m.values()))
         self.assertEqual(m["checkpoint_mb_s"], "2.0")
         self.assertEqual(m["pod_psi_cpu_stall_p99"], "0.5")
         self.assertEqual(m["psi_cpu_stall_p90"], "0.0")
+        self.assertEqual(m["node_disk_nvme0n1_write_p99_mb_s"], "300.0")
         self.assertEqual(m["cluster_packing_p95"], "0.8")
         self.assertEqual(m["snapshot_size_p95_mb"], "11.5")
         self.assertEqual(m["restore_mean_s"], "0.5")
@@ -485,6 +495,47 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(len(out["cluster_packing"]["timeseries"]), 3)
         self.assertEqual(out["node_psi"]["cpu_stall_pct"]["max"], 0.5)
         self.assertEqual(out["pod_psi"]["cpu_stall_pct"]["max"], 0.5)
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    def test_node_disk_pools_nodes_per_device(self, mock_range):
+        def disk(node, device, *values):
+            return {"metric": {"instance": node, "device": device},
+                    "values": [[100 + 10 * i, v] for i, v in enumerate(values)]}
+        # The boot disk pools across nodes; the sample at 120 is teardown.
+        writes = [disk("node-a", "/dev/nvme0n1", "300", "280", "9"),
+                  disk("node-b", "/dev/nvme0n1", "100"),
+                  disk("node-a", "/dev/nvme0n3", "40"),
+                  disk("node-a", "/dev/root", "0")]
+        reads = [disk("node-a", "/dev/nvme0n1", "2")]
+        mock_range.side_effect = ranges([], disk=(reads, writes))
+        out = server_telemetry._harvest_node_disk("http://p", 100, 120, 100, 110)
+        boot = out["write_mb_s"]["/dev/nvme0n1"]
+        self.assertEqual((boot["min"], boot["max"]), (100.0, 300.0))
+        self.assertEqual(out["write_mb_s"]["/dev/nvme0n3"]["max"], 40.0)
+        # Every device is kept: /dev/root reads a measured 0, not null.
+        self.assertEqual(out["write_mb_s"]["/dev/root"]["max"], 0.0)
+        self.assertEqual(list(out["read_mb_s"]), ["/dev/nvme0n1"])
+        self.assertEqual(out["read_mb_s"]["/dev/nvme0n1"]["max"], 2.0)
+        self.assertEqual(out["nodes"], 2)
+        # cAdvisor's root cgroup, summed per node and device, in MiB/s.
+        query = mock_range.call_args.args[1]
+        self.assertIn('container_fs_writes_bytes_total{container="node"}', query)
+        self.assertIn("sum by (instance, device)", query)
+        self.assertIn("/ 1048576", query)
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    def test_node_disk_null_not_zero(self, mock_range):
+        # Never seen (not scraped, or the read failed): no device reads 0.
+        mock_range.side_effect = ranges([])
+        self.assertEqual(
+            server_telemetry._harvest_node_disk("http://p", 100, 120, 100, 110),
+            {"read_mb_s": {}, "write_mb_s": {}, "nodes": 0})
+        # A device seen only outside the steady window is null, not 0.
+        late = [{"metric": {"instance": "node-a", "device": "/dev/nvme0n1"},
+                 "values": [[120, "50"]]}]
+        mock_range.side_effect = ranges([], disk=(late, late))
+        out = server_telemetry._harvest_node_disk("http://p", 100, 120, 100, 110)
+        self.assertEqual(out["write_mb_s"], {"/dev/nvme0n1": NO_PERCENTILES})
 
     @mock.patch("server_telemetry.query_prometheus_instant")
     def test_oom_pod_needs_both_reads(self, mock_instant):
