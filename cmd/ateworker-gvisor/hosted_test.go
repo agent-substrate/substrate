@@ -69,8 +69,8 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
 	}
-	if first.executionUID != firstUID || again.executionUID != nextUID {
-		t.Errorf("execution UIDs = %q, %q, want %q, %q", first.executionUID, again.executionUID, firstUID, nextUID)
+	if first.activationUID != firstUID || again.activationUID != nextUID {
+		t.Errorf("activation UIDs = %q, %q, want %q, %q", first.activationUID, again.activationUID, firstUID, nextUID)
 	}
 	if again == first {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")

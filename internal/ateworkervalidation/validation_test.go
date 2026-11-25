@@ -89,12 +89,12 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "valid execution_uid",
-		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.ExecutionUid = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5" }),
+		name: "valid activation_uid",
+		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.ActivationUid = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5" }),
 	}, {
-		name: "invalid execution_uid",
-		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.ExecutionUid = "invalid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("execution_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid activation_uid",
+		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.ActivationUid = "invalid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("activation_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "valid: gVisor shape, no assets, no egress, unset size",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
@@ -626,12 +626,12 @@ func TestValidateRestoreWorkloadRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "valid execution_uid",
-		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.ExecutionUid = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5" }),
+		name: "valid activation_uid",
+		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.ActivationUid = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5" }),
 	}, {
-		name: "invalid execution_uid",
-		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.ExecutionUid = "invalid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("execution_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid activation_uid",
+		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.ActivationUid = "invalid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("activation_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "valid: memory fidelity",
 		obj: valid(func(r *ateworkerpb.RestoreWorkloadRequest) {
