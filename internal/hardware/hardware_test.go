@@ -138,6 +138,7 @@ func TestMatchesCompat(t *testing.T) {
 		{"cpu_features invalid worker bitmask fails", compat("v1", amd64, cpuBits("not-a-number")), compat("v1", amd64, cpuBits("7")), false},
 		{"cpu_features invalid snapshot bitmask fails", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, cpuBits("-1")), false},
 		{"cpu_features non-canonical bitmask fails", compat("v1", amd64, cpuBits("07")), compat("v1", amd64, cpuBits("7")), false},
+		{"cpu_features equal non-canonical bitmasks fail", compat("v1", amd64, cpuBits("07")), compat("v1", amd64, cpuBits("07")), false},
 		{"cpu_features uppercase hex fails", compat("v1", amd64, cpuBits("1F")), compat("v1", amd64, cpuBits("7")), false},
 		{"schema version differs", compat("v2", amd64), compat("v1", amd64), false},
 		{"both schema versions empty", compat("", amd64), compat("", amd64), false},
