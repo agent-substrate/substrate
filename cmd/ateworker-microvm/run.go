@@ -1073,9 +1073,9 @@ func (s *AteWorkerService) configureGuestNetwork(ctx context.Context, ac *kata.A
 		// The point-to-point link uses permanent neighbors, so NOARP also avoids
 		// freezing a tentative IPv6 address into the golden snapshot during DAD.
 		iface.RawFlags = unix.IFF_NOARP
-		withoutAddresses := *iface
-		withoutAddresses.IPAddresses = nil
-		if err := ac.UpdateInterface(ctx, &withoutAddresses); err != nil {
+		if err := ac.UpdateInterface(ctx, &agentpb.Interface{
+			Device: iface.Device, Name: iface.Name, HwAddr: iface.HwAddr, Mtu: iface.Mtu, RawFlags: iface.RawFlags,
+		}); err != nil {
 			return err
 		}
 	}
