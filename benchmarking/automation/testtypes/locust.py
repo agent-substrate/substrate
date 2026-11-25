@@ -21,10 +21,11 @@ An optional `controlPlane:` block shapes ate-api-server and Postgres for a
 capacity run (see controlplane.py); without it pre_test leaves the cluster
 as installed.
 
-The runner gets the whole entry (--test-entry) and judges the run against
-its optional `evaluations:` (benchmarking/evaluate/README.md). This image
-doesn't ship the evaluate package, so validate checks their shape only; the
-runner checks the rest before its run.
+The runner gets the whole entry (--test-entry), judges the run against its
+optional `evaluations:` (benchmarking/evaluate/README.md), and starts any
+optional `observers:` (benchmarking/locust/common/observers/). This image
+doesn't ship evaluate or common/observers, so validate checks their shape only;
+the runner checks the rest before its run.
 """
 
 import os
@@ -58,12 +59,34 @@ def validate_evaluations_shape(test: dict[str, Any]) -> None:
         raise ValueError(f"locust test {name!r}: evaluations must be a list of mappings, each with a name")
 
 
+def validate_observers_shape(test: dict[str, Any]) -> None:
+    """Raises ValueError unless observers is a list of mappings with name and type."""
+    name = test.get("name")
+    observers = test.get("observers")
+    if observers is None:
+        return
+    if not isinstance(observers, list):
+        raise ValueError(f"locust test {name!r}: 'observers' must be a list")
+    if not all(
+        isinstance(o, dict)
+        and isinstance(o.get("name"), str)
+        and o["name"]
+        and isinstance(o.get("type"), str)
+        and o["type"]
+        for o in observers
+    ):
+        raise ValueError(
+            f"locust test {name!r}: observers must be a list of mappings, each with name and type"
+        )
+
+
 def validate(test: dict[str, Any]) -> None:
     name = test.get("name")
     for field in ("file", "duration", "users"):
         if field not in test:
             raise ValueError(f"locust test {name!r} missing {field!r}")
     validate_evaluations_shape(test)
+    validate_observers_shape(test)
     if "controlPlane" not in test:
         return
     try:

@@ -67,6 +67,27 @@ class ValidateTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "locust test 't': evaluations must"):
                 locust.validate(entry(**bad))
 
+    def test_observers_shape(self):
+        for ok_obs in (None, [], [{"name": "cp", "type": "pprof"}]):
+            with self.subTest(valid=ok_obs):
+                locust.validate(entry(observers=ok_obs))
+
+        with self.subTest(bad="non-list"), self.assertRaisesRegex(ValueError, "'observers' must be a list"):
+            locust.validate(entry(observers="pprof"))
+
+        bad_items = [
+            ("non-dict entry", ["bad"]),
+            ("missing name", [{"type": "pprof"}]),
+            ("empty name", [{"name": "", "type": "pprof"}]),
+            ("missing type", [{"name": "cp"}]),
+            ("empty type", [{"name": "cp", "type": ""}]),
+        ]
+        for label, bad_obs in bad_items:
+            with self.subTest(bad=label), self.assertRaisesRegex(
+                ValueError, "observers must be a list of mappings, each with name and type"
+            ):
+                locust.validate(entry(observers=bad_obs))
+
 
 class PreTestTest(unittest.TestCase):
     def shaped(self, test):

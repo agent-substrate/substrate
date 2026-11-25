@@ -131,6 +131,32 @@
 #     conditions:
 #     - {name: failure_ratio, cel: "trial.aggregate_failure_ratio <= 0.001"}
 #
+# An optional `observers:` list runs in-process observers in runner.py.
+# orchestrator.py forwards the entry via --test-entry to runner.py,
+# which starts observers before load, records per-observer status in status.json
+# and `observer_<type>_<name>` count rows in stats.jsonl, and uploads artifacts
+# under `<run>/<type>/` (e.g. `<run>/pprof/<namespace>/<pod>/<ts>.<profile>.pb.gz`)
+# without ever failing the run.
+#
+# `type: pprof` requires enabling pprof in `ateArgs` (`"--pprof=on"`, or
+# `"--pprof=contention"` when collecting `mutex`/`block` profiles) or via
+# `ATE_INSTALL_PPROF` in `.ate-dev-env.sh`; otherwise no pod exposes a `pprof`
+# port and the observer reports `no pods profiled`.
+# `pprof` `config` keys (all optional):
+#   namespace       Kubernetes namespace to list pods in (default: all namespaces).
+#   label_selector  K8s label selector filter (default: all matching pods).
+#   profiles        List of profile kinds (default: [profile, allocs, heap, goroutine]).
+#   interval        Periodic scrape interval (e.g. "60s", default: 60s).
+#   duration        Windowed profile duration (e.g. "15s", default: 15s; requires 1s <= duration <= interval).
+# Example:
+#   ateArgs: ["--pprof=on"]
+#   observers:
+#     - name: control_plane_pprof
+#       type: pprof
+#       config:
+#         namespace: ate-system
+#         profiles: [profile, heap]
+#
 # An optional `controlPlane:` block shapes the control plane for a capacity
 # run; pre_test applies it after the deploy. Its `apiServer:` section, which
 # is required, sizes ate-api-server:
