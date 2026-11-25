@@ -17,6 +17,7 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1499,6 +1500,68 @@ func TestValidateVolume(t *testing.T) {
 				e.PublishContext = map[string]string{"a": strings.Repeat("v", 20*1024), "b": strings.Repeat("v", 20*1024)}
 			}),
 			want: field.ErrorList{field.TooLong(extPath.Child("publish_context"), nil, 40*1024)},
+		}, {
+			name: "external: valid mount_options",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{"nfsvers=4.1", "noatime"}
+			}),
+		}, {
+			name: "external: empty mount_options item",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{""}
+			}),
+			want: field.ErrorList{field.TooShort(extPath.Child("mount_options").Index(0), "", 1).WithOrigin("minLength")},
+		}, {
+			name: "external: 256-byte mount_options item (at bound)",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{strings.Repeat("a", 256)}
+			}),
+		}, {
+			name: "external: 257-byte mount_options item",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{strings.Repeat("a", 257)}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("mount_options").Index(0), "", 256).WithOrigin("maxBytes")},
+		}, {
+			name: "external: multi-byte mount_options item over 256 bytes",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{strings.Repeat("é", 129)}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("mount_options").Index(0), "", 256).WithOrigin("maxBytes")},
+		}, {
+			name: "external: 32 mount_options (at bound)",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = slices.Repeat([]string{"ro"}, 32)
+			}),
+		}, {
+			name: "external: too many mount_options",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = slices.Repeat([]string{"ro"}, 33)
+			}),
+			want: field.ErrorList{field.TooMany(extPath.Child("mount_options"), 33, 32).WithOrigin("maxItems")},
+		}, {
+			name: "external: 4096-byte mount_options total (at bound)",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = slices.Repeat([]string{strings.Repeat("a", 256)}, 16)
+			}),
+		}, {
+			name: "external: 4097-byte mount_options total",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = append(slices.Repeat([]string{strings.Repeat("a", 256)}, 16), "x")
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("mount_options"), nil, 4096)},
+		}, {
+			name: "external: mount_options with control character",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{"ro\x00"}
+			}),
+			want: field.ErrorList{field.Invalid(extPath.Child("mount_options").Index(0), nil, "")},
+		}, {
+			name: "external: mount_options with surrounding whitespace",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{" ro"}
+			}),
+			want: field.ErrorList{field.Invalid(extPath.Child("mount_options").Index(0), nil, "")},
 		},
 
 		// ImageVolumeSource.

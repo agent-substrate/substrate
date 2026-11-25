@@ -52,9 +52,9 @@ type Authorizer struct {
 }
 
 // Check verifies that the principal in ctx has relation on object.
-// Structural hierarchy links (global:root as parent_global of every atespace
-// and worker, and each atespace as parent_atespace of its actors, actor
-// templates and tags) and
+// Structural hierarchy links (global:root as parent_global of every atespace,
+// worker and external volume class, and each atespace as parent_atespace of
+// its actors, actor templates and tags) and
 // the caller's bootstrap owner and system role grants, if any, are injected as OpenFGA
 // ContextualTuples at evaluation time rather than persisted in the tuple table.
 func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
@@ -129,20 +129,21 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 // tuples in PostgreSQL.
 //
 // Why contextual tuples are used instead of storing parent links in the database:
-//  1. Deterministic structure: Every `atespace:<name>` and `worker:<name>`
-//     unconditionally has `global:root` as its `parent_global`, and every
-//     `actor:<atespace>/<name>`, `actor_template:<atespace>/<name>` and
-//     `tag:<atespace>/<name>` has `atespace:<atespace>` as its
-//     `parent_atespace`. Because these
+//  1. Deterministic structure: Every `atespace:<name>`, `worker:<name>` and
+//     `external_volume_class:<name>` unconditionally has `global:root` as its
+//     `parent_global`, and every `actor:<atespace>/<name>`,
+//     `actor_template:<atespace>/<name>` and `tag:<atespace>/<name>` has
+//     `atespace:<atespace>` as its `parent_atespace`. Because these
 //     relationships are derived purely from the object type/ID, storing a row
 //     per resource in the OpenFGA `tuple` table would be redundant.
 //  2. No write amplification on create: `CreateAtespace`, `CreateWorker`,
-//     `CreateActorTemplate`, `CreateActor` and `CreateTag` can insert their rows without
-//     opening an OpenFGA write transaction just to link the parent.
+//     `CreateExternalVolumeClass`, `CreateActorTemplate`, `CreateActor` and
+//     `CreateTag` can insert their rows without opening an OpenFGA write
+//     transaction just to link the parent.
 func contextualTuples(object string) []*openfgav1.TupleKey {
 	objectType, id, _ := strings.Cut(object, ":")
 	switch objectType {
-	case "atespace", "worker":
+	case "atespace", "worker", "external_volume_class":
 		return []*openfgav1.TupleKey{parentGlobalTuple(object)}
 	case "actor", "actor_template", "tag":
 		atespace, _, ok := strings.Cut(id, "/")
@@ -159,8 +160,8 @@ func contextualTuples(object string) []*openfgav1.TupleKey {
 	return nil
 }
 
-// parentGlobalTuple links a global-scoped object (an atespace or a worker) to
-// global:root.
+// parentGlobalTuple links a global-scoped object (an atespace, a worker or an
+// external volume class) to global:root.
 func parentGlobalTuple(object string) *openfgav1.TupleKey {
 	return &openfgav1.TupleKey{
 		User:     GlobalRootObject,

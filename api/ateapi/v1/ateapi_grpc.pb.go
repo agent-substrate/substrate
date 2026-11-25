@@ -64,6 +64,10 @@ const (
 	Control_GetAtespace_FullMethodName                = "/substrate.ateapi.v1.Control/GetAtespace"
 	Control_ListAtespaces_FullMethodName              = "/substrate.ateapi.v1.Control/ListAtespaces"
 	Control_DeleteAtespace_FullMethodName             = "/substrate.ateapi.v1.Control/DeleteAtespace"
+	Control_CreateExternalVolumeClass_FullMethodName  = "/substrate.ateapi.v1.Control/CreateExternalVolumeClass"
+	Control_GetExternalVolumeClass_FullMethodName     = "/substrate.ateapi.v1.Control/GetExternalVolumeClass"
+	Control_ListExternalVolumeClasses_FullMethodName  = "/substrate.ateapi.v1.Control/ListExternalVolumeClasses"
+	Control_DeleteExternalVolumeClass_FullMethodName  = "/substrate.ateapi.v1.Control/DeleteExternalVolumeClass"
 	Control_CreateActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/CreateActorTemplate"
 	Control_GetActorTemplate_FullMethodName           = "/substrate.ateapi.v1.Control/GetActorTemplate"
 	Control_ListActorTemplates_FullMethodName         = "/substrate.ateapi.v1.Control/ListActorTemplates"
@@ -170,6 +174,16 @@ type ControlClient interface {
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
 	// Tags remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
+	// Create an ExternalVolumeClass.
+	CreateExternalVolumeClass(ctx context.Context, in *CreateExternalVolumeClassRequest, opts ...grpc.CallOption) (*ExternalVolumeClass, error)
+	// Get an ExternalVolumeClass by name.
+	GetExternalVolumeClass(ctx context.Context, in *GetExternalVolumeClassRequest, opts ...grpc.CallOption) (*ExternalVolumeClass, error)
+	// List ExternalVolumeClasses.
+	ListExternalVolumeClasses(ctx context.Context, in *ListExternalVolumeClassesRequest, opts ...grpc.CallOption) (*ListExternalVolumeClassesResponse, error)
+	// Delete an ExternalVolumeClass. Delete does not check for ActorTemplates
+	// that still reference the class. Volumes from those templates then fail to
+	// provision.
+	DeleteExternalVolumeClass(ctx context.Context, in *DeleteExternalVolumeClassRequest, opts ...grpc.CallOption) (*ExternalVolumeClass, error)
 	CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
@@ -515,6 +529,46 @@ func (c *controlClient) DeleteAtespace(ctx context.Context, in *DeleteAtespaceRe
 	return out, nil
 }
 
+func (c *controlClient) CreateExternalVolumeClass(ctx context.Context, in *CreateExternalVolumeClassRequest, opts ...grpc.CallOption) (*ExternalVolumeClass, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExternalVolumeClass)
+	err := c.cc.Invoke(ctx, Control_CreateExternalVolumeClass_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetExternalVolumeClass(ctx context.Context, in *GetExternalVolumeClassRequest, opts ...grpc.CallOption) (*ExternalVolumeClass, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExternalVolumeClass)
+	err := c.cc.Invoke(ctx, Control_GetExternalVolumeClass_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListExternalVolumeClasses(ctx context.Context, in *ListExternalVolumeClassesRequest, opts ...grpc.CallOption) (*ListExternalVolumeClassesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListExternalVolumeClassesResponse)
+	err := c.cc.Invoke(ctx, Control_ListExternalVolumeClasses_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteExternalVolumeClass(ctx context.Context, in *DeleteExternalVolumeClassRequest, opts ...grpc.CallOption) (*ExternalVolumeClass, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExternalVolumeClass)
+	err := c.cc.Invoke(ctx, Control_DeleteExternalVolumeClass_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ActorTemplate)
@@ -718,6 +772,16 @@ type ControlServer interface {
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
 	// Tags remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
+	// Create an ExternalVolumeClass.
+	CreateExternalVolumeClass(context.Context, *CreateExternalVolumeClassRequest) (*ExternalVolumeClass, error)
+	// Get an ExternalVolumeClass by name.
+	GetExternalVolumeClass(context.Context, *GetExternalVolumeClassRequest) (*ExternalVolumeClass, error)
+	// List ExternalVolumeClasses.
+	ListExternalVolumeClasses(context.Context, *ListExternalVolumeClassesRequest) (*ListExternalVolumeClassesResponse, error)
+	// Delete an ExternalVolumeClass. Delete does not check for ActorTemplates
+	// that still reference the class. Volumes from those templates then fail to
+	// provision.
+	DeleteExternalVolumeClass(context.Context, *DeleteExternalVolumeClassRequest) (*ExternalVolumeClass, error)
 	CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error)
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
@@ -845,6 +909,18 @@ func (UnimplementedControlServer) ListAtespaces(context.Context, *ListAtespacesR
 }
 func (UnimplementedControlServer) DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAtespace not implemented")
+}
+func (UnimplementedControlServer) CreateExternalVolumeClass(context.Context, *CreateExternalVolumeClassRequest) (*ExternalVolumeClass, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateExternalVolumeClass not implemented")
+}
+func (UnimplementedControlServer) GetExternalVolumeClass(context.Context, *GetExternalVolumeClassRequest) (*ExternalVolumeClass, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetExternalVolumeClass not implemented")
+}
+func (UnimplementedControlServer) ListExternalVolumeClasses(context.Context, *ListExternalVolumeClassesRequest) (*ListExternalVolumeClassesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListExternalVolumeClasses not implemented")
+}
+func (UnimplementedControlServer) DeleteExternalVolumeClass(context.Context, *DeleteExternalVolumeClassRequest) (*ExternalVolumeClass, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteExternalVolumeClass not implemented")
 }
 func (UnimplementedControlServer) CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateActorTemplate not implemented")
@@ -1458,6 +1534,78 @@ func _Control_DeleteAtespace_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_CreateExternalVolumeClass_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateExternalVolumeClassRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateExternalVolumeClass(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateExternalVolumeClass_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateExternalVolumeClass(ctx, req.(*CreateExternalVolumeClassRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetExternalVolumeClass_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetExternalVolumeClassRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetExternalVolumeClass(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetExternalVolumeClass_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetExternalVolumeClass(ctx, req.(*GetExternalVolumeClassRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListExternalVolumeClasses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListExternalVolumeClassesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListExternalVolumeClasses(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListExternalVolumeClasses_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListExternalVolumeClasses(ctx, req.(*ListExternalVolumeClassesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteExternalVolumeClass_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteExternalVolumeClassRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteExternalVolumeClass(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteExternalVolumeClass_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteExternalVolumeClass(ctx, req.(*DeleteExternalVolumeClassRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_CreateActorTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateActorTemplateRequest)
 	if err := dec(in); err != nil {
@@ -1786,6 +1934,22 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteAtespace",
 			Handler:    _Control_DeleteAtespace_Handler,
+		},
+		{
+			MethodName: "CreateExternalVolumeClass",
+			Handler:    _Control_CreateExternalVolumeClass_Handler,
+		},
+		{
+			MethodName: "GetExternalVolumeClass",
+			Handler:    _Control_GetExternalVolumeClass_Handler,
+		},
+		{
+			MethodName: "ListExternalVolumeClasses",
+			Handler:    _Control_ListExternalVolumeClasses_Handler,
+		},
+		{
+			MethodName: "DeleteExternalVolumeClass",
+			Handler:    _Control_DeleteExternalVolumeClass_Handler,
 		},
 		{
 			MethodName: "CreateActorTemplate",

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -620,6 +621,51 @@ func TestValidateCSIMap(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateCSIMap(path, tt.m))
+		})
+	}
+}
+
+func TestValidateCSIParameters(t *testing.T) {
+	path := field.NewPath("parameters")
+	tests := []struct {
+		name string
+		m    map[string]string
+		want field.ErrorList
+	}{
+		{name: "nil"},
+		{name: "valid", m: map[string]string{"server": "nfs.local", "share": "/"}},
+		{name: "exactly 4096 bytes", m: map[string]string{"k": strings.Repeat("v", 4095)}},
+		{name: "4097 bytes", m: map[string]string{"k": strings.Repeat("v", 4096)}, want: field.ErrorList{field.TooLong(path, nil, 4096)}},
+		{name: "NUL byte in key", m: map[string]string{"a\x00b": "v"}, want: field.ErrorList{field.Invalid(path.Key("a\x00b"), nil, "")}},
+		{name: "NUL byte in value", m: map[string]string{"k": "v\x00x"}, want: field.ErrorList{field.Invalid(path.Key("k"), nil, "")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateCSIParameters(path, tt.m))
+		})
+	}
+}
+
+func TestValidateMountOptions(t *testing.T) {
+	path := field.NewPath("mount_options")
+	tests := []struct {
+		name    string
+		options []string
+		want    field.ErrorList
+	}{
+		{name: "nil"},
+		{name: "valid", options: []string{"nfsvers=4.1", "noatime"}},
+		{name: "exactly 4096 bytes", options: slices.Repeat([]string{strings.Repeat("a", 256)}, 16)},
+		{name: "4097 bytes", options: append(slices.Repeat([]string{strings.Repeat("a", 256)}, 16), "x"), want: field.ErrorList{field.TooLong(path, nil, 4096)}},
+		{name: "leading whitespace", options: []string{" ro"}, want: field.ErrorList{field.Invalid(path.Index(0), nil, "")}},
+		{name: "trailing whitespace", options: []string{"ro "}, want: field.ErrorList{field.Invalid(path.Index(0), nil, "")}},
+		{name: "NUL byte", options: []string{"ro\x00"}, want: field.ErrorList{field.Invalid(path.Index(0), nil, "")}},
+		{name: "newline control char", options: []string{"ro\nnoatime"}, want: field.ErrorList{field.Invalid(path.Index(0), nil, "")}},
+		{name: "DEL control char", options: []string{"ro\x7f"}, want: field.ErrorList{field.Invalid(path.Index(0), nil, "")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateMountOptions(path, tt.options))
 		})
 	}
 }

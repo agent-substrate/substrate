@@ -89,6 +89,10 @@ func ValidateCustom_ExternalVolumeSource_PublishContext(_ context.Context, _ ope
 	return resources.ValidateCSIMap(fldPath, value)
 }
 
+func ValidateCustom_ExternalVolumeSource_MountOptions(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return resources.ValidateMountOptions(fldPath, value)
+}
+
 func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
