@@ -16,8 +16,10 @@ package main
 
 import (
 	"context"
+	"sync"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 )
 
@@ -59,5 +61,36 @@ func TestWorkerDialerReusesCachedConn(t *testing.T) {
 	}
 	if got := first.GetState(); got == connectivity.Shutdown {
 		t.Errorf("cached conn is shut down; want it live")
+	}
+}
+
+// TestWorkerDialerConcurrentDialsShareConn pins that concurrent first dials
+// for a pod share one conn. Without that, each caller creates its own, and
+// the cache's Add replaces all but the last without closing them.
+func TestWorkerDialerConcurrentDialsShareConn(t *testing.T) {
+	d := newWorkerDialer(1)
+
+	var mu sync.Mutex
+	conns := map[*grpc.ClientConn]bool{}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Go(func() {
+			<-start
+			c, err := d.DialWorkerPod(context.Background(), "pod-a")
+			if err != nil {
+				t.Errorf("DialWorkerPod(pod-a) error = %v", err)
+				return
+			}
+			mu.Lock()
+			conns[c] = true
+			mu.Unlock()
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	if len(conns) != 1 {
+		t.Errorf("distinct conns from concurrent dials = %d, want 1", len(conns))
 	}
 }
