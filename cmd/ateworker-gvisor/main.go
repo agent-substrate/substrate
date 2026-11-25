@@ -752,6 +752,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 	s.pinSandbox(ctx, hosted, req.GetActorDirs())
 	s.throttleSandboxMemory(ctx, hosted)
+	s.setSandboxCPUWeight(ctx, req.GetActorUid(), cgroup.MaxCPUWeight)
 	if err := rcmd.cmdStart(ctx, pw, ocispec.SandboxID); err != nil {
 		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
@@ -784,6 +785,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
+	s.setSandboxCPUWeight(ctx, req.GetActorUid(), cgroup.DefaultCPUWeight)
 	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, err
 	}
@@ -1220,6 +1222,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		s.throttleSandboxMemory(ctx, hosted)
+		s.setSandboxCPUWeight(ctx, req.GetActorUid(), cgroup.MaxCPUWeight)
 		err = rcmd.cmdStart(ctx, pw, ocispec.SandboxID)
 		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
@@ -1235,6 +1238,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		s.throttleSandboxMemory(ctx, hosted)
+		s.setSandboxCPUWeight(ctx, req.GetActorUid(), cgroup.MaxCPUWeight)
 		err = rcmd.cmdRestore(ctx, pw, ocispec.SandboxID, checkpointDir)
 		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
@@ -1285,6 +1289,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
+	s.setSandboxCPUWeight(ctx, req.GetActorUid(), cgroup.DefaultCPUWeight)
 	err = s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid()))
 	timing.activate += lap(&tLast)
 	if err != nil {
@@ -1344,6 +1349,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	if hosted := s.lookupActor(actorUID); hosted != nil {
 		hosted.stopping.Store(true)
 	}
+	s.setSandboxCPUWeight(ctx, actorUID, cgroup.MaxCPUWeight)
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
@@ -1443,4 +1449,13 @@ func releaseContainers(actorDirs *ateworkerpb.ActorDirs) error {
 		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 	}
 	return errors.Join(errs...)
+}
+
+// setSandboxCPUWeight sets cpu.weight on the actor's sandbox cgroup leaf.
+func (s *AteWorkerService) setSandboxCPUWeight(ctx context.Context, actorUID string, weight int) {
+	leaf := ocispec.GVisorCgroupLeaf(actorUID, ocispec.SandboxID)
+	if err := cgroup.SetActorLeafCPUWeightUnder(s.cgroupRoot, leaf, weight); err != nil {
+		slog.WarnContext(ctx, "Could not set cpu.weight on sandbox cgroup",
+			slog.String("actorUID", actorUID), slog.Int("weight", weight), slog.Any("err", err))
+	}
 }
