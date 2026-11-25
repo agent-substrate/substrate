@@ -350,6 +350,26 @@ run stored at the same path with `test`'s name (`rundir.py`), or none. On a
 `gs://` `--dest`, this needs read access to the bucket (see the
 [automation README](../automation/README.md#iam-prerequisites)).
 
+## Evaluating stored runs
+
+```sh
+cd benchmarking
+python3 -m evaluate RUN... (--evaluations JSON|@FILE | --tests-file FILE --test-name NAME | --from-run) [--out DIR]
+python3 -m evaluate --check-config --tests-file automation/tests.yaml   # check the blocks only
+```
+
+`RUN` is a run directory or `gs://.../runs/<test>/run_date=.../run_ts=.../run_tag=.../`,
+whose artifacts are each downloaded to a temporary directory when a source
+first reads one (a `gs://` `RUN` needs `pip install google-cloud-storage`, which
+the runner image has). A `RUN` stored in the runner's layout, local or
+`gs://`, reads the runs from the same invocation that the runner would give it,
+under the same `<dest>`, and any other `RUN` has none. `--from-run` re-reads the
+evaluations the run was judged with, from its `evaluation.json`. The outputs
+go to `--out`, by default `./evaluate-out/<test>/run_ts=<ts>/`, never into the
+stored run: `evaluation.json` and `evaluation_rows.jsonl`. Exit status: 0
+evaluated (whatever the verdict), 2 config error, 1 I/O error. `--tests-file`
+needs PyYAML.
+
 ## Layout
 
 | file | |
@@ -360,6 +380,7 @@ run stored at the same path with `test`'s name (`rundir.py`), or none. On a
 | `sources/` | the hooks (`base.py`) and the sources |
 | `rundir.py` | the runner's storage layout: opening local or `gs://` runs (a `gs://` artifact is downloaded on first use), and the run of another test from the same invocation |
 | `__init__.py` | `prepare`, which `runner.py` calls |
+| `__main__.py` | the CLI |
 
 ## Tests
 

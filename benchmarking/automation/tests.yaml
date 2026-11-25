@@ -120,7 +120,8 @@
 # fail the run. The orchestrator passes the whole entry to runner.py as
 # --test-entry. A cel input's `from_test` names another test of this file
 # (such as its 1-user test, listed earlier), whose run from the same
-# orchestrator invocation it reads. See benchmarking/evaluate/README.md.
+# orchestrator invocation it reads. See benchmarking/evaluate/README.md; check
+# a file with `cd benchmarking && python3 -m evaluate --check-config --tests-file F`.
 #
 #   evaluations:
 #   - name: envelope

@@ -19,8 +19,9 @@ files into values (sources/), and CEL conditions over those values
 (cel_env.py). evaluator.py judges them into a Report, which writes
 evaluation.json and stats.jsonl rows. runner.py calls prepare when a run
 starts, and writes the Report once the run has finished. rundir.py is the
-runner's storage layout, where the runs of one invocation are found. Depends on
-cel-expr-python and pydantic (requirements.txt). See README.md.
+runner's storage layout, where the runs of one invocation are found.
+`python -m evaluate` (__main__.py) judges a stored run with the same code.
+Depends on cel-expr-python and pydantic (requirements.txt). See README.md.
 """
 
 from typing import Any
