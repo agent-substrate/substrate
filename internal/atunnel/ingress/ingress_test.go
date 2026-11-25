@@ -311,12 +311,16 @@ func TestServeHTTP(t *testing.T) {
 		actorName  string
 		atespace   string
 		mixedCase  bool
+		actorUID   string
 		wantStatus int
 	}{
 		{name: "active actor", host: "client.example", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
 		{name: "mixed-case routing header", actorName: "actor-1", atespace: "team-a", mixedCase: true, wantStatus: http.StatusNoContent},
 		{name: "host does not identify actor", host: "actor-2.team-b.example", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
 		{name: "empty host", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
+		{name: "matching actor UID", actorName: "actor-1", atespace: "team-a", actorUID: "uid-actor-1", wantStatus: http.StatusNoContent},
+		{name: "placeholder actor UID", actorName: "actor-1", atespace: "team-a", actorUID: "-", wantStatus: http.StatusNoContent},
+		{name: "actor UID of another incarnation", actorName: "actor-1", atespace: "team-a", actorUID: "uid-actor-0", wantStatus: http.StatusMisdirectedRequest},
 		{name: "wrong actor", actorName: "actor-2", atespace: "team-a", wantStatus: http.StatusMisdirectedRequest},
 		{name: "wrong atespace", actorName: "actor-1", atespace: "team-b", wantStatus: http.StatusMisdirectedRequest},
 		{name: "missing actor name", atespace: "team-a", wantStatus: http.StatusMisdirectedRequest},
@@ -332,6 +336,9 @@ func TestServeHTTP(t *testing.T) {
 			} else {
 				req.Header.Set(atenet.TargetActorHeader, tt.atespace+"/"+tt.actorName)
 			}
+			if tt.actorUID != "" {
+				req.Header.Set(atenet.ActorUIDHeader, tt.actorUID)
+			}
 			rec := httptest.NewRecorder()
 			s.ServeHTTP(rec, req)
 			if rec.Code != tt.wantStatus {
@@ -343,7 +350,7 @@ func TestServeHTTP(t *testing.T) {
 		})
 	}
 
-	wantHosts := []string{"client.example", "", "actor-2.team-b.example", ""}
+	wantHosts := []string{"client.example", "", "actor-2.team-b.example", "", "", ""}
 	if len(upstreamHosts) != len(wantHosts) {
 		t.Fatalf("upstream requests = %d, want %d", len(upstreamHosts), len(wantHosts))
 	}

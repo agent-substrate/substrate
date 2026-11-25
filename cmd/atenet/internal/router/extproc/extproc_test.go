@@ -85,7 +85,7 @@ func TestProcessRequestHeadersDispatchesByMode(t *testing.T) {
 
 			s := NewServer(50051, nil, handlers)
 			req := connectRequest("envoy.filters.http.ext_proc", tc.chain)
-			resp := s.processRequestHeaders(context.Background(), req, req.GetRequestHeaders())
+			resp, _ := s.processRequestHeaders(context.Background(), req, req.GetRequestHeaders())
 
 			if tc.wantStatus != 0 {
 				ir := resp.GetImmediateResponse()

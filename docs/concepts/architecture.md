@@ -355,7 +355,18 @@ Handles actor-aware ingress routing, on-demand resumption, and policy-enforced e
     Actor target in `ate-target-actor` as `<atespace>/<actor>`.
     The ext_proc calls the Control Plane to resume the Actor and resolve its
     current worker assignment. `Host` remains application authority and does
-    not select the Actor.
+    not select the Actor. With `--warm-route-cache-ttl` set (ingress mode, Envoy
+    dataplane only), the router reuses a running Actor's assignment for that
+    long instead of calling the Control Plane on every request. Cache hits use
+    `ext_proc` `mode_override` to ask Envoy for response headers (leaving fresh
+    resolves without an extra round trip) and drop the cached assignment if it
+    still matches the failing placement when the worker refuses the request or
+    cannot be reached; that request fails with a retryable `503`, and the next
+    one resumes the Actor as usual. Because each router replica caches
+    independently, a suspend inside the TTL can cost up to one `503` per
+    replica, and concurrent cache hits hold their `ext_proc` streams open until
+    upstream response headers arrive (size `--extproc-max-requests` and
+    `--drain-timeout` accordingly).
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
     mTLS `CONNECT` tunnel to the worker's `atunnel` listener on port 8443.

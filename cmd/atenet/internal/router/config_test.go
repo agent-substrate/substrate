@@ -156,6 +156,25 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:  routerConfig{Mode: ModeEgress, UpstreamConnect: true},
 		},
 		{
+			name:    "negative warm-route-cache-ttl rejected",
+			cfg:     routerConfig{Mode: ModeIngress, WarmRouteCacheTTL: -time.Second},
+			wantErr: "--warm-route-cache-ttl must not be negative",
+		},
+		{
+			name:    "warm-route-cache-ttl in egress mode rejected",
+			cfg:     routerConfig{Mode: ModeEgress, WarmRouteCacheTTL: 30 * time.Second},
+			wantErr: "--warm-route-cache-ttl is only supported in ingress mode",
+		},
+		{
+			name:    "warm-route-cache-ttl with agentgateway rejected",
+			cfg:     routerConfig{Mode: ModeIngress, AtenetRouter: string(atenetRouterAgentgateway), WarmRouteCacheTTL: 30 * time.Second},
+			wantErr: "--warm-route-cache-ttl is only supported with --atenet-dataplane=envoy",
+		},
+		{
+			name: "warm-route-cache-ttl with envoy accepted",
+			cfg:  routerConfig{Mode: ModeIngress, WarmRouteCacheTTL: 30 * time.Second},
+		},
+		{
 			name:    "negative drain-delay rejected",
 			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
