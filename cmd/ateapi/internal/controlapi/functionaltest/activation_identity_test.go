@@ -24,7 +24,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
-func TestResumeActorExecutionUID(t *testing.T) {
+func TestResumeActorActivationUID(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		restore      bool
@@ -36,7 +36,7 @@ func TestResumeActorExecutionUID(t *testing.T) {
 		{name: "restore response lost", restore: true, loseResponse: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ns := namespaceForTest("execution-uid")
+			ns := namespaceForTest("activation-uid")
 			tc := setupTest(t, ns)
 			defer tc.cleanup()
 			createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
@@ -62,14 +62,14 @@ func TestResumeActorExecutionUID(t *testing.T) {
 				}
 				waitForWorkerAvailable(t, tc, worker)
 			}
-			lastRequest := func() (executionUID, snapshotUUID string, generation int32) {
+			lastRequest := func() (activationUID, snapshotUUID string, generation int32) {
 				tc.fakeAtelet.Lock.Lock()
 				defer tc.fakeAtelet.Lock.Unlock()
 				if test.restore {
 					req := tc.fakeAtelet.RestoreRequest
-					return req.GetExecutionUid(), req.GetSnapshot().GetSnapshotUuid(), req.GetSnapshot().GetGeneration()
+					return req.GetActivationUid(), req.GetSnapshot().GetSnapshotUuid(), req.GetSnapshot().GetGeneration()
 				}
-				return tc.fakeAtelet.RunRequest.GetExecutionUid(), "", 0
+				return tc.fakeAtelet.RunRequest.GetActivationUid(), "", 0
 			}
 			var lostUID, lostSnapshotUUID, assignmentUID string
 			var lostGeneration int32
@@ -82,14 +82,14 @@ func TestResumeActorExecutionUID(t *testing.T) {
 				}
 				lostUID, lostSnapshotUUID, lostGeneration = lastRequest()
 				if _, err := uuid.Parse(lostUID); err != nil {
-					t.Fatalf("failed call's execution UID = %q: %v", lostUID, err)
+					t.Fatalf("failed call's activation UID = %q: %v", lostUID, err)
 				}
 				before, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if before.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING || before.GetStatus().GetWorkerAssignment().GetActorExecutionUid() != "" {
-					t.Fatalf("failed call committed its execution: %v", before.GetStatus())
+				if before.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING || before.GetStatus().GetWorkerAssignment().GetActorActivationUid() != "" {
+					t.Fatalf("failed call committed its activation: %v", before.GetStatus())
 				}
 				assignment, err := tc.persistence.GetWorkerAssignment(ctx, worker, created.GetMetadata().GetUid())
 				if err != nil {
@@ -106,16 +106,16 @@ func TestResumeActorExecutionUID(t *testing.T) {
 			}
 			uid, snapshotUUID, generation := lastRequest()
 			if _, err := uuid.Parse(uid); err != nil {
-				t.Fatalf("execution UID = %q: %v", uid, err)
+				t.Fatalf("activation UID = %q: %v", uid, err)
 			}
 			if uid == lostUID {
-				t.Fatal("resume retry reused the failed call's execution UID")
+				t.Fatal("resume retry reused the failed call's activation UID")
 			}
 			if test.restore && (snapshotUUID == "" || generation < 1) {
 				t.Fatalf("restore snapshot = %q generation %d, want an existing snapshot", snapshotUUID, generation)
 			}
-			if resumed.GetActor().GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || resumed.GetActor().GetStatus().GetWorkerAssignment().GetActorExecutionUid() != uid {
-				t.Fatalf("RUNNING actor lost the request's execution UID: %v", resumed)
+			if resumed.GetActor().GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || resumed.GetActor().GetStatus().GetWorkerAssignment().GetActorActivationUid() != uid {
+				t.Fatalf("RUNNING actor lost the request's activation UID: %v", resumed)
 			}
 			if test.loseResponse {
 				if snapshotUUID != lostSnapshotUUID || generation != lostGeneration {

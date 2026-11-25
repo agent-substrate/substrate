@@ -1285,11 +1285,11 @@ type ReportActorCrashedRequest struct {
 	// +k8s:required
 	// +k8s:maxLength=4096
 	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
-	// The API server-assigned identity of the execution that exited.
+	// The API server-assigned identity of the activation that exited.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ExecutionUid  string `protobuf:"bytes,5,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	ActivationUid string `protobuf:"bytes,5,opt,name=activation_uid,json=activationUid,proto3" json:"activation_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1352,9 +1352,9 @@ func (x *ReportActorCrashedRequest) GetMessage() string {
 	return ""
 }
 
-func (x *ReportActorCrashedRequest) GetExecutionUid() string {
+func (x *ReportActorCrashedRequest) GetActivationUid() string {
 	if x != nil {
-		return x.ExecutionUid
+		return x.ActivationUid
 	}
 	return ""
 }
@@ -2090,7 +2090,7 @@ type RunRequest struct {
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ExecutionUid  string `protobuf:"bytes,13,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	ActivationUid string `protobuf:"bytes,13,opt,name=activation_uid,json=activationUid,proto3" json:"activation_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2195,9 +2195,9 @@ func (x *RunRequest) GetSandboxRuntime() *ActorSandboxRuntime {
 	return nil
 }
 
-func (x *RunRequest) GetExecutionUid() string {
+func (x *RunRequest) GetActivationUid() string {
 	if x != nil {
-		return x.ExecutionUid
+		return x.ActivationUid
 	}
 	return ""
 }
@@ -4035,7 +4035,7 @@ type RestoreRequest struct {
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ExecutionUid  string `protobuf:"bytes,13,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	ActivationUid string `protobuf:"bytes,13,opt,name=activation_uid,json=activationUid,proto3" json:"activation_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4147,9 +4147,9 @@ func (x *RestoreRequest) GetSandboxRuntime() *ActorSandboxRuntime {
 	return nil
 }
 
-func (x *RestoreRequest) GetExecutionUid() string {
+func (x *RestoreRequest) GetActivationUid() string {
 	if x != nil {
-		return x.ExecutionUid
+		return x.ActivationUid
 	}
 	return ""
 }
@@ -4513,14 +4513,14 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"\x1d\n" +
-	"\x1bRequestActorSuspendResponse\"\xbd\x01\n" +
+	"\x1bRequestActorSuspendResponse\"\xbf\x01\n" +
 	"\x19ReportActorCrashedRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\x12#\n" +
-	"\rexecution_uid\x18\x05 \x01(\tR\fexecutionUid\"\x1c\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12%\n" +
+	"\x0eactivation_uid\x18\x05 \x01(\tR\ractivationUid\"\x1c\n" +
 	"\x1aReportActorCrashedResponse\"c\n" +
 	"\x1bGetActorEgressPolicyRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
@@ -4559,7 +4559,7 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
-	"\x11TerminateResponse\"\x99\x04\n" +
+	"\x11TerminateResponse\"\x9b\x04\n" +
 	"\n" +
 	"RunRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
@@ -4573,8 +4573,8 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12:\n" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
-	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntime\x12#\n" +
-	"\rexecution_uid\x18\r \x01(\tR\fexecutionUidB\x11\n" +
+	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntime\x12%\n" +
+	"\x0eactivation_uid\x18\r \x01(\tR\ractivationUidB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\"k\n" +
@@ -4682,7 +4682,7 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x129\n" +
 	"\rupload_config\x18\t \x01(\v2\x14.atelet.UploadConfigR\fuploadConfig\"F\n" +
 	"\x12CheckpointResponse\x120\n" +
-	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"\xcb\x04\n" +
+	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"\xcd\x04\n" +
 	"\x0eRestoreRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -4696,8 +4696,8 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12:\n" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
-	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntime\x12#\n" +
-	"\rexecution_uid\x18\r \x01(\tR\fexecutionUidB\x11\n" +
+	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntime\x12%\n" +
+	"\x0eactivation_uid\x18\r \x01(\tR\ractivationUidB\x11\n" +
 	"\x0f_egress_gateway\"4\n" +
 	"\x0fRestoreResponse\x12!\n" +
 	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"\x86\x02\n" +

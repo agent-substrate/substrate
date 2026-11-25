@@ -2262,7 +2262,7 @@ func Validate_ReportActorCrashedRequest(
 		errs = append(errs, fn(fldPath.Child("message"), &obj.Message, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.ReportActorCrashedRequest.ExecutionUid
+	{ // field ateletpb.ReportActorCrashedRequest.ActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2288,9 +2288,9 @@ func Validate_ReportActorCrashedRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.ReportActorCrashedRequest) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("activation_uid"), &obj.ActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2863,7 +2863,7 @@ func Validate_RestoreRequest(
 		errs = append(errs, fn(fldPath.Child("sandbox_runtime"), obj.SandboxRuntime, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.RestoreRequest.ExecutionUid
+	{ // field ateletpb.RestoreRequest.ActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2889,9 +2889,9 @@ func Validate_RestoreRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.RestoreRequest) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("activation_uid"), &obj.ActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -3215,7 +3215,7 @@ func Validate_RunRequest(
 		errs = append(errs, fn(fldPath.Child("sandbox_runtime"), obj.SandboxRuntime, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.RunRequest.ExecutionUid
+	{ // field ateletpb.RunRequest.ActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -3241,9 +3241,9 @@ func Validate_RunRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.RunRequest) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("activation_uid"), &obj.ActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs

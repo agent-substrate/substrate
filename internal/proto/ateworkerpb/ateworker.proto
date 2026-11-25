@@ -251,7 +251,7 @@ message RunWorkloadRequest {
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string execution_uid = 13;
+  string activation_uid = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -582,7 +582,7 @@ message RestoreWorkloadRequest {
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string execution_uid = 15;
+  string activation_uid = 15;
 }
 
 message RestoreWorkloadResponse {

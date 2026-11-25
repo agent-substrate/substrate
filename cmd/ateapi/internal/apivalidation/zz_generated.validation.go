@@ -6855,7 +6855,7 @@ func Validate_ReportActorCrashedRequest(
 		errs = append(errs, fn(fldPath.Child("message"), &obj.Message, oldVal, oldObj != nil)...)
 	}
 
-	{ // field v1.ReportActorCrashedRequest.ExecutionUid
+	{ // field v1.ReportActorCrashedRequest.ActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -6881,9 +6881,9 @@ func Validate_ReportActorCrashedRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.ReportActorCrashedRequest) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("activation_uid"), &obj.ActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -10925,7 +10925,7 @@ func Validate_WorkerAssignment(
 		errs = append(errs, fn(fldPath.Child("worker_spiffe_id"), &obj.WorkerSpiffeId, oldVal, oldObj != nil)...)
 	}
 
-	{ // field v1.WorkerAssignment.ActorExecutionUid
+	{ // field v1.WorkerAssignment.ActorActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -10951,9 +10951,9 @@ func Validate_WorkerAssignment(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.WorkerAssignment) *string {
-				return &oldObj.ActorExecutionUid
+				return &oldObj.ActorActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("actor_execution_uid"), &obj.ActorExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("actor_activation_uid"), &obj.ActorActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs

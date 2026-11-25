@@ -3275,13 +3275,13 @@ func TestResumeActor(t *testing.T) {
 
 	tc.fakeAtelet.Lock.Lock()
 	restoreCalled := tc.fakeAtelet.RestoreCalled
-	executionUID := tc.fakeAtelet.RestoreRequest.GetExecutionUid()
+	activationUID := tc.fakeAtelet.RestoreRequest.GetActivationUid()
 	tc.fakeAtelet.Lock.Unlock()
 	if !restoreCalled {
 		t.Errorf("expected Restore to be called")
 	}
-	if executionUID == "" {
-		t.Fatal("expected Restore to receive an execution UID")
+	if activationUID == "" {
+		t.Fatal("expected Restore to receive an activation UID")
 	}
 
 	getResp, err := tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{
@@ -3301,16 +3301,16 @@ func TestResumeActor(t *testing.T) {
 				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
 			},
 			WorkerAssignment: &ateapi.WorkerAssignment{
-				Worker:            &ateapi.ObjectRef{Name: podUID},
-				WorkerNamespace:   ns,
-				WorkerPool:        "pool1",
-				WorkerPod:         "worker-1",
-				WorkerPodUid:      podUID,
-				WorkerPodIps:      []string{"127.0.0.1"},
-				NodeName:          "node1",
-				WorkerEpoch:       reportedEpoch,
-				ActorExecutionUid: executionUID,
-				SandboxRuntime:    defaultWorkerRuntime("gvisor"),
+				Worker:             &ateapi.ObjectRef{Name: podUID},
+				WorkerNamespace:    ns,
+				WorkerPool:         "pool1",
+				WorkerPod:          "worker-1",
+				WorkerPodUid:       podUID,
+				WorkerPodIps:       []string{"127.0.0.1"},
+				NodeName:           "node1",
+				WorkerEpoch:        reportedEpoch,
+				ActorActivationUid: activationUID,
+				SandboxRuntime:     defaultWorkerRuntime("gvisor"),
 			},
 		},
 	}

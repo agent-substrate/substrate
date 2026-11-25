@@ -123,12 +123,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	var workerEpoch int64
-	var executionUID string
-	if tele, workerEpoch, executionUID, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
+	var activationUID string
+	if tele, workerEpoch, activationUID, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
 		return nil, false, err
 	}
 	var running *ateapi.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef, workerEpoch, executionUID); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, workerEpoch, activationUID); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -721,9 +721,9 @@ func checkVolumesAttachable(volumes []*ateapi.ExternalVolumeStatus) error {
 
 // ensureAteletRestored brings the workload up on the assigned worker:
 // restoring snapshotToResume, or cold-booting from the template spec when the
-// actor has no snapshot. Each call starts a new execution, including when a
+// actor has no snapshot. Each call starts a new activation, including when a
 // workflow re-enters after losing the previous call's response.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, executionUID string, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, activationUID string, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
@@ -754,7 +754,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// The assignment is what the next checkpoint is stamped from, so it is also
 	// what decides how this restore runs.
 	sandboxRuntime := toAteletSandboxRuntime(assignment.GetSandboxRuntime())
-	executionUID = uuid.NewString()
+	activationUID = uuid.NewString()
 
 	// New actor without any existing snapshots to restore from.
 	if snap == nil {
@@ -762,7 +762,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		req := &ateletpb.RunRequest{
-			ExecutionUid:          executionUID,
+			ActivationUid:         activationUID,
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
@@ -778,7 +778,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if err != nil {
 			return tele, 0, "", handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
 		}
-		return tele, resp.GetWorkerEpoch(), executionUID, nil
+		return tele, resp.GetWorkerEpoch(), activationUID, nil
 	}
 
 	slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot", slog.String("snapshot_uuid", snap.GetUuid()))
@@ -803,7 +803,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 	tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 	req := &ateletpb.RestoreRequest{
-		ExecutionUid:          executionUID,
+		ActivationUid:         activationUID,
 		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
@@ -840,7 +840,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, 0, "", handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 	}
-	return tele, resp.GetWorkerEpoch(), executionUID, nil
+	return tele, resp.GetWorkerEpoch(), activationUID, nil
 }
 
 // logRuntimeFallback records a resume that restores without memory state
@@ -862,7 +862,7 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// stamped with the worker process's epoch and the actor's execution UUID.
+// stamped with the worker process's epoch and the actor's activation UUID.
 //
 // The worker process registered that epoch, with its pod IPs, before it took
 // the workload. If it is still the Worker's registered epoch, the Actor is
@@ -870,7 +870,7 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 // started did not carry. If a later epoch is registered, that process has exited and taken
 // the sandbox with it, so RUNNING is not committed: the error is Unavailable,
 // and the retried resume restores the Actor on the current process.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, workerEpoch int64, executionUID string) (_ *ateapi.Actor, err error) {
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, workerEpoch int64, activationUID string) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
@@ -901,7 +901,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
-		toUpdate.Status.WorkerAssignment.ActorExecutionUid = executionUID
+		toUpdate.Status.WorkerAssignment.ActorActivationUid = activationUID
 		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
 		// The workload already runs, so a record that can't take the upload
 		// doesn't hold the actor in RESUMING. The next suspend prunes the entry.

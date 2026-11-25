@@ -508,7 +508,7 @@ type RunWorkloadRequest struct {
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ExecutionUid  string `protobuf:"bytes,13,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	ActivationUid string `protobuf:"bytes,13,opt,name=activation_uid,json=activationUid,proto3" json:"activation_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -620,9 +620,9 @@ func (x *RunWorkloadRequest) GetActorDirs() *ActorDirs {
 	return nil
 }
 
-func (x *RunWorkloadRequest) GetExecutionUid() string {
+func (x *RunWorkloadRequest) GetActivationUid() string {
 	if x != nil {
-		return x.ExecutionUid
+		return x.ActivationUid
 	}
 	return ""
 }
@@ -1617,7 +1617,7 @@ type RestoreWorkloadRequest struct {
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ExecutionUid  string `protobuf:"bytes,15,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	ActivationUid string `protobuf:"bytes,15,opt,name=activation_uid,json=activationUid,proto3" json:"activation_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1743,9 +1743,9 @@ func (x *RestoreWorkloadRequest) GetPreserveRestoreDir() bool {
 	return false
 }
 
-func (x *RestoreWorkloadRequest) GetExecutionUid() string {
+func (x *RestoreWorkloadRequest) GetActivationUid() string {
 	if x != nil {
-		return x.ExecutionUid
+		return x.ActivationUid
 	}
 	return ""
 }
@@ -2192,7 +2192,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x123\n" +
 	"\n" +
 	"actor_dirs\x18\b \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"\x1b\n" +
-	"\x19TerminateWorkloadResponse\"\xbe\x05\n" +
+	"\x19TerminateWorkloadResponse\"\xc0\x05\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2208,8 +2208,8 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
-	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x12#\n" +
-	"\rexecution_uid\x18\r \x01(\tR\fexecutionUid\x1aD\n" +
+	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x12%\n" +
+	"\x0eactivation_uid\x18\r \x01(\tR\ractivationUid\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
@@ -2271,7 +2271,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"actor_dirs\x18\t \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xb1\x06\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xb3\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2289,8 +2289,8 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\tresources\x18\v \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
 	"actor_dirs\x18\r \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x120\n" +
-	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x12#\n" +
-	"\rexecution_uid\x18\x0f \x01(\tR\fexecutionUid\x1aD\n" +
+	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x12%\n" +
+	"\x0eactivation_uid\x18\x0f \x01(\tR\ractivationUid\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +

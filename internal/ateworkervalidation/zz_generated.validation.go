@@ -1646,7 +1646,7 @@ func Validate_RestoreWorkloadRequest(
 		errs = append(errs, fn(fldPath.Child("preserve_restore_dir"), &obj.PreserveRestoreDir, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateworkerpb.RestoreWorkloadRequest.ExecutionUid
+	{ // field ateworkerpb.RestoreWorkloadRequest.ActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -1672,9 +1672,9 @@ func Validate_RestoreWorkloadRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateworkerpb.RestoreWorkloadRequest) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("activation_uid"), &obj.ActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2055,7 +2055,7 @@ func Validate_RunWorkloadRequest(
 		errs = append(errs, fn(fldPath.Child("actor_dirs"), obj.ActorDirs, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateworkerpb.RunWorkloadRequest.ExecutionUid
+	{ // field ateworkerpb.RunWorkloadRequest.ActivationUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2081,9 +2081,9 @@ func Validate_RunWorkloadRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateworkerpb.RunWorkloadRequest) *string {
-				return &oldObj.ExecutionUid
+				return &oldObj.ActivationUid
 			})
-		errs = append(errs, fn(fldPath.Child("execution_uid"), &obj.ExecutionUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("activation_uid"), &obj.ActivationUid, oldVal, oldObj != nil)...)
 	}
 
 	return errs

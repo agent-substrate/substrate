@@ -181,19 +181,19 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 // worker process, is stamped with that process's epoch and the IPs it
 // registered, so the reconciler keeps it and traffic reaches it.
 func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
-	const executionUID = "89a2bbd3-87a5-4f5a-a5f5-825c60ec41c9"
+	const activationUID = "89a2bbd3-87a5-4f5a-a5f5-825c60ec41c9"
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2, executionUID)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2, activationUID)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
 	assignment := got.GetStatus().GetWorkerAssignment()
-	if assignment.GetActorExecutionUid() != executionUID {
-		t.Errorf("actor_execution_uid = %q, want %q", assignment.GetActorExecutionUid(), executionUID)
+	if assignment.GetActorActivationUid() != activationUID {
+		t.Errorf("actor_activation_uid = %q, want %q", assignment.GetActorActivationUid(), activationUID)
 	}
 	if assignment.GetWorkerEpoch() != 2 {
 		t.Errorf("worker_epoch = %d, want 2", assignment.GetWorkerEpoch())

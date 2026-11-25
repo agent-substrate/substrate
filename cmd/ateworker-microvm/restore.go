@@ -147,7 +147,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	p := actorBootParams{
-		executionUID:     req.GetExecutionUid(),
+		activationUID:    req.GetActivationUid(),
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
 		actorDirs:        req.GetActorDirs(),
@@ -521,8 +521,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		})
 
 	ra := &runningActor{
-		executionUID: p.executionUID,
-		chProc:       chProc, vfsdProc: vfsdProc,
+		activationUID: p.activationUID,
+		chProc:        chProc, vfsdProc: vfsdProc,
 		apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
 		preserveRestoreSource:   preserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,

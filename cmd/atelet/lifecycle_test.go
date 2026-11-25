@@ -96,8 +96,8 @@ type fakeWorker struct {
 	preserveRestoreDir bool
 	// workerEpoch is the epoch RunWorkload and RestoreWorkload report.
 	workerEpoch int64
-	// executionUID is the most recent RunWorkload or RestoreWorkload identity.
-	executionUID string
+	// activationUID is the most recent RunWorkload or RestoreWorkload identity.
+	activationUID string
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
@@ -160,7 +160,7 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
 	f.setStoppedBy(nil)
 	f.mu.Lock()
-	f.executionUID = req.GetExecutionUid()
+	f.activationUID = req.GetActivationUid()
 	f.mu.Unlock()
 	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
@@ -202,7 +202,7 @@ func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.Ch
 
 func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
 	f.mu.Lock()
-	f.executionUID = req.GetExecutionUid()
+	f.activationUID = req.GetActivationUid()
 	f.mu.Unlock()
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
@@ -306,7 +306,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	)
 
 	const workerEpoch = 7
-	const executionUID = "9947dd8d-f20a-4708-9fd0-1a00f1903519"
+	const activationUID = "9947dd8d-f20a-4708-9fd0-1a00f1903519"
 	const restoreUID = "387adf79-f4de-4bb6-b4cf-c19df3566b3c"
 	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}, workerEpoch: workerEpoch}
 	serveFakeWorker(t, worker)
@@ -332,7 +332,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 
 	advertiseRuntime(t, s, sandboxRec)
 	runResp, err := s.Run(ctx, &ateletpb.RunRequest{
-		ExecutionUid:          executionUID,
+		ActivationUid:         activationUID,
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -351,10 +351,10 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		t.Errorf("Run worker_epoch = %d, want %d", got, workerEpoch)
 	}
 	worker.mu.Lock()
-	runUID := worker.executionUID
+	runUID := worker.activationUID
 	worker.mu.Unlock()
-	if runUID != executionUID {
-		t.Errorf("RunWorkload execution_uid = %q, want %q", runUID, executionUID)
+	if runUID != activationUID {
+		t.Errorf("RunWorkload activation_uid = %q, want %q", runUID, activationUID)
 	}
 
 	// Async suspend: a deferred checkpoint, which leaves the snapshot on this node.
@@ -392,7 +392,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	// Resume: atelet must restore from that local snapshot, not from
 	// Snapshot.Object.
 	restoreResp, err := s.Restore(ctx, &ateletpb.RestoreRequest{
-		ExecutionUid:          restoreUID,
+		ActivationUid:         restoreUID,
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -410,10 +410,10 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		t.Errorf("Restore worker_epoch = %d, want %d", got, workerEpoch)
 	}
 	worker.mu.Lock()
-	restoredUID := worker.executionUID
+	restoredUID := worker.activationUID
 	worker.mu.Unlock()
 	if restoredUID != restoreUID {
-		t.Errorf("RestoreWorkload execution_uid = %q, want %q", restoredUID, restoreUID)
+		t.Errorf("RestoreWorkload activation_uid = %q, want %q", restoredUID, restoreUID)
 	}
 	if got := worker.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for worker, want the pause snapshot's %q", got, "guest-memory")
