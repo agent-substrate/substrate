@@ -69,7 +69,7 @@ func TestRenderedOverlaysDNSCacheSettings(t *testing.T) {
 // manifest the installer selects, so a walk that quietly stopped matching
 // fails here instead of passing TestEgressDNSCacheSettings vacuously.
 func TestEgressManifestsCarryDNSCaches(t *testing.T) {
-	const want = 7
+	const want = 8
 	env := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
 	path := env.atenetEgressManifestPath()
 	if got := len(dnsCacheConfigs(t, path)); got != want {

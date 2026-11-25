@@ -76,6 +76,7 @@ test, and manual walkthrough are otherwise the same.
 | Actor authentication | Co-located atenet `ext_proc` | Built-in `substrateEgress` policy |
 | Configuration | Envoy bootstrap in `atenet-egress.yaml` | Static agentgateway ConfigMap overlay |
 | Access log | Text beginning with `[egress]`, including actor SAN | Structured log including `substrate.connect.authority` |
+| WebSocket egress | Carried over HTTP/1.1 | Refused with `403 Forbidden` |
 
 The experimental additional egress `ext_proc` service currently requires Envoy; the installer
 rejects that option with agentgateway rather than silently omitting it.

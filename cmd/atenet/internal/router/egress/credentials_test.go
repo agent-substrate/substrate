@@ -76,19 +76,26 @@ func withAuthorization(md *extproc.RequestMetadata) *extproc.RequestMetadata {
 // and overwrite the header the request carries.
 func TestInjectionOnRequestLegs(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		leg    string
-		policy *ateapi.EgressPolicy
+		name      string
+		leg       string
+		policy    *ateapi.EgressPolicy
+		websocket bool
 	}{
 		{name: "https", leg: extproc.EgressTLSMITMFilterChainName, policy: credentialInjectionPolicySample("api.example.com")},
 		{name: "http", leg: extproc.EgressCleartextFilterChainName, policy: cleartextInjectionPolicy("api.example.com")},
+		{name: "wss handshake", leg: extproc.EgressTLSMITMFilterChainName, policy: credentialInjectionPolicySample("api.example.com"), websocket: true},
+		{name: "ws handshake", leg: extproc.EgressCleartextFilterChainName, policy: cleartextInjectionPolicy("api.example.com"), websocket: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t\n")}
 			h := injectionHandlerFor(tc.policy, provider, injectionProviderName)
 
-			res, err := h.HandleRequestHeaders(context.Background(),
-				withAuthorization(innerMetadata(tc.leg, "GET", "api.example.com", nil)))
+			md := withAuthorization(innerMetadata(tc.leg, "GET", "api.example.com", nil))
+			if tc.websocket {
+				md.Headers["connection"] = "Upgrade"
+				md.Headers["upgrade"] = "websocket"
+			}
+			res, err := h.HandleRequestHeaders(context.Background(), md)
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders: %v", err)
 			}

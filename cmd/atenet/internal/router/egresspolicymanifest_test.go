@@ -184,44 +184,46 @@ func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 	}
 }
 
-func TestEgressManifestsDisableWebSocketUpgrades(t *testing.T) {
-	chains := list(mitmListener(t, bootstrapTree(t)), "filter_chains")
-	for _, name := range requestLegs {
-		chain := byName(chains, name)
-		if chain == nil {
-			t.Errorf("expected request-leg chain %q is absent", name)
-			continue
-		}
-		if !websocketDisabled(hcm(chain)) {
-			t.Errorf("chain %q must explicitly disable websocket upgrades", name)
-		}
-		var routes []node
-		for _, virtualHost := range list(child(hcm(chain), "route_config"), "virtual_hosts") {
-			routes = append(routes, list(virtualHost, "routes")...)
-		}
-		if len(routes) == 0 {
-			t.Errorf("chain %q has no routes", name)
-		}
-		for i, route := range routes {
-			action := child(route, "route")
-			if action == nil {
-				t.Errorf("chain %q route %d has no route action", name, i)
-				continue
-			}
-			if !websocketDisabled(action) {
-				t.Errorf("chain %q route %d must explicitly disable websocket upgrades", name, i)
-			}
+// On the MITM leg a WebSocket handshake has the first route, to a cluster that
+// speaks only HTTP/1.1: on an HTTP/2 upstream connection Envoy sends the
+// handshake as an extended CONNECT, which an origin that did not enable it
+// refuses. The cluster otherwise matches egress_forward_proxy.
+func TestEgressManifestsSendWebSocketUpstreamOverHTTP1(t *testing.T) {
+	tree := bootstrapTree(t)
+	chains := list(mitmListener(t, tree), "filter_chains")
+	var routes []node
+	for _, vh := range list(child(hcm(byName(chains, extproc.EgressTLSMITMFilterChainName)), "route_config"), "virtual_hosts") {
+		routes = append(routes, list(vh, "routes")...)
+	}
+	if len(routes) == 0 || !matchesWebSocket(child(routes[0], "match")) {
+		t.Fatalf("chain %q's first route does not match a WebSocket handshake; a route ahead of it could send the handshake to an HTTP/2 upstream", extproc.EgressTLSMITMFilterChainName)
+	}
+	all := clusters(tree)
+	name := str(child(routes[0], "route"), "cluster")
+	cluster := byName(all, name)
+	if cluster == nil {
+		t.Fatalf("the WebSocket route goes to cluster %q, which does not exist", name)
+	}
+	options := child(child(cluster, "typed_extension_protocol_options"), "envoy.extensions.upstreams.http.v3.HttpProtocolOptions")
+	explicit := child(options, "explicit_http_config")
+	if _, http1 := explicit["http_protocol_options"]; !http1 || len(explicit) != 1 {
+		t.Errorf("cluster %q is not limited to HTTP/1.1: explicit_http_config = %s", name, mustJSON(t, explicit))
+	}
+	base := byName(all, "egress_forward_proxy")
+	for _, key := range []string{"cluster_type", "circuit_breakers", "transport_socket"} {
+		if want, got := mustJSON(t, child(base, key)), mustJSON(t, child(cluster, key)); want != got || want == "null" {
+			t.Errorf("cluster %q %s = %s, want egress_forward_proxy's %s", name, key, got, want)
 		}
 	}
 }
 
-// websocketDisabled reports whether n's upgrade_configs turn websocket off
-// explicitly.
-func websocketDisabled(n node) bool {
-	for _, upgrade := range list(n, "upgrade_configs") {
-		if str(upgrade, "upgrade_type") == "websocket" {
-			enabled, ok := upgrade["enabled"].(bool)
-			return ok && !enabled
+// matchesWebSocket reports whether a route match requires an Upgrade header
+// naming websocket, compared the way Envoy's router compares it.
+func matchesWebSocket(match node) bool {
+	for _, h := range list(match, "headers") {
+		sm := child(h, "string_match")
+		if ignoreCase, _ := sm["ignore_case"].(bool); ignoreCase && str(h, "name") == "upgrade" && str(sm, "exact") == "websocket" {
+			return true
 		}
 	}
 	return false

@@ -54,7 +54,8 @@ cannot reach the collector until the actor has an `http` egress rule for it. See
 | :---- | :---- | :---- | :---- | :---- |
 | any | HTTP(S) 1.1 / 2 | Supported with policy controls | atunnel -> egress gateway -> origin | `403 Forbidden`. For HTTPS whose SNI matches no `https` or `tls_passthrough` rule, the gateway closes the connection during the TLS handshake, without an HTTP response. |
 | any | TLS whose SNI matches a `tls_passthrough` rule | Relayed to the SNI hostname without inspection, so WebSocket, CONNECT, and other TCP inside it get through | atunnel -> egress gateway -> origin | Closed during the TLS handshake. |
-| any | WebSocket | Blocked | atunnel -> egress gateway | `403 Forbidden` |
+| any | WebSocket (`ws://`, `wss://`) over HTTP/1.1 | Supported under `http` and `https` rules. See [WebSocket](#websocket). | atunnel -> egress gateway -> origin | The same as for HTTP(S) above. |
+| any | Other HTTP upgrades | Blocked. An `h2c` upgrade offer is ignored, and the request is served over HTTP/1.1. | atunnel -> egress gateway | `403 Forbidden` |
 | any | Standard HTTP(S) CONNECT (forward-proxy tunnel) | Blocked | atunnel -> egress gateway | `403 Forbidden` |
 | 53 | DNS to the sandbox's gateway | Allowed for hostnames matching the actor's egress policy | sandbox DNS relay -> worker pod's resolvers | `NXDOMAIN` |
 | any | Any other TCP | Blocked | atunnel -> egress gateway | A client that sends first gets `400 Bad Request` before the connection closes. If the client waits for the server to speak first, the connection closes after about 1 second with no data. Only the gateway logs the refusal. |
@@ -62,6 +63,24 @@ cannot reach the collector until the actor has an `http` egress rule for it. See
 See the [Network Egress Contract](network-egress.md#refusal-responses-and-policy-changes)
 for refusal status codes, policy-refresh semantics, and the distinction between DNS
 refusals and HTTP policy denials.
+
+### WebSocket
+
+A `ws://` handshake is decided by the actor's `http` rules and a `wss://`
+handshake by its `https` rules, like any other request to that host and port.
+Credential effects apply to the handshake.
+
+- The gateway does not read the frames that follow. Policy and credentials are
+  applied once, at the handshake. A later policy change does not end an open
+  connection, and an injected credential is not refreshed.
+- A connection with no data in either direction for 5 minutes is reset. Ping
+  and pong frames count as data, so send one more often than that.
+- A gateway rollout closes open connections, and suspending the actor closes
+  all of its connections. Reconnect when that happens.
+- Only the HTTP/1.1 handshake is supported. The gateway does not offer
+  WebSocket over HTTP/2 (RFC 8441).
+- The agentgateway dataplane does not carry WebSocket yet. It answers the
+  handshake with `403 Forbidden`.
 
 ## UDP
 
