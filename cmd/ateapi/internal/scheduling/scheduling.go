@@ -35,22 +35,22 @@ type Constraints struct {
 	// SandboxClass, when set, is the sandbox class of the snapshot the actor
 	// restores from, and the worker's must equal it. A snapshot's files, its
 	// durable volumes included, are written by one class's worker and read
-	// back by the same, so unlike RequiredRuntime this holds for every
-	// fidelity and is never relaxed. Empty for an actor with no snapshot,
-	// which boots on whichever class its selectors pick.
+	// back by the same, so this holds for every fidelity and is never
+	// relaxed. Empty for an actor with no snapshot, which boots on whichever
+	// class its selectors pick.
 	SandboxClass string
-
-	// RequiredRuntime, when it names a runtime, restricts placement to
-	// workers whose DefaultRuntime or RestorableRuntimes can restore a
-	// snapshot stamped with it. Prepared once per Schedule, since Applies
-	// asks it of every candidate.
-	RequiredRuntime hardware.Requirement
 
 	// SnapshotRuntime is the runtime of the snapshot the actor restores from,
 	// or the zero Requirement when it starts on a worker's default runtime.
-	// Unlike RequiredRuntime it is never relaxed: it picks the worker runtime
-	// the actor runs under, and so the overhead it is booked with.
+	// Prepared once per Schedule, since BestRuntime asks it of every
+	// candidate. It picks the worker runtime the actor runs under, and so the
+	// overhead it is booked with.
 	SnapshotRuntime hardware.Requirement
+
+	// MinFidelity is the lowest SnapshotFidelity a worker may restore
+	// SnapshotRuntime at to be eligible. Defaults to SNAPSHOT_FIDELITY_MEMORY
+	// when unset.
+	MinFidelity ateapi.SnapshotFidelity
 
 	// TemplateSelector and ActorSelector must both match the worker's labels.
 	TemplateSelector labels.Selector
@@ -66,6 +66,15 @@ type Constraints struct {
 	Limits *ateapi.Resources
 }
 
+// effectiveMinFidelity returns MinFidelity, or SNAPSHOT_FIDELITY_MEMORY when
+// MinFidelity is unset.
+func (c Constraints) effectiveMinFidelity() ateapi.SnapshotFidelity {
+	if c.MinFidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		return ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	}
+	return c.MinFidelity
+}
+
 // ErrNoCapacity is returned by Schedule when no worker that meets the
 // constraints has room. The cause can be full workers, or no worker that meets
 // the constraints at all.
@@ -76,12 +85,25 @@ var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 // constraints. See doesNotFit for which workers count.
 var ErrDoesNotFit = fmt.Errorf("%w: the actor exceeds the capacity of every such worker", ErrNoCapacity)
 
+// Placement is a worker Schedule picked, the fidelity it picked it at, and
+// what the actor books there.
+type Placement struct {
+	Worker *ateapi.Worker
+	// Fidelity is the SnapshotFidelity Worker restores SnapshotRuntime at,
+	// or SNAPSHOT_FIDELITY_MEMORY when SnapshotRuntime is the zero Requirement.
+	Fidelity ateapi.SnapshotFidelity
+	// Booking is the actor's limits plus the overhead of the runtime it runs
+	// under on Worker.
+	Booking *ateapi.Resources
+}
+
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
-	// Schedule returns a worker that meets constraints and has room.
-	// Returns ErrNoCapacity when no worker that meets constraints has room,
-	// or ErrDoesNotFit when the actor exceeds the capacity of each of them.
-	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
+	// Schedule returns a Placement on a worker that meets constraints and has
+	// room. Returns ErrNoCapacity when no worker that meets constraints has
+	// room, or ErrDoesNotFit when the actor exceeds the capacity of each of
+	// them.
+	Schedule(ctx context.Context, constraints Constraints) (Placement, error)
 
 	// Applies reports whether worker is ACTIVE and satisfies non-capacity
 	// constraints. Capacity is excluded so an existing assignment does not make
@@ -123,38 +145,54 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 	return s
 }
 
-// Schedule filters the fleet for eligible candidates with room, samples two at
-// random (power of two choices), and returns the less-loaded one, where load is
-// the higher of actor-slot and compute-resource utilization. Spreading across
-// the warm pool avoids hotspots until autoscaling reclaims idle workers.
-func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
+// Schedule filters the fleet in a single pass for the highest-fidelity
+// candidates with room, samples two at random (power of two choices), and
+// returns the less-loaded one, where load is the higher of actor-slot and
+// compute-resource utilization. Spreading across the warm pool avoids hotspots
+// until autoscaling reclaims idle workers.
+func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (Placement, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
-		return nil, fmt.Errorf("while listing workers: %w", err)
+		return Placement{}, fmt.Errorf("while listing workers: %w", err)
 	}
 
-	var candidates []candidate
+	floor := constraints.effectiveMinFidelity()
+	var (
+		bestFidelity ateapi.SnapshotFidelity
+		candidates   []candidate
+	)
 	for _, worker := range workers {
-		if !s.Applies(worker, constraints) {
+		if !matchesStatic(worker, constraints) {
 			continue
 		}
-		booking, ok := Booking(worker, constraints)
+		rt, fidelity := constraints.SnapshotRuntime.BestRuntime(worker.GetStatus(), floor)
+		if fidelity < floor {
+			continue
+		}
+		booking, ok := bookingFor(constraints.Limits, rt.GetActorOverhead())
 		if !ok {
 			continue
 		}
-		if cand, ok := checkRoom(worker, booking); ok {
-			candidates = append(candidates, cand)
+		cand, ok := checkRoom(worker, booking)
+		if !ok {
+			continue
 		}
+		if fidelity > bestFidelity {
+			bestFidelity = fidelity
+			floor = fidelity
+			candidates = candidates[:0]
+		}
+		candidates = append(candidates, cand)
 	}
 
 	if len(candidates) == 0 {
 		if doesNotFit(workers, constraints) {
-			return nil, ErrDoesNotFit
+			return Placement{}, ErrDoesNotFit
 		}
-		return nil, ErrNoCapacity
+		return Placement{}, ErrNoCapacity
 	}
 	if len(candidates) == 1 {
-		return candidates[0].worker, nil
+		return candidates[0].placement(bestFidelity), nil
 	}
 
 	i := s.intn(len(candidates))
@@ -163,9 +201,9 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		j++
 	}
 	if lessLoaded(&candidates[j], &candidates[i]) {
-		return candidates[j].worker, nil
+		return candidates[j].placement(bestFidelity), nil
 	}
-	return candidates[i].worker, nil
+	return candidates[i].placement(bestFidelity), nil
 }
 
 // doesNotFit reports whether at least one registered worker meets constraints,
@@ -174,6 +212,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 //
 // TODO(#198): check WorkerPool sizes too.
 func doesNotFit(workers []*ateapi.Worker, constraints Constraints) bool {
+	floor := constraints.effectiveMinFidelity()
 	eligible := false
 	for _, worker := range workers {
 		// A DRAINING worker never takes actors again, so its size is
@@ -183,25 +222,35 @@ func doesNotFit(workers []*ateapi.Worker, constraints Constraints) bool {
 		}
 		// Skip a worker that is unregistered or fails the other constraints.
 		// Its state is ignored, so an UNAVAILABLE worker still counts.
-		if !appliesAnyState(worker, constraints) {
+		if !matchesStaticAnyState(worker, constraints) {
+			continue
+		}
+		rt, fidelity := constraints.SnapshotRuntime.BestRuntime(worker.GetStatus(), floor)
+		if fidelity < floor {
 			continue
 		}
 		eligible = true
 		// The worker meets the constraints. If the actor fits its whole
 		// capacity, it may fit once the worker frees room or becomes ACTIVE.
-		if booking, ok := Booking(worker, constraints); ok && fitsEmpty(worker, booking) {
+		if booking, ok := bookingFor(constraints.Limits, rt.GetActorOverhead()); ok && fitsEmpty(worker, booking) {
 			return false
 		}
 	}
 	return eligible
 }
 
-// candidate pairs an eligible worker with its cached compute utilization.
+// candidate pairs an eligible worker with what the actor books there and the
+// worker's cached compute utilization.
 type candidate struct {
-	worker *ateapi.Worker
+	worker  *ateapi.Worker
+	booking *ateapi.Resources
 	// resUtil is the worker's dominant compute-resource utilization in [0,1],
 	// or -1 if not yet computed.
 	resUtil float64
+}
+
+func (c *candidate) placement(fidelity ateapi.SnapshotFidelity) Placement {
+	return Placement{Worker: c.worker, Fidelity: fidelity, Booking: c.booking}
 }
 
 func (c *candidate) resourceUtilization() float64 {
@@ -270,14 +319,9 @@ func Registered(worker *ateapi.Worker) bool {
 	return worker.GetStatus().GetRegisteredEpoch() != 0 && hardware.SandboxClass(worker.GetStatus()) != ""
 }
 
-func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool {
-	return worker.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE &&
-		appliesAnyState(worker, constraints)
-}
-
-// appliesAnyState reports whether a registered worker satisfies the
-// non-capacity constraints in any state.
-func appliesAnyState(worker *ateapi.Worker, constraints Constraints) bool {
+// matchesStaticAnyState reports whether a registered worker satisfies the
+// non-runtime, non-capacity constraints in any state.
+func matchesStaticAnyState(worker *ateapi.Worker, constraints Constraints) bool {
 	if !Registered(worker) {
 		return false
 	}
@@ -288,14 +332,25 @@ func appliesAnyState(worker *ateapi.Worker, constraints Constraints) bool {
 	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, worker.GetNodeName()) {
 		return false
 	}
-	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
-		return false
-	}
 	set := labels.Set(worker.GetLabels())
 	if constraints.TemplateSelector != nil && !constraints.TemplateSelector.Matches(set) {
 		return false
 	}
 	return constraints.ActorSelector == nil || constraints.ActorSelector.Matches(set)
+}
+
+func matchesStatic(worker *ateapi.Worker, constraints Constraints) bool {
+	return worker.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE &&
+		matchesStaticAnyState(worker, constraints)
+}
+
+func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool {
+	if !matchesStatic(worker, constraints) {
+		return false
+	}
+	floor := constraints.effectiveMinFidelity()
+	_, fidelity := constraints.SnapshotRuntime.BestRuntime(worker.GetStatus(), floor)
+	return fidelity >= floor
 }
 
 // HasRoom reports whether what the worker has left admits one more actor of
@@ -315,10 +370,14 @@ func (s *scheduler) HasRoom(worker *ateapi.Worker, constraints Constraints) bool
 // false when that doesn't fit in an int64, and the actor doesn't fit on the worker.
 func Booking(worker *ateapi.Worker, constraints Constraints) (*ateapi.Resources, bool) {
 	overhead := constraints.SnapshotRuntime.WorkerRuntimeFor(worker.GetStatus()).GetActorOverhead()
+	return bookingFor(constraints.Limits, overhead)
+}
+
+func bookingFor(limits *ateapi.Resources, overhead *ateapi.RuntimeOverhead) (*ateapi.Resources, bool) {
 	if overhead == nil {
-		return constraints.Limits, true
+		return limits, true
 	}
-	limit := constraints.Limits.GetMemoryBytes()
+	limit := limits.GetMemoryBytes()
 	scaled, ok := perGiB(limit, overhead.GetMemoryBytesPerGib())
 	if !ok {
 		return nil, false
@@ -327,7 +386,7 @@ func Booking(worker *ateapi.Worker, constraints Constraints) (*ateapi.Resources,
 	if !ok {
 		return nil, false
 	}
-	return &ateapi.Resources{CpuMillicores: constraints.Limits.GetCpuMillicores(), MemoryBytes: memory}, true
+	return &ateapi.Resources{CpuMillicores: limits.GetCpuMillicores(), MemoryBytes: memory}, true
 }
 
 // perGiB scales rate bytes per GiB to n bytes, and reports false on overflow.
@@ -373,11 +432,11 @@ func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) 
 	}
 
 	if want.GetCpuMillicores() == 0 && want.GetMemoryBytes() == 0 {
-		return candidate{worker: worker, resUtil: -1}, true
+		return candidate{worker: worker, booking: want, resUtil: -1}, true
 	}
 	if !resources.Covers(resources.Free(capacity, used), want) {
 		return candidate{}, false
 	}
 	resUtil := utilization(capacity, used)
-	return candidate{worker: worker, resUtil: resUtil}, true
+	return candidate{worker: worker, booking: want, resUtil: resUtil}, true
 }
