@@ -31,6 +31,18 @@ import (
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 )
 
+// kindDeleteManifests are the manifests a kind install applies by path but the
+// kind bundle does not list, so DeleteAteSystem deletes them by name. The
+// directory delete covers them on every other install. The sandboxconfig-assets
+// admission policy goes before the CRDs and the SandboxConfig release: it
+// validates SandboxConfig updates, so it must be gone before they are made.
+var kindDeleteManifests = []string{
+	"pod-certificate-controller.yaml",
+	"sandboxconfig-validation.yaml",
+	"sandboxconfig-gvisor.yaml",
+	"atenet-egress.yaml",
+}
+
 // DeleteAteSystem removes the control plane.
 //
 // PostgreSQL, the agentgateway ConfigMap, the bundled credential provider,
@@ -56,10 +68,10 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 		if err := e.Kube.DeleteBytes(ctx, manifest); err != nil {
 			return err
 		}
-		// Not part of the kind bundle (see its kustomization), so it goes by
-		// name. The directory delete below covers it on every other install.
-		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
-			return err
+		for _, file := range kindDeleteManifests {
+			if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(file)); err != nil {
+				return err
+			}
 		}
 	} else if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest()); err != nil {
 		return err
