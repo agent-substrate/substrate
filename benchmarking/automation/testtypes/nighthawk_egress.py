@@ -24,8 +24,10 @@ from util import build_and_push, run, run_no_check
 TEST_TYPE = "nighthawk-egress"
 DOCKERFILE = "benchmarking/nighthawk-egress/Dockerfile"
 USES_SHARED_WORKLOADS = False
+# The rig loads the gateway from one actor and is sized for one Envoy worker thread.
+ENVOY_CPU = 1
 
-_REQUIRED = ("envoyCpu", "mode")
+_REQUIRED = ("mode",)
 _VALID_MODES = ("http", "mitm", "passthrough")
 _UNSUPPORTED_TOP_LEVEL_KEYS = (
     "workerCount",
@@ -123,8 +125,6 @@ def validate(test: dict[str, Any]) -> None:
     for k in _REQUIRED:
         if k not in cfg:
             raise ValueError(f"nighthawk-egress test '{name}' missing nighthawk-egress.{k}")
-    if not isinstance(cfg["envoyCpu"], int) or isinstance(cfg["envoyCpu"], bool) or cfg["envoyCpu"] < 1:
-        raise ValueError(f"nighthawk-egress test '{name}': envoyCpu must be a positive int")
     mode = cfg["mode"]
     if mode not in _VALID_MODES:
         raise ValueError(
@@ -142,7 +142,7 @@ def build_image(commit: str) -> str:
 
 
 def pre_test(test: dict[str, Any]) -> None:
-    shape_atenet_egress(test["nighthawk-egress"]["envoyCpu"])
+    shape_atenet_egress(ENVOY_CPU)
     # Pass the active kubeconfig context so setup-e2e-egress-tls-kind.sh does not default to kind-kind.
     ctx = run(["kubectl", "config", "current-context"], stdout=subprocess.PIPE, text=True).stdout.strip()
     env = {**os.environ, "KUBECTL_CONTEXT": ctx}
@@ -198,6 +198,6 @@ def job_tmpl(manifests_dir: str) -> str:
 def job_subs(test: dict[str, Any]) -> dict[str, str]:
     cfg = test["nighthawk-egress"]
     return {
-        "ENVOY_CPU": str(cfg["envoyCpu"]),
+        "ENVOY_CPU": str(ENVOY_CPU),
         "MODE": str(cfg["mode"]),
     }

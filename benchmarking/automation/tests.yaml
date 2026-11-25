@@ -166,8 +166,8 @@
 # Deploys its own gVisor rig (`USES_SHARED_WORKLOADS = False`), so `sandboxClass`
 # must be `gvisor` and shared-workload fields (`workerCount`, `actorMemory`,
 # `actorCPU`, `workerMemory`, `workerWaitTimeout`, `isolate`) are rejected.
-# The block takes `envoyCpu` and `mode` (`http`, `mitm` or `passthrough`).
-# Both are required. See the "Configuration knobs" table in
+# The block takes `mode` (`http`, `mitm` or `passthrough`), which is required.
+# The gateway runs at 1 CPU. See the "Configuration knobs" table in
 # benchmarking/nighthawk-egress/README.md.
 
 tests:
@@ -728,17 +728,24 @@ tests:
     nighthawk-ingress:
       envoyCpu: 16
       tailLatencySloMs: 25
-  # Not enabled yet: a run needs the runner image of benchmarking/nighthawk-egress.
-  # - name: egress_gatewaycap_http_1cpu
-  #   description: "Egress gateway capacity (cleartext HTTP): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 1 CPU"
-  #   type: nighthawk-egress
-  #   targetCluster: dev
-  #   duration: 30m
-  #   ateArgs:
-  #     - "--cordon-system-infra-components"
-  #   nighthawk-egress:
-  #     mode: http
-  #     envoyCpu: 1
+  - name: egress_gatewaycap_http_1cpu
+    description: "Egress gateway capacity (cleartext HTTP): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 1 CPU"
+    type: nighthawk-egress
+    targetCluster: dev
+    duration: 30m
+    ateArgs:
+      - "--cordon-system-infra-components"
+    nighthawk-egress:
+      mode: http
+  - name: egress_gatewaycap_mitm_1cpu
+    description: "Egress gateway capacity (TLS MITM): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 1 CPU"
+    type: nighthawk-egress
+    targetCluster: dev
+    duration: 30m
+    ateArgs:
+      - "--cordon-system-infra-components"
+    nighthawk-egress:
+      mode: mitm
   # ate-api-server and Postgres cold resume ceiling on the fake data plane.
   # Each user owns one actor: its first iteration creates the actor and
   # makes it cold, in the step that adds the user, and every later one
