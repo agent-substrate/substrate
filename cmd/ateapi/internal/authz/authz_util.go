@@ -256,12 +256,17 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 	if err != nil {
 		return nil, nil, err
 	}
+	modelProto, err := transformer.TransformDSLToProto(modelDSL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("transform model.fga DSL to proto: %w", err)
+	}
 	authorizer := &Authorizer{
 		fgaServer:        fgaServer,
 		storeID:          storeID,
 		modelID:          modelID,
 		bootstrapOwners:  owners,
 		systemPrincipals: systemPrincipals,
+		shortCircuit:     compileShortCircuitTable(modelProto),
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,
