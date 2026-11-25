@@ -40,8 +40,8 @@ the report.
 
 This deploys the benchmark `WorkerPool` and `ActorTemplate`s into the
 `benchmark-workloads` atespace, builds and pushes the locust image, and deploys
-the locust master and workers (`benchmarking/README.md`,
-[Deploy benchmarks](../../benchmarking/README.md#deploy-benchmarks)). On a kind
+the locust master and workers (see
+[Deploy benchmarks](../guides/benchmarking.md#deploy-benchmarks)). On a kind
 cluster with limited memory use smaller values, e.g. `--worker-count 1
 --actor-memory 512Mi`, and scale the load flags in step 2 down to match.
 

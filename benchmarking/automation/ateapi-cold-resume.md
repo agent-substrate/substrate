@@ -2,8 +2,10 @@
 
 The `ateapi_cold_resume_pause_fake_*` tests in [tests.yaml](tests.yaml)
 measure how many cold resumes per second ate-api-server and Postgres sustain.
-They run the [ResumePaused benchmark](../README.md#resumepaused-benchmark) on
-the [fake data plane](../README.md#isolate-mode) as a rate ladder.
+They run the
+[ResumePaused benchmark](../../docs/guides/benchmarking.md#resumepaused-benchmark)
+on the [fake data plane](../../docs/guides/benchmarking.md#isolate-mode) as a
+rate ladder.
 
 Both tests run through `benchmarking/automation/orchestrator.py`. The
 [automation README](README.md#how-it-works) covers what it does for each test
@@ -16,7 +18,7 @@ Create the test cluster as in
 [Test cluster prerequisites](README.md#test-cluster-prerequisites).
 
 Both tests pass `--cordon-system-infra-components`, which needs the two node
-pools in [System Infra Isolation](../../docs/architecture.md#system-infra-isolation):
+pools in [System Infra Isolation](../../docs/concepts/architecture.md#system-infra-isolation):
 `ate-system-infra` and `ate-postgres`. If the `ate-postgres` pool is missing,
 the install fails before it applies Postgres. If the `ate-system-infra` pool
 is missing or too small, its pods stay Pending and the install fails when
@@ -44,7 +46,7 @@ The default pool runs the locust runner (8 CPUs in `_2cpu`) and fake-atelet.
 
 The orchestrator does not deploy Prometheus. The runner needs it for
 `server_summary.json` and the per-step rows in `stats.jsonl`, so install it
-once as in [Prometheus + Grafana](../README.md#optional-prometheus--grafana).
+once as in [Prometheus + Grafana](../../docs/guides/benchmarking.md#optional-prometheus--grafana).
 
 ## 3. Workstation
 
@@ -76,7 +78,7 @@ Run `_smoke` first to check the setup before the 23 minute ladder. The
 header comments in `tests.yaml` describe the fields, such as
 `controlPlane`, `isolate` and `--ladder`. If you change `replicas` or
 `poolMaxConns`, keep within Postgres's connection slots as described in
-[Running at scale](../README.md#running-at-scale).
+[Running at scale](../../docs/guides/benchmarking.md#running-at-scale).
 
 ## 5. Env file
 
@@ -111,9 +113,9 @@ long ladders, run the command under `setsid nohup` or in a VM.
 
 ## 7. Results
 
-[Analyzing a ResumePaused Ladder Run](../README.md#analyzing-a-resumepaused-ladder-run)
+[Analyzing a ResumePaused Ladder Run](../../docs/guides/benchmarking.md#analyzing-a-resumepaused-ladder-run)
 explains the per-step rows and where the run path is in the log.
-[Benchmark output files](../README.md#benchmark-output-files)
+[Benchmark output files](../../docs/guides/benchmarking.md#benchmark-output-files)
 lists the files. To copy them all down:
 
 ```bash
