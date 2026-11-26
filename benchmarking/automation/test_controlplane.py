@@ -200,5 +200,44 @@ class PoolMaxConnsTest(unittest.TestCase):
         )
 
 
+class AteApiServerScrapeTest(unittest.TestCase):
+    HERE = os.path.dirname(__file__)
+    MONITORING = os.path.join(HERE, "..", "monitoring.yaml")
+    DEPLOYMENT = os.path.join(HERE, "..", "..", "manifests", "ate-install", "ate-api-server.yaml")
+    POLICIES = os.path.join(HERE, "..", "..", "manifests", "ate-install", "ate-system-networkpolicies.yaml")
+
+    def test_scrape_job_matches_manifest_and_networkpolicy(self):
+        with open(self.MONITORING, encoding="utf-8") as f:
+            monitoring_docs = list(yaml.safe_load_all(f))
+        prom_cm = next(
+            d for d in monitoring_docs
+            if d and d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "prometheus-config"
+        )
+        prom_cfg = yaml.safe_load(prom_cm["data"]["prometheus.yml"])
+        job = next(j for j in prom_cfg["scrape_configs"] if j["job_name"] == "ate-api-server")
+        self.assertEqual(job["kubernetes_sd_configs"], [{"role": "pod", "namespaces": {"names": ["ate-system"]}}])
+        keep = next(r for r in job["relabel_configs"] if r.get("action") == "keep")
+        self.assertEqual(
+            keep["source_labels"],
+            ["__meta_kubernetes_pod_label_app", "__meta_kubernetes_pod_container_port_number"],
+        )
+        self.assertEqual(keep["regex"], "ate-api-server;9090")
+
+        with open(self.DEPLOYMENT, encoding="utf-8") as f:
+            deploy_docs = list(yaml.safe_load_all(f))
+        dep = next(d for d in deploy_docs if d and d.get("kind") == "Deployment")
+        pod_tpl = dep["spec"]["template"]
+        self.assertEqual(pod_tpl["metadata"]["labels"]["app"], "ate-api-server")
+        container = next(c for c in pod_tpl["spec"]["containers"] if c["name"] == "ate-api-server")
+        port = next(p for p in container["ports"] if p["containerPort"] == 9090)
+        self.assertEqual(port["name"], "prometheus")
+
+        with open(self.POLICIES, encoding="utf-8") as f:
+            policy_docs = list(yaml.safe_load_all(f))
+        obs = next(d for d in policy_docs if d and d["metadata"]["name"] == "ate-system-observability")
+        admitted = {p["port"] for rule in obs["spec"]["ingress"] for p in rule["ports"]}
+        self.assertIn(port["name"], admitted)
+
+
 if __name__ == "__main__":
     unittest.main()

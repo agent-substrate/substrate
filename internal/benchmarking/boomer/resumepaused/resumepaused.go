@@ -490,7 +490,22 @@ func (r *runtime) ref(name string) *ateapi.ObjectRef {
 	return &ateapi.ObjectRef{Atespace: r.cfg.Atespace, Name: name}
 }
 
+// ensureAtespace checks GetAtespace before CreateAtespace so callers with stored atespace access do not need global can_create_atespace.
 func (r *runtime) ensureAtespace(ctx context.Context) error {
+	var missing bool
+	err := r.call(ctx, "GetAtespace", func(ctx context.Context, trailer grpc.CallOption) error {
+		_, err := r.cfg.APIStub.GetAtespace(ctx, &ateapi.GetAtespaceRequest{
+			Atespace: &ateapi.ObjectRef{Name: r.cfg.Atespace},
+		}, trailer)
+		if status.Code(err) == codes.NotFound {
+			missing = true
+			return nil
+		}
+		return err
+	})
+	if err != nil || !missing {
+		return err
+	}
 	return r.call(ctx, "CreateAtespace", func(ctx context.Context, trailer grpc.CallOption) error {
 		_, err := r.cfg.APIStub.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
 			Atespace: &ateapi.Atespace{

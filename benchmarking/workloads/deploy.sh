@@ -322,6 +322,34 @@ deploy() {
   run_kubectl_ate create atespace benchmark-workloads >/dev/null 2>&1 \
     || run_kubectl_ate get atespace benchmark-workloads >/dev/null
 
+  # Grant benchmark-runner viewer access on the shared templates and editor
+  # access on the benchmark atespace. User classes that check GetAtespace
+  # before CreateAtespace (resumepaused) can then run without global
+  # bootstrap-owner rights.
+  local benchmark_runner_user="user:spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner"
+
+  run_kubectl_ate delete access-policy -a benchmark-workloads >/dev/null 2>&1 || true
+  run_kubectl_ate create access-policy -a benchmark-workloads -f - <<EOF
+metadata:
+  name: default
+bindings:
+- role: viewer
+  members:
+  - ${benchmark_runner_user}
+EOF
+
+  run_kubectl_ate create atespace benchmark >/dev/null 2>&1 \
+    || run_kubectl_ate get atespace benchmark >/dev/null
+  run_kubectl_ate delete access-policy -a benchmark >/dev/null 2>&1 || true
+  run_kubectl_ate create access-policy -a benchmark -f - <<EOF
+metadata:
+  name: default
+bindings:
+- role: editor
+  members:
+  - ${benchmark_runner_user}
+EOF
+
   # Actor templates are immutable (no update RPC). A value that changes for
   # each run — the OTLP endpoint or the sandbox class — needs the removal of
   # the old template first. This removal is safe, because the benchmark
@@ -349,6 +377,8 @@ delete() {
   done
   run_kubectl_ate delete atespace benchmark-workloads >/dev/null 2>&1 \
     || echo "atespace benchmark-workloads not deleted (may not exist or is not empty)"
+  run_kubectl_ate delete atespace benchmark >/dev/null 2>&1 \
+    || echo "atespace benchmark not deleted (may not exist or is not empty)"
   # The pool manifest contains ko:// image references; route through
   # `ko delete` so they get resolved before kubectl sees them.
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko delete --ignore-not-found -f -

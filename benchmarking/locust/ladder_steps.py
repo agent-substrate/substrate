@@ -18,7 +18,9 @@ stats.jsonl's other rows cover the whole run, so they blend every step of a
 ladder. This reads each step's start and end from the runner's log and
 queries Prometheus over the step's steady window: from SETTLE seconds after
 the step starts, as boomer reads a new target rate within 10 s, to TAIL
-seconds before it ends. Each step becomes one `ladder_step_NNN` row.
+seconds before it ends. CreateActor setup latency is queried over [start, end - TAIL]
+so VU setup bursts in the settle window are captured. Each step becomes one
+`ladder_step_NNN` row.
 
 Like the server telemetry, this is additive: runner.py logs a failure here
 and keeps the locust measurements.
@@ -109,8 +111,10 @@ def by_label(prom: str, q: str, t: int, label: str) -> dict[str, float]:
 # step windows and the queries' execution.
 def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
     """One step's throughput, latency, CPU and Postgres figures over its
-    steady window."""
-    a, b = s["start"] + SETTLE, s["end"] - TAIL
+    steady window [start + SETTLE, end - TAIL], plus CreateActor setup
+    latency over [start, end - TAIL]."""
+    t0 = s["start"]
+    a, b = t0 + SETTLE, s["end"] - TAIL
     secs = b - a
     d = f"{secs}s"
     req = 'locust_requests_total{name="%s",status="%s"}'
@@ -133,6 +137,20 @@ def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
     def mean_ms(metric: str, name: str, extra: str) -> float | None:
         return q(mean % (metric, name, extra, d, metric, name, extra, d))
 
+    # Steady-window queries start after SETTLE and miss VU setup, and series born
+    # during setup lose their first-sample count under increase(). Subtract @ t0.
+    def setup_latency(metric: str, name: str, quantile: float) -> float | None:
+        buckets = f'{metric}_bucket{{name="{name}"}}'
+        now = f"sum by (le) ({buckets})"
+        then = f"sum by (le) ({buckets} @ {t0})"
+        return q(f"histogram_quantile({quantile}, {now} - ({then} or {now} * 0))")
+
+    def setup_mean_ms(metric: str, name: str) -> float | None:
+        s_sel, c_sel = f'{metric}_sum{{name="{name}"}}', f'{metric}_count{{name="{name}"}}'
+        ds = f"(sum({s_sel}) - (sum({s_sel} @ {t0}) or vector(0)))"
+        dc = f"(sum({c_sel}) - (sum({c_sel} @ {t0}) or vector(0)))"
+        return q(f"{ds}/{dc}")
+
     per_replica = by_label(
         prom,
         f'sum by (pod) (increase(container_cpu_usage_seconds_total{{namespace="ate-system",container="ate-api-server"}}[{d}]))/{secs}',
@@ -153,10 +171,19 @@ def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
         "resume_server_p99_ms": latency(server, "ResumeActorCold", "", 0.99),
         "pause_client_p50_ms": latency(client, "SuspendActorAsync", ok, 0.5),
         "pause_client_p99_ms": latency(client, "SuspendActorAsync", ok, 0.99),
+        "pause_server_p50_ms": latency(server, "SuspendActorAsync", "", 0.5),
+        "pause_server_p90_ms": latency(server, "SuspendActorAsync", "", 0.9),
+        "pause_server_p95_ms": latency(server, "SuspendActorAsync", "", 0.95),
+        "pause_server_p99_ms": latency(server, "SuspendActorAsync", "", 0.99),
+        "create_server_p50_ms": setup_latency(server, "CreateActor", 0.5),
+        "create_server_p90_ms": setup_latency(server, "CreateActor", 0.9),
+        "create_server_p95_ms": setup_latency(server, "CreateActor", 0.95),
+        "create_server_p99_ms": setup_latency(server, "CreateActor", 0.99),
         "resume_client_mean_ms": mean_ms(client, "ResumeActorCold", ok),
         "resume_server_mean_ms": mean_ms(server, "ResumeActorCold", ""),
         "pause_client_mean_ms": mean_ms(client, "SuspendActorAsync", ok),
         "pause_server_mean_ms": mean_ms(server, "SuspendActorAsync", ""),
+        "create_server_mean_ms": setup_mean_ms(server, "CreateActor"),
         "ateapi_cores": q(cpu % ("ate-api-server", d, secs)),
         # Each replica's cores, busiest first.
         "ateapi_cores_per_replica": sorted(per_replica.values(), reverse=True),
@@ -170,6 +197,7 @@ def summarize(prom: str, s: dict[str, Any]) -> dict[str, Any]:
         "pg_commits_per_s": q(f'sum(increase(pg_stat_database_xact_commit{{datname="atepg"}}[{d}]))/{secs}'),
         "pg_lock_wait_conns": q(pg_conns % (',state="active",wait_event_type="Lock"', d)),
         "pg_walwrite_wait_conns": q(pg_conns % (',state="active",wait_event="WALWrite"', d)),
+        "openfga_db_queries_per_s": q(f'sum(increase(openfga_datastore_query_count_sum{{job="ate-api-server"}}[{d}]))/{secs}'),
     }
     out.update(memory(prom, d, secs, b))
     return out

@@ -45,9 +45,10 @@ import (
 // reports Resumed false the way ateapi does.
 type fakeControlClient struct {
 	ateapi.ControlClient
-	mu     sync.Mutex
-	calls  []string // "<RPC> <actor>"
-	states map[string]ateapi.ActorState
+	mu        sync.Mutex
+	calls     []string // "<RPC> <actor>"
+	atespaces map[string]bool
+	states    map[string]ateapi.ActorState
 	// resumeErr, when set, fails every ResumeActor without changing state.
 	resumeErr error
 	// resumeFailures is how many ResumeActor calls fail with Unavailable,
@@ -55,6 +56,8 @@ type fakeControlClient struct {
 	resumeFailures int
 	// pauseErr, when set, fails every async SuspendActor without changing state.
 	pauseErr error
+	// getAtespaceErr, when set, fails GetAtespace.
+	getAtespaceErr error
 	// atespaceErr, when set, fails CreateAtespace.
 	atespaceErr error
 	// createErr, when set, fails every CreateActor without creating it.
@@ -73,7 +76,10 @@ type fakeControlClient struct {
 }
 
 func newFake() *fakeControlClient {
-	return &fakeControlClient{states: map[string]ateapi.ActorState{}}
+	return &fakeControlClient{
+		atespaces: map[string]bool{},
+		states:    map[string]ateapi.ActorState{},
+	}
 }
 
 // setTrailer fills the trailer a call asked for, as ate-api-server's
@@ -105,13 +111,29 @@ func (f *fakeControlClient) state(name string) ateapi.ActorState {
 	return f.states[name]
 }
 
+func (f *fakeControlClient) GetAtespace(ctx context.Context, in *ateapi.GetAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name := in.GetAtespace().GetName()
+	f.record("GetAtespace", name)
+	if f.getAtespaceErr != nil {
+		return nil, f.getAtespaceErr
+	}
+	if !f.atespaces[name] {
+		return nil, status.Error(codes.NotFound, "no such atespace")
+	}
+	return &ateapi.Atespace{}, nil
+}
+
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("CreateAtespace", in.GetAtespace().GetMetadata().GetName())
+	name := in.GetAtespace().GetMetadata().GetName()
+	f.record("CreateAtespace", name)
 	if f.atespaceErr != nil {
 		return nil, f.atespaceErr
 	}
+	f.atespaces[name] = true
 	return &ateapi.Atespace{}, nil
 }
 
@@ -300,6 +322,64 @@ func TestStartFailsWhenTheAtespaceCannotBeEnsured(t *testing.T) {
 	r := newTestRuntime(fake)
 	if err := r.start(context.Background()); err == nil {
 		t.Fatal("start succeeded without an atespace")
+	}
+}
+
+func TestStartGetAtespace(t *testing.T) {
+	tests := []struct {
+		name           string
+		atespaceExists bool
+		getErr         error
+		wantErrCode    codes.Code
+		wantCreates    []string
+		wantGetFail    float64
+	}{
+		{
+			name:           "existing atespace skips create",
+			atespaceExists: true,
+			wantErrCode:    codes.OK,
+		},
+		{
+			name:        "missing atespace creates without recording get failure",
+			wantErrCode: codes.OK,
+			wantCreates: []string{"bench"},
+		},
+		{
+			name:        "get error skips create",
+			getErr:      status.Error(codes.PermissionDenied, "denied"),
+			wantErrCode: codes.PermissionDenied,
+			wantGetFail: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFake()
+			if tc.atespaceExists {
+				fake.atespaces["bench"] = true
+			}
+			fake.getAtespaceErr = tc.getErr
+			failBefore := requestCount(t, "GetAtespace", "failure")
+
+			r := newTestRuntime(fake)
+			err := r.start(context.Background())
+			if tc.wantErrCode == codes.OK {
+				if err != nil {
+					t.Fatalf("start: %v", err)
+				}
+			} else if status.Code(err) != tc.wantErrCode {
+				t.Fatalf("start err = %v, want %v", err, tc.wantErrCode)
+			}
+			if got := fake.callsTo("GetAtespace"); !slices.Equal(got, []string{"bench"}) {
+				t.Errorf("GetAtespace calls: got %v, want [bench]", got)
+			}
+			if got := fake.callsTo("CreateAtespace"); !slices.Equal(got, tc.wantCreates) {
+				t.Errorf("CreateAtespace calls: got %v, want %v", got, tc.wantCreates)
+			}
+			if got := requestCount(t, "GetAtespace", "failure") - failBefore; got != tc.wantGetFail {
+				t.Errorf("GetAtespace failures grew by %v, want %v", got, tc.wantGetFail)
+			}
+		})
 	}
 }
 

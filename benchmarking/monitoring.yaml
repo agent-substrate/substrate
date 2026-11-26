@@ -199,6 +199,23 @@ data:
             action: replace
             target_label: pod
 
+      # ate-api-server exports OpenFGA datastore metrics on port 9090.
+      - job_name: 'ate-api-server'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ate-system
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_label_app
+              - __meta_kubernetes_pod_container_port_number
+            action: keep
+            regex: ate-api-server;9090
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
       # The container memory directly from the cAdvisor endpoint of the
       # kubelet. `kubectl top` reads metrics-server, which reports an average
       # across its own window and hides short peaks.
