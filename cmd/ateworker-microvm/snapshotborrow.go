@@ -31,7 +31,7 @@ import (
 // unbookedMemory is the worker's reported memory capacity less what its
 // actors booked, overhead included.
 func (s *AteWorkerService) unbookedMemory(podLimit int64) int64 {
-	unbooked := podLimit - memoryReservedBytes
+	unbooked := podLimit - s.memoryReservedBytes
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	for _, h := range s.actors {

@@ -22,22 +22,26 @@ import (
 )
 
 // checkpointWriteHeadroom is how far a checkpoint's page cache may grow when
-// the actor's booking leaves less than that, and checkpointWriteSlots how many
-// checkpoints may write at once. memoryReservedBytes covers both.
+// the actor's booking leaves less than that, and defaultCheckpointWriteSlots
+// is the default --snapshot-write-slots. reservedMemoryBytes covers both.
 const (
-	checkpointWriteHeadroom = 16 << 20
-	checkpointWriteSlots    = 2
+	checkpointWriteHeadroom     = 16 << 20
+	defaultCheckpointWriteSlots = 2
 )
 
-// memoryReservedBytes is what the worker keeps from actors: its own process,
+const workerProcessMemoryReservedBytes = 32 << 20
+
+// reservedMemoryBytes is what the worker keeps from actors: its own process,
 // and the page cache of the checkpoints it lets write at once, which leaves
 // the actor's cgroup with its sentry (see isolateCheckpointCache).
-const memoryReservedBytes = 32<<20 + checkpointWriteSlots*checkpointWriteHeadroom
+func reservedMemoryBytes(slots int) int64 {
+	return workerProcessMemoryReservedBytes + int64(slots)*checkpointWriteHeadroom
+}
 
 // unbookedMemory is the worker's reported memory capacity less what its
 // actors booked.
 func (s *AteWorkerService) unbookedMemory(podLimit int64) int64 {
-	unbooked := podLimit - memoryReservedBytes
+	unbooked := podLimit - s.memoryReservedBytes
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	for _, h := range s.actors {
