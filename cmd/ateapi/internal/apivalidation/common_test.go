@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/preview"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -75,4 +76,51 @@ func selectorLabelsOfSize(n int) map[string]string {
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
+}
+
+// labelsOfBytes returns 16 valid labels totaling 1024+extra key and value bytes.
+func labelsOfBytes(extra int) map[string]string {
+	labels := make(map[string]string, 16)
+	for i := range 16 {
+		labels[fmt.Sprintf("k%03d", i)] = strings.Repeat("v", 60)
+	}
+	labels["k000"] = strings.Repeat("v", 60+extra)
+	return labels
+}
+
+func TestValidateCustom_ResourceMetadata_Labels(t *testing.T) {
+	fldPath := field.NewPath("metadata", "labels")
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   field.ErrorList
+	}{{
+		name: "none",
+	}, {
+		name:   "valid",
+		labels: map[string]string{"app": "billing", "example.com/team": "payments"},
+	}, {
+		name:   "ate.dev key is reserved",
+		labels: map[string]string{"ate.dev/agent": "a"},
+		want:   field.ErrorList{field.Invalid(fldPath, "ate.dev/agent", "")},
+	}, {
+		name:   "ate.dev subdomain key is reserved",
+		labels: map[string]string{"egress.ate.dev/agent": "a"},
+		want:   field.ErrorList{field.Invalid(fldPath, "egress.ate.dev/agent", "")},
+	}, {
+		name:   "a domain ending in ate.dev without the dot is not reserved",
+		labels: map[string]string{"private.dev/agent": "a", "notate.dev/agent": "a"},
+	}, {
+		name:   "exactly the size cap",
+		labels: labelsOfBytes(0),
+	}, {
+		name:   "over the size cap",
+		labels: labelsOfBytes(1),
+		want:   field.ErrorList{field.TooLong(fldPath, 1025, 1024)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateCustom_ResourceMetadata_Labels(t.Context(), operation.Operation{Type: operation.Create}, fldPath, tt.labels, nil), tt.want)
+		})
+	}
 }
