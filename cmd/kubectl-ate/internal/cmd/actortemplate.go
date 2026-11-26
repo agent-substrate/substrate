@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,8 +24,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
-	"google.golang.org/protobuf/encoding/protojson"
-	"sigs.k8s.io/yaml"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -92,13 +93,16 @@ var getActorTemplatesCmd = &cobra.Command{
 
 var createActorTemplateCmd = &cobra.Command{
 	Use:   "actor-template -f <manifest>",
-	Short: "Create an actor template from a manifest",
-	Long: `Create an actor template from a manifest file.
+	Short: "Create actor templates from a manifest",
+	Long: `Create one or more actor templates from a manifest file.
 
-The manifest is a single YAML (or JSON) document holding one ateapi.ActorTemplate
-message in its protojson form, exactly as printed by
+The manifest is a JSON file holding one ateapi.ActorTemplate, or a YAML file
+holding one or more documents separated by "---". Each document holds one
+ateapi.ActorTemplate in its protojson form, exactly as printed by
 "kubectl ate get actor-template <name> -a <atespace> -o yaml".
-The template's atespace and name come from the manifest's metadata.
+Every document is created; a failure on one does not stop the rest, and all
+errors are reported at the end.
+Each template's atespace and name come from its own metadata.
 The atespace must already exist.
 
 Actor templates are immutable: there is no update; delete and recreate to change one.`,
@@ -108,7 +112,7 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		if err != nil {
 			return err
 		}
-		template, err := actorTemplateFromManifest(data)
+		documents, err := actorTemplatesFromManifest(data)
 		if err != nil {
 			return fmt.Errorf("failed to parse actor template manifest %q: %w", createActorTemplateFilenameFlag, err)
 		}
@@ -120,11 +124,13 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: template})
-		if err != nil {
-			return fmt.Errorf("failed to create actor template: %w", err)
+		runner := &createActorTemplatesRunner{
+			creator:   apiClient,
+			documents: documents,
+			outputFmt: outputFmt,
+			stdout:    cmd.OutOrStdout(),
 		}
-		return printer.PrintActorTemplateTo(cmd.OutOrStdout(), resp, outputFmt)
+		return runner.Run(ctx)
 	},
 }
 
@@ -155,22 +161,86 @@ The server also deletes the template's golden actor and golden snapshot.`,
 	},
 }
 
-// actorTemplateFromManifest parses a single protojson-shaped YAML or JSON
-// document into an ActorTemplate. Parsing is strict: unknown fields are an
-// error, so typos don't silently drop configuration.
-func actorTemplateFromManifest(data []byte) (*ateapi.ActorTemplate, error) {
-	jsonData, err := yaml.YAMLToJSON(data)
+// actorTemplateCreator abstracts CreateActorTemplate RPC calls.
+type actorTemplateCreator interface {
+	CreateActorTemplate(ctx context.Context, req *ateapi.CreateActorTemplateRequest, opts ...grpc.CallOption) (*ateapi.ActorTemplate, error)
+}
+
+// actorTemplateDocument is one document of an actor-template manifest.
+type actorTemplateDocument struct {
+	// index is the 1-based position of the document in the manifest.
+	index    int
+	template *ateapi.ActorTemplate
+}
+
+// createActorTemplatesRunner creates each template in order, continuing past
+// failures and reporting them together, the way kubectl creates the resources
+// in a multi-document manifest.
+type createActorTemplatesRunner struct {
+	creator   actorTemplateCreator
+	documents []actorTemplateDocument
+	outputFmt string
+	stdout    io.Writer
+}
+
+func (r *createActorTemplatesRunner) Run(ctx context.Context) error {
+	var created []*ateapi.ActorTemplate
+	var errs []error
+	for _, doc := range r.documents {
+		c, err := r.creator.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: doc.template})
+		if err != nil {
+			errs = append(errs, r.createError(doc, err))
+			continue
+		}
+		created = append(created, c)
+	}
+	// Print what was created: a manifest holding a single document prints one
+	// template and a multi-document manifest prints a list, so a partial
+	// failure does not change the output schema.
+	switch {
+	case len(created) == 0:
+	case len(r.documents) == 1:
+		errs = append(errs, printer.PrintActorTemplateTo(r.stdout, created[0], r.outputFmt))
+	default:
+		errs = append(errs, printer.PrintActorTemplatesTo(r.stdout, created, r.outputFmt))
+	}
+	return errors.Join(errs...)
+}
+
+// createError names the template a failure came from, and the document it was
+// read from when the manifest holds more than one or metadata is incomplete.
+func (r *createActorTemplatesRunner) createError(doc actorTemplateDocument, err error) error {
+	metadata := doc.template.GetMetadata()
+	what := "actor template"
+	switch {
+	case metadata.GetAtespace() != "" && metadata.GetName() != "":
+		what = fmt.Sprintf("actor template %q in atespace %q", metadata.GetName(), metadata.GetAtespace())
+	case metadata.GetName() != "":
+		what = fmt.Sprintf("actor template %q", metadata.GetName())
+	}
+	err = fmt.Errorf("failed to create %s: %w", what, err)
+	if len(r.documents) > 1 || metadata.GetName() == "" || metadata.GetAtespace() == "" {
+		err = fmt.Errorf("document %d: %w", doc.index, err)
+	}
+	return err
+}
+
+// actorTemplatesFromManifest parses every protojson-shaped YAML or JSON
+// document in data into an ActorTemplate. Parsing is strict: unknown fields
+// are an error. Empty documents are skipped, the way kubectl skips them.
+func actorTemplatesFromManifest(data []byte) ([]actorTemplateDocument, error) {
+	docs, err := manifestMessages(data, &ateapi.ActorTemplate{})
 	if err != nil {
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	if string(jsonData) == "null" {
-		return nil, fmt.Errorf("manifest is empty")
-	}
-	template := &ateapi.ActorTemplate{}
-	if err := protojson.Unmarshal(jsonData, template); err != nil {
 		return nil, err
 	}
-	return template, nil
+	templates := make([]actorTemplateDocument, len(docs))
+	for i, doc := range docs {
+		templates[i] = actorTemplateDocument{
+			index:    doc.Index,
+			template: doc.Message.(*ateapi.ActorTemplate),
+		}
+	}
+	return templates, nil
 }
 
 // readFileOrStdin reads the manifest from path, or from in when path is "-".
@@ -186,7 +256,7 @@ func init() {
 	getActorTemplatesCmd.Flags().BoolVarP(&getActorTemplateAllAtespacesFlag, "all-atespaces", "A", false, "get actor-templates across all atespaces (mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorTemplatesCmd)
 
-	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "manifest file holding a single JSON or YAML actor-template document, or - for stdin")
+	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "manifest file holding one actor-template as JSON, or one or more as YAML documents separated by ---, or - for stdin")
 	createCmd.AddCommand(createActorTemplateCmd)
 
 	deleteActorTemplateCmd.Flags().StringVarP(&deleteActorTemplateAtespaceFlag, "atespace", "a", "", "the actor-template's atespace")

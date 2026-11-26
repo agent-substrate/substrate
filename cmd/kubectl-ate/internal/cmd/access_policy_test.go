@@ -94,6 +94,7 @@ bindings: [{role: owner, members: ["user:alice"]}]
 		{name: "atespace set", manifest: "metadata: {atespace: team-a}\n", wantErr: "metadata.atespace must be empty"},
 		{name: "unknown field", manifest: "bindingz: []\n", wantErr: "invalid AccessPolicy"},
 		{name: "empty", manifest: "", wantErr: "manifest is empty"},
+		{name: "two documents", manifest: "bindings: []\n---\nbindings: []\n", wantErr: "manifest holds more than one document"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
