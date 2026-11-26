@@ -272,8 +272,9 @@ func TestCreateActorTemplatesRunner(t *testing.T) {
 		// outputFmt is the -o format; empty means yaml.
 		outputFmt string
 		// wantStdout and wantNoStdout are substrings of the printed output.
-		wantStdout   []string
-		wantNoStdout []string
+		wantStdout      []string
+		wantNoStdout    []string
+		wantEmptyStdout bool
 	}{
 		{
 			name:       "single document prints one template",
@@ -291,14 +292,14 @@ func TestCreateActorTemplatesRunner(t *testing.T) {
 		},
 		{
 			name:      "partial failure still prints a list",
-			documents: []actorTemplateDocument{mkDocument(1, "a", "one"), mkDocument(2, "a", "two"), mkDocument(3, "a", "three")},
+			documents: []actorTemplateDocument{mkDocument(1, "a", "one"), mkDocument(2, "a", "two")},
 			fail:      map[string]error{"two": status.Error(codes.AlreadyExists, "already exists")},
-			wantCalls: []string{"one", "two", "three"},
+			wantCalls: []string{"one", "two"},
 			wantErrs: []string{
 				`document 2: failed to create actor template "two" in atespace "a"`,
 				"already exists",
 			},
-			wantStdout:   []string{"actorTemplates:", "one", "three"},
+			wantStdout:   []string{"actorTemplates:", "one"},
 			wantNoStdout: []string{"two"},
 		},
 		{
@@ -313,7 +314,7 @@ func TestCreateActorTemplatesRunner(t *testing.T) {
 				`document 1: failed to create actor template "one" in atespace "a"`,
 				`document 2: failed to create actor template "two" in atespace "a"`,
 			},
-			wantNoStdout: []string{"actorTemplates:", "metadata"},
+			wantEmptyStdout: true,
 		},
 		{
 			name:       "table output prints a header and a row per template",
@@ -323,6 +324,13 @@ func TestCreateActorTemplatesRunner(t *testing.T) {
 			wantStdout: []string{"ATESPACE", "NAME", "one", "two"},
 			// The table renderer is the list renderer, not the response message.
 			wantNoStdout: []string{"actorTemplates:"},
+		},
+		{
+			name:      "single document with missing metadata names the document",
+			documents: []actorTemplateDocument{{index: 1, template: &ateapi.ActorTemplate{}}},
+			fail:      map[string]error{"": status.Error(codes.InvalidArgument, "metadata is required")},
+			wantCalls: []string{""},
+			wantErrs:  []string{"document 1: failed to create actor template", "metadata is required"},
 		},
 		{
 			name: "missing metadata names the document",
@@ -374,6 +382,9 @@ func TestCreateActorTemplatesRunner(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.wantCalls, creator.got); diff != "" {
 				t.Errorf("create calls mismatch (-want +got):\n%s", diff)
+			}
+			if tt.wantEmptyStdout && stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
 			}
 			for _, want := range tt.wantStdout {
 				if !strings.Contains(stdout.String(), want) {

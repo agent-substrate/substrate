@@ -208,7 +208,7 @@ func (r *createActorTemplatesRunner) Run(ctx context.Context) error {
 }
 
 // createError names the template a failure came from, and the document it was
-// read from when the manifest holds more than one.
+// read from when the manifest holds more than one or metadata is incomplete.
 func (r *createActorTemplatesRunner) createError(doc actorTemplateDocument, err error) error {
 	metadata := doc.template.GetMetadata()
 	what := "actor template"
@@ -219,7 +219,7 @@ func (r *createActorTemplatesRunner) createError(doc actorTemplateDocument, err 
 		what = fmt.Sprintf("actor template %q", metadata.GetName())
 	}
 	err = fmt.Errorf("failed to create %s: %w", what, err)
-	if len(r.documents) > 1 {
+	if len(r.documents) > 1 || metadata.GetName() == "" || metadata.GetAtespace() == "" {
 		err = fmt.Errorf("document %d: %w", doc.index, err)
 	}
 	return err
