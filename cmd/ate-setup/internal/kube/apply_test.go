@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -80,8 +81,8 @@ func (s *stubResource) Delete(context.Context, string, metav1.DeleteOptions, ...
 	return nil
 }
 
-func (s *stubResource) Get(context.Context, string, metav1.GetOptions, ...string) (*unstructured.Unstructured, error) {
-	return nil, nil
+func (s *stubResource) Get(_ context.Context, name string, _ metav1.GetOptions, _ ...string) (*unstructured.Unstructured, error) {
+	return nil, apierrors.NewNotFound(schema.GroupResource{}, name)
 }
 
 func testConfigMap() *unstructured.Unstructured {
@@ -156,5 +157,25 @@ func TestApplyWithRetryStopsOnCancellation(t *testing.T) {
 	}
 	if ri.attempts != 1 {
 		t.Errorf("apply attempted %d times, want 1", ri.attempts)
+	}
+}
+
+// A Job whose pod template changed is deleted and applied again, since the
+// apiserver rejects any change to the template.
+func TestApplyWithRetryReplacesJobWithChangedTemplate(t *testing.T) {
+	shortApplyBackoff(t)
+	job := &unstructured.Unstructured{}
+	job.SetKind("Job")
+	job.SetName("rustfs-bucket-init")
+	ri := &stubResource{results: []error{
+		apierrors.NewInvalid(schema.GroupKind{Group: "batch", Kind: "Job"}, job.GetName(),
+			field.ErrorList{field.Invalid(field.NewPath("spec", "template"), nil, "field is immutable")}),
+	}}
+
+	if err := applyWithRetry(t.Context(), ri, job); err != nil {
+		t.Fatalf("applyWithRetry() error = %v, want the Job replaced", err)
+	}
+	if ri.attempts != 2 {
+		t.Errorf("apply attempted %d times, want 2", ri.attempts)
 	}
 }

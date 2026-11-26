@@ -98,17 +98,41 @@ func applyWithRetry(ctx context.Context, ri dynamicResource, obj *unstructured.U
 		// A cancelled context will not get better by being asked again.
 		return ctx.Err() == nil && retryableApplyError(err)
 	}
-	err := retry.OnError(applyBackoff, retryable, func() error {
+	apply := func() error {
 		_, err := ri.Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{
 			FieldManager: FieldManager,
 			Force:        true,
 		})
 		return err
-	})
+	}
+	err := retry.OnError(applyBackoff, retryable, apply)
+	cause, ok := apierrors.StatusCause(err, metav1.CauseTypeFieldValueInvalid)
+	if obj.GetKind() == "Job" && ok && cause.Field == "spec.template" {
+		// A Job's pod template can't change, so replace the Job.
+		if err = deleteAndWait(ctx, ri, obj.GetName()); err == nil {
+			err = retry.OnError(applyBackoff, retryable, apply)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("while applying %s: %w", Describe(obj), err)
 	}
 	return nil
+}
+
+// deleteAndWait deletes name in the foreground and waits until it is gone.
+func deleteAndWait(ctx context.Context, ri dynamicResource, name string) error {
+	foreground := metav1.DeletePropagationForeground
+	err := ri.Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &foreground})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return poll(ctx, 2*time.Minute, func(ctx context.Context) (bool, error) {
+		_, err := ri.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	})
 }
 
 // retryableApplyError reports whether a failed apply is worth re-sending.
