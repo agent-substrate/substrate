@@ -160,7 +160,7 @@ func TestStartRootfsContainerClosesStdin(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err := ac.StartRootfsContainer(ctx, "c1", &specs.Spec{})
+			err := ac.StartRootfsContainer(ctx, "c1", &specs.Spec{}, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("StartRootfsContainer() = %v, want error: %t", err, tt.wantErr)
 			}

@@ -29,6 +29,7 @@ import (
 const (
 	testRestoreStateDir = "restore-state"
 	testRootfsUpperTar  = "rootfs-upper-app.tar"
+	testRootfsUpperDisk = "rootfs-disk-app.ext4"
 	testDurableDirTar   = "durable-dir-data.tar"
 )
 
@@ -37,7 +38,7 @@ func TestDropStagedMemoryImage(t *testing.T) {
 	if err := os.MkdirAll(restoreDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	stagedFiles := []string{memoryRangesFile, testRootfsUpperTar, testDurableDirTar}
+	stagedFiles := []string{memoryRangesFile, testRootfsUpperTar, testRootfsUpperDisk, testDurableDirTar}
 	for _, name := range stagedFiles {
 		if err := os.WriteFile(filepath.Join(restoreDir, name), []byte("staged data"), 0o600); err != nil {
 			t.Fatal(err)
@@ -88,25 +89,25 @@ func TestIsSnapshotDataFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{memoryRangesFile, testRootfsUpperTar, "config.json"} {
+	for _, name := range []string{memoryRangesFile, testRootfsUpperTar, testRootfsUpperDisk, "config.json"} {
 		if err := os.WriteFile(filepath.Join(restoreDir, name), []byte("data"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Eager mode (includeMemory=true): both memory-ranges and .tar are matched.
+	// Eager mode (includeMemory=true): memory-ranges, .tar, and .ext4 are matched.
 	targetsEager := snapshotcache.FindFiles(restoreDir, func(name string) bool {
 		return isSnapshotDataFile(name, true)
 	})
-	if len(targetsEager) != 2 {
-		t.Fatalf("FindFiles(includeMemory=true) returned %d targets, want 2", len(targetsEager))
+	if len(targetsEager) != 3 {
+		t.Fatalf("FindFiles(includeMemory=true) returned %d targets, want 3", len(targetsEager))
 	}
 
-	// OnDemand mode (includeMemory=false): memory-ranges is excluded, only .tar is matched.
+	// OnDemand mode (includeMemory=false): memory-ranges is excluded, .tar and .ext4 are matched.
 	targetsOnDemand := snapshotcache.FindFiles(restoreDir, func(name string) bool {
 		return isSnapshotDataFile(name, false)
 	})
-	if len(targetsOnDemand) != 1 || filepath.Base(targetsOnDemand[0].Path) != testRootfsUpperTar {
-		t.Fatalf("FindFiles(includeMemory=false) returned %+v, want only %s", targetsOnDemand, testRootfsUpperTar)
+	if len(targetsOnDemand) != 2 {
+		t.Fatalf("FindFiles(includeMemory=false) returned %+v, want %s and %s", targetsOnDemand, testRootfsUpperTar, testRootfsUpperDisk)
 	}
 }

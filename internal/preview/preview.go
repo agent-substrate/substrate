@@ -56,6 +56,10 @@ const (
 	// GateIngressCache controls whether the ingress router caches actor to
 	// worker bindings and routes cache hits around ext_proc.
 	GateIngressCache Gate = "IngressCache"
+
+	// GateRootfsUpperDisks controls whether a microVM worker puts a cold-booted
+	// container's writable rootfs upper on its own virtio-blk ext4 disk.
+	GateRootfsUpperDisks Gate = "RootfsUpperDisks"
 )
 
 // All is the pseudo-gate name that enables every known gate.
@@ -68,6 +72,7 @@ var realKnownGates = []Gate{
 	GateGoldenEgressPolicy,
 	GatePerTemplateSnapshotLocation,
 	GateIngressCache,
+	GateRootfsUpperDisks,
 }
 
 var globalKnownGates []Gate           // all known gates

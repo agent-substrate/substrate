@@ -19,7 +19,8 @@
 # resolves it as its class default (or names it via configRef: microvm), so a
 # missing/stale config shows on the pool's status.
 #
-# The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
+# The sandbox assets (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs,
+# upper disk image)
 # are FETCHED at runtime from the asset bucket ${ASSET_BUCKET_NAME} under
 # microvm-assets/<arch>/<sha256> (the rustfs bucket on kind, its own GCS
 # bucket on GKE), through the node's object-store plugin - NOT baked into the
@@ -61,6 +62,11 @@ spec:
         kata-image:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97"
           sha256: "69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97"
+        # The empty ext4 image the RootfsUpperDisks preview gate copies for each
+        # container's rootfs upper (hack/upper-disk-image.sh).
+        rootfs-upper-disk:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/5faa52d6f283c021010bae89f0d7ef665610b3c3b974b0bd505a1cbdec12ff8d"
+          sha256: "5faa52d6f283c021010bae89f0d7ef665610b3c3b974b0bd505a1cbdec12ff8d"
       amd64:
         cloud-hypervisor:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
@@ -74,3 +80,8 @@ spec:
         kata-image:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d"
           sha256: "6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d"
+        # The empty ext4 image the RootfsUpperDisks preview gate copies for each
+        # container's rootfs upper (hack/upper-disk-image.sh).
+        rootfs-upper-disk:
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/5faa52d6f283c021010bae89f0d7ef665610b3c3b974b0bd505a1cbdec12ff8d"
+          sha256: "5faa52d6f283c021010bae89f0d7ef665610b3c3b974b0bd505a1cbdec12ff8d"

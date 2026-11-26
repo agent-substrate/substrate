@@ -106,7 +106,7 @@ def main():
         filename = os.path.basename(filepath)
 
         # Skip non-source-code files
-        if ext in ['.md', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.json', '.pdf', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.svg']:
+        if ext in ['.md', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.json', '.pdf', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.svg', '.zst']:
             continue
         if filename in ['LICENSE', 'NOTICE', 'CODEOWNERS', 'CNAME', '.gitignore', 'go.mod', 'go.sum', 'Cargo.lock']:
             continue

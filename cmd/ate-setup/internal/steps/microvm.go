@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"fmt"
 	"io"
 	"io/fs"
@@ -76,20 +77,31 @@ const (
 	kataLibexecVirtiofsd = "opt/kata/libexec/virtiofsd"
 
 	maxMicroVMAssetBytes int64 = 8 << 30
+
+	// upperDiskAsset is the empty ext4 image the RootfsUpperDisks preview gate
+	// copies for each container's rootfs upper.
+	upperDiskAsset = "upper-disk.ext4.zst"
 )
+
+// upperDiskImage is built by hack/upper-disk-image.sh. It is the same for
+// every arch.
+//
+//go:embed upper-disk.ext4.zst
+var upperDiskImage []byte
 
 var (
 	microvmArches = []string{"amd64", "arm64"}
-	microvmAssets = []string{"cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img"}
+	microvmAssets = []string{"cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img", upperDiskAsset}
 
 	// microvmTemplateAssetFiles maps each asset key in
 	// manifests/ate-install/sandboxconfig-microvm.yaml.tmpl to the local file
 	// name assembled under bin/microvm-assets/<arch>/.
 	microvmTemplateAssetFiles = map[string]string{
-		"cloud-hypervisor": "cloud-hypervisor",
-		"virtiofsd":        "virtiofsd",
-		"kata-kernel":      "vmlinux",
-		"kata-image":       "rootfs.img",
+		"cloud-hypervisor":  "cloud-hypervisor",
+		"virtiofsd":         "virtiofsd",
+		"kata-kernel":       "vmlinux",
+		"kata-image":        "rootfs.img",
+		"rootfs-upper-disk": upperDiskAsset,
 	}
 )
 
@@ -327,8 +339,8 @@ func cloudHypervisorAssetName(arch string) (string, error) {
 }
 
 func microvmAssetStamp(arch, kataVer, chVer string) string {
-	return fmt.Sprintf("arch=%s\nkata=%s\ncloud-hypervisor=%s\n",
-		arch, kataVer, chVer)
+	return fmt.Sprintf("arch=%s\nkata=%s\ncloud-hypervisor=%s\nupper-disk=%x\n",
+		arch, kataVer, chVer, sha256.Sum256(upperDiskImage))
 }
 
 func checkMicroVMAssets(outDir string) error {
@@ -390,8 +402,9 @@ func microvmAssetsNeedAssemble(outDir, wantStamp string, digests map[string]stri
 }
 
 // assembleMicroVMAssets downloads the Kata static tarball and Cloud Hypervisor
-// binary for arch from releaseBaseURL into outDir, verifies the SHA-256 digests
-// against digests, and writes the .asset-versions stamp last.
+// binary for arch from releaseBaseURL into outDir, writes upperDiskImage,
+// verifies the SHA-256 digests against digests, and writes the .asset-versions
+// stamp last.
 func assembleMicroVMAssets(ctx context.Context, releaseBaseURL, outDir, arch, kataVer, chVer string, digests map[string]string) error {
 	chAsset, err := cloudHypervisorAssetName(arch)
 	if err != nil {
@@ -427,6 +440,9 @@ func assembleMicroVMAssets(ctx context.Context, releaseBaseURL, outDir, arch, ka
 		return err
 	}
 	if err := os.Rename(chTmp, filepath.Join(outDir, "cloud-hypervisor")); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, upperDiskAsset), upperDiskImage, 0o644); err != nil {
 		return err
 	}
 
