@@ -131,7 +131,23 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 			}
 		}
 	}
-	configVars := cloudSQLEnvVars(cloudsql)
+	configVars := e.apiServerConfigVars(readWriteRole, ownerRole, poolMaxConns, snapshotLocation)
+	maps.Copy(configVars, cloudSQLEnvVars(cloudsql))
+	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
+		return err
+	}
+	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars,
+		buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema)); err != nil {
+		return err
+	}
+	return e.applyPostgresServerCA(ctx)
+}
+
+// apiServerConfigVars is the ate-api-server-envvars ConfigMap payload without
+// the Cloud SQL settings, which only CreateAPIServerEnvVars adds. render ate-system
+// writes this payload, and Cloud SQL is not part of the core install.
+func (e *Env) apiServerConfigVars(readWriteRole, ownerRole, poolMaxConns, snapshotLocation string) map[string]string {
+	configVars := map[string]string{}
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	if poolMaxConns != "" {
@@ -144,14 +160,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if snapshotLocation != "" {
 		configVars["ATE_API_SNAPSHOT_LOCATION"] = snapshotLocation
 	}
-	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
-		return err
-	}
-	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars,
-		buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema)); err != nil {
-		return err
-	}
-	return e.applyPostgresServerCA(ctx)
+	return configVars
 }
 
 // UpdateAPIServerEnvVars is CreateAPIServerEnvVars for an install that is not
@@ -351,6 +360,15 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err != nil {
 		return err
 	}
+	if err := e.setAPIServerDeploymentFields(objs, hash); err != nil {
+		return err
+	}
+	return e.Kube.Apply(ctx, objs)
+}
+
+// setAPIServerDeploymentFields stamps the environment digest and sets the
+// authorization flags on the ate-api-server Deployment in objs.
+func (e *Env) setAPIServerDeploymentFields(objs []*unstructured.Unstructured, hash string) error {
 	if err := stampAPIServerEnvHash(objs, hash); err != nil {
 		return err
 	}
@@ -363,7 +381,7 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
 		log.Warnf("%s", msg)
 	}
-	return e.Kube.Apply(ctx, objs)
+	return nil
 }
 
 // apiServerAuthzFlag is the ate-api-server flag setAPIServerAuthzArgs owns.
