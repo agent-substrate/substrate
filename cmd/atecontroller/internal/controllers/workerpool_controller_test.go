@@ -17,12 +17,14 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -38,6 +40,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +59,9 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// m.Run redirects os.Stderr in JSON mode while background controllers log.
+	klog.SetLogger(logr.FromSlogHandler(slog.NewTextHandler(os.Stdout, nil)))
+
 	var stopEnv func()
 	cfg, stopEnv = testenv.Start()
 

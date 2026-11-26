@@ -41,6 +41,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
 	"go.ate.dev/substrate/internal/apiconfig"
 	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/cachesync"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
@@ -65,12 +66,16 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 )
 
 // maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
 const maxRPCDeadline = 10 * time.Minute
 
 const minResyncInterval = 250 * time.Millisecond
+
+// cacheSyncTimeout bounds the startup wait for required Kubernetes caches.
+const cacheSyncTimeout = time.Minute
 
 var (
 	configFile = pflag.String("config-file", "", "API server config file")
@@ -295,9 +300,9 @@ func main() {
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	ateletPodInformerFactory.WaitForCacheSync(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
-	scInformerFactory.WaitForCacheSync(stopCh)
+	if err := cachesync.WaitForCacheSync(shutdownCtx, cacheSyncTimeout, requiredKubernetesCaches(ateletPodInformer, ateFactory, scInformerFactory)); err != nil {
+		serverboot.Fatal(ctx, "Failed to sync required Kubernetes caches", err)
+	}
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
@@ -597,6 +602,14 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 		}
 	}
 	return nil, fmt.Errorf("connect to PostgreSQL after %d attempts: %w", postgresConnectTries, connectErr)
+}
+
+func requiredKubernetesCaches(ateletPods cache.SharedIndexInformer, ateFactory externalversions.SharedInformerFactory, scFactory informers.SharedInformerFactory) map[string]cache.InformerSynced {
+	return map[string]cache.InformerSynced{
+		"atelet Pods":      ateletPods.HasSynced,
+		"CSIDriverConfigs": ateFactory.Ate().V1().CSIDriverConfigs().Informer().HasSynced,
+		"StorageClasses":   scFactory.Storage().V1().StorageClasses().Informer().HasSynced,
+	}
 }
 
 // newKubeClients builds the standard Kubernetes clientset and the ate
