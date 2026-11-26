@@ -179,7 +179,7 @@ func TestPullRewritesRecordEvictedMidPull(t *testing.T) {
 	}
 	// And the record must actually reach the layers: a cache probe sees a
 	// complete image.
-	cached, err := store.cachedImage(img.Digest)
+	cached, err := store.cachedImage(img.Digest, Form{})
 	if err != nil || cached == nil {
 		t.Fatalf("cachedImage after mid-pull eviction: %v, %v", cached, err)
 	}
@@ -367,7 +367,7 @@ func TestInterruptedPullLeavesResumableRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureImage retry: %v", err)
 	}
-	cached, err := store.cachedImage(img.Digest)
+	cached, err := store.cachedImage(img.Digest, Form{})
 	if err != nil || cached == nil {
 		t.Fatalf("no complete cachedImage after retry: %v, %v", cached, err)
 	}

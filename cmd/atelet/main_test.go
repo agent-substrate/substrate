@@ -258,7 +258,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}
 
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec)
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -288,18 +288,20 @@ func TestPrepareOCIBundlesResolvesUsers(t *testing.T) {
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
 
 	spec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: app}}}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec)
-	if err != nil {
-		t.Fatalf("prepareOCIBundles: %v", err)
-	}
-	want := &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65532, AdditionalGids: []uint32{44}}
-	if diff := cmp.Diff(want, got[0].GetUser(), protocmp.Transform()); diff != "" {
-		t.Errorf("app user mismatch (-want +got):\n%s", diff)
+	for _, form := range []imagecache.Form{{}, {EROFS: true}} {
+		got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, form)
+		if err != nil {
+			t.Fatalf("prepareOCIBundles(form=%+v): %v", form, err)
+		}
+		want := &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65532, AdditionalGids: []uint32{44}}
+		if diff := cmp.Diff(want, got[0].GetUser(), protocmp.Transform()); diff != "" {
+			t.Errorf("app user mismatch (form=%+v) (-want +got):\n%s", form, diff)
+		}
 	}
 
 	unresolvable := pushTestImageWithConfig(t, host+"/nobody:v1", v1.Config{User: "nobody", Cmd: []string{"/bin/app"}})
 	spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: unresolvable}}}
-	if _, err := s.prepareOCIBundles(t.Context(), "actor-uid-2", resources.ActorRef{}, spec); err == nil {
+	if _, err := s.prepareOCIBundles(t.Context(), "actor-uid-2", resources.ActorRef{}, spec, imagecache.Form{}); err == nil {
 		t.Error("prepareOCIBundles succeeded with a USER the image has no passwd entry for, want an error")
 	}
 }
@@ -314,7 +316,7 @@ func TestPrepareOCIBundlesStartsInTheImageWorkdir(t *testing.T) {
 
 	const actorUID = "actor-uid-1"
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec)
+	got, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, imagecache.Form{})
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -1736,4 +1738,26 @@ func TestWorkerCallError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rootfsForm picks EROFS layer images for micro-VM actors whatever the flag,
+// follows --host-erofs-layers for gVisor actors, and fs/ trees for the rest.
+func TestRootfsForm(t *testing.T) {
+	for _, tc := range []struct {
+		class string
+		flag  bool
+		want  imagecache.Form
+	}{
+		{class: "microvm", want: imagecache.Form{EROFS: true}},
+		{class: "microvm", flag: true, want: imagecache.Form{EROFS: true}},
+		{class: "gvisor", want: imagecache.Form{}},
+		{class: "gvisor", flag: true, want: imagecache.Form{EROFS: true}},
+		{class: "", flag: true, want: imagecache.Form{}},
+	} {
+		*hostEROFSLayers = tc.flag
+		if got := rootfsForm(tc.class); got != tc.want {
+			t.Errorf("rootfsForm(%q) with --host-erofs-layers=%v = %+v, want %+v", tc.class, tc.flag, got, tc.want)
+		}
+	}
+	*hostEROFSLayers = false
 }
