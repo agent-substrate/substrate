@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -45,6 +46,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/pkg/objectstorage"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -745,6 +747,9 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("activation error = %v, want %q", err, tc.wantErr)
 			}
+			if tc.failure == "manifest" {
+				waitAssetFetch(t, s, rec)
+			}
 			if _, err := os.Lstat(ateletpath.SandboxAssetsStagingDir(actorUID)); !os.IsNotExist(err) {
 				t.Errorf("failed activation left the staging dir behind (lstat err = %v)", err)
 			}
@@ -1201,6 +1206,8 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			// The object store is empty: nothing was ever uploaded.
 			s := newPluginHerder(t, &recordingObjectStorage{})
 			s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+			// Asset staging runs alongside the manifest fetch.
+			s.anonGCSClient = fakeObjectStorage{data: release.tarball}
 			advertiseRuntime(t, s, rec)
 			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID,
@@ -1209,6 +1216,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 				Spec:           &ateletpb.WorkloadSpec{},
 				Snapshot:       lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 			})
+			waitAssetFetch(t, s, rec)
 			if code := apierror.Code(err); code != codes.NotFound {
 				t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
 			}
@@ -1220,6 +1228,63 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// gatedObjectStorage calls entered, if set, on each GetObject, and then holds
+// the call until gate is closed.
+type gatedObjectStorage struct {
+	objectstorage.ObjectStorage
+	gate    <-chan struct{}
+	entered func()
+}
+
+func (g gatedObjectStorage) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
+	if g.entered != nil {
+		g.entered()
+	}
+	select {
+	case <-g.gate:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return g.ObjectStorage.GetObject(ctx, bucket, object)
+}
+
+// TestRestoreManifestFailureStopsPrep checks that Restore fetches the manifest
+// while the image prep runs, and that a manifest failure returns without
+// waiting for the asset fetch the prep started. Without the overlap, the
+// manifest fetch waits for the asset fetch forever and the test times out.
+func TestRestoreManifestFailureStopsPrep(t *testing.T) {
+	const actorUID = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a66"
+	useTempNodeDirs(t)
+	release := newGVisorTestRelease(t)
+	rec := testSandboxRecord(release)
+
+	assetStarted := make(chan struct{})
+	releaseAsset := make(chan struct{})
+	// The manifest fetch answers NotFound only once the asset fetch has
+	// started, and the asset fetch holds until the test releases it.
+	s := newPluginHerder(t, gatedObjectStorage{ObjectStorage: &recordingObjectStorage{}, gate: assetStarted})
+	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+	s.anonGCSClient = gatedObjectStorage{
+		ObjectStorage: fakeObjectStorage{data: release.tarball},
+		gate:          releaseAsset,
+		entered:       sync.OnceFunc(func() { close(assetStarted) }),
+	}
+	advertiseRuntime(t, s, rec)
+
+	_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
+		Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID,
+		WorkerPodUid:   "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxRuntime: runtimeFor(t, rec),
+		Spec:           &ateletpb.WorkloadSpec{},
+		Snapshot:       lifecycleSnapshot(actorUID, "pause-snap-1", 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+	})
+	if code := apierror.Code(err); code != codes.NotFound {
+		t.Errorf("Restore error = %v (code %v), want NotFound", err, code)
+	}
+	close(releaseAsset)
+	waitAssetFetch(t, s, rec)
 }
 
 // TestTerminateWithoutWorkerPodUID verifies that Terminate with an empty
@@ -2837,6 +2902,16 @@ func TestPromoteSnapshotAfterDetach(t *testing.T) {
 
 // testSandboxRecord is the record of a gVisor runtime whose only asset is
 // release, as the syncer plans it from a SandboxConfig version.
+// waitAssetFetch stages rec's assets again after a restore that failed on its
+// manifest. That joins the asset fetch the restore left running detached, so
+// the fetch cannot write into the cache while the test cleans it up.
+func waitAssetFetch(t *testing.T, s *Atelet, rec *sandboxAssetsRecord) {
+	t.Helper()
+	if _, err := s.ensureSandboxAssets(t.Context(), rec, t.TempDir()); err != nil {
+		t.Fatalf("staging sandbox assets: %v", err)
+	}
+}
+
 func testSandboxRecord(release gvisorTestRelease) *sandboxAssetsRecord {
 	return &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
@@ -3883,6 +3958,7 @@ func TestRestoreLocalSnapshotFromEarlierBoot(t *testing.T) {
 		writeLocalSnapshot(t, localDir, baseManifest(), map[string]string{"checkpoint.img": "local-memory"})
 
 		_, err := s.Restore(t.Context(), restoreReq)
+		waitAssetFetch(t, s, sandboxRec)
 		if code := apierror.Code(err); code != codes.NotFound {
 			t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
 		}
