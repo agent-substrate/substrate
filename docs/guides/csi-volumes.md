@@ -118,6 +118,26 @@ volumeMounts:
 
 ---
 
+### Use an existing FUSE PVC on a dedicated microVM worker
+
+An operator can dedicate a worker Pod to one actor and provide a workspace
+from a Kubernetes PVC. Configure the worker Pod with both of the following:
+
+- Mount the FUSE-backed PVC at `/run/csgdrive-workspace` in the worker container.
+- Set `SUBSTRATE_WORKSPACE_ACTOR_UID` on that container to the actor's UID.
+  Select a dedicated WorkerPool for the actor so other actors can use their own workers.
+
+Set `snapshotConfig.goldenSnapshotConfig.mode` to `GOLDEN_SNAPSHOT_MODE_DISABLED`
+in the ActorTemplate so the first boot installs the workspace mount. Restoring
+a memory snapshot resumes the container with the mounts it had at suspend time.
+
+The worker checks the UID and the filesystem type before binding the volume
+into the guest through virtiofs. Every container of that actor sees the volume
+at `/workspace`. Reserve that path and its descendants in the container specs.
+Kubernetes manages the PVC and CSI mount. The operator supplies the Pod
+configuration, for example through admission. On resuming an existing
+memory snapshot, use the same workspace that the actor had when suspended.
+
 ## 4. End-to-End Example
 
 The following example demonstrates setting up an NFS CSI driver with Substrate and deploying an `ActorTemplate` that mounts an external NFS volume.
