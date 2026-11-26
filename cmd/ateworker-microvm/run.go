@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -415,6 +416,9 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
 			}
+			if err := unmountWorkerWorkspace(actorUID); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("unmount workspace PVC: %w", err))
+			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
 			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
@@ -685,6 +689,53 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 	return ctrs, nil
 }
 
+const workspaceShare = "worker-workspace"
+
+func unmountWorkerWorkspace(id string) error {
+	if os.Getenv("SUBSTRATE_WORKSPACE_ACTOR_UID") != id {
+		return nil
+	}
+	return imagecache.UnmountAllUnder(filepath.Join(kata.SharedDir(id), workspaceShare))
+}
+
+// The operator supplies one FUSE mount for one actor in a dedicated worker.
+func stageWorkerWorkspace(ctx context.Context, id string, ctrs []actorContainer) error {
+	expected := os.Getenv("SUBSTRATE_WORKSPACE_ACTOR_UID")
+	if expected == "" {
+		return nil
+	}
+	if expected != id {
+		return errors.New("workspace PVC belongs to a different actor")
+	}
+	const destination = "/workspace"
+	for _, container := range ctrs {
+		for _, m := range container.spec.Mounts {
+			path := filepath.Clean(m.Destination)
+			if path == "/" || path == destination || strings.HasPrefix(path, destination+"/") {
+				return fmt.Errorf("workspace PVC conflicts with %q in container %q", m.Destination, container.name)
+			}
+		}
+	}
+	const source = "/run/csgdrive-workspace"
+	var fs unix.Statfs_t
+	if err := unix.Statfs(source, &fs); err != nil {
+		return fmt.Errorf("stat workspace PVC: %w", err)
+	}
+	if fs.Type != unix.FUSE_SUPER_MAGIC {
+		return errors.New("workspace PVC must be mounted as a FUSE filesystem")
+	}
+	if err := kata.BindIntoShare(ctx, source, id, workspaceShare); err != nil {
+		return fmt.Errorf("stage workspace PVC: %w", err)
+	}
+	for _, c := range ctrs {
+		c.spec.Mounts = append(c.spec.Mounts, specs.Mount{
+			Destination: destination, Source: filepath.Join(ocispec.GuestSharedDir, workspaceShare),
+			Type: "bind", Options: []string{"bind", "rw", "nosuid", "nodev"},
+		})
+	}
+	return nil
+}
+
 // stageMergedRootfs assembles each container's merged rootfs on the host
 // (overlay: image lower + the actor's rootfs-upper dirs) at virtiofsd's
 // find-paths location (SharedDir(id)/<cid>/rootfs), stages durable-dir volumes,
@@ -695,6 +746,9 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
 func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*child.Process, error) {
+	if err := stageWorkerWorkspace(ctx, id, ctrs); err != nil {
+		return nil, err
+	}
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {

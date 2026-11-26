@@ -29,8 +29,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -239,5 +242,54 @@ func TestBuildVMConfigBalloon(t *testing.T) {
 	}
 	if b, err := json.Marshal(cfg); err != nil || !strings.Contains(string(b), `"balloon":{"size":0,"free_page_reporting":true}`) {
 		t.Errorf("VmConfig JSON = %s, %v; want the balloon section cloud-hypervisor expects", b, err)
+	}
+}
+
+func TestStageWorkerWorkspace(t *testing.T) {
+	t.Setenv("SUBSTRATE_WORKSPACE_ACTOR_UID", "")
+	if err := stageWorkerWorkspace(t.Context(), "actor", nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SUBSTRATE_WORKSPACE_ACTOR_UID", "actor")
+	if err := stageWorkerWorkspace(t.Context(), "other", nil); err == nil {
+		t.Fatal("accepted another actor")
+	}
+	for _, dest := range []string{"/", "/workspace", "/var/../workspace/logs"} {
+		ctrs := []actorContainer{
+			{name: "first", spec: &specs.Spec{}},
+			{name: "second", spec: &specs.Spec{Mounts: []specs.Mount{{Destination: dest}}}},
+		}
+		err := stageWorkerWorkspace(t.Context(), "actor", ctrs)
+		if err == nil || !strings.Contains(err.Error(), "conflicts with") || len(ctrs[0].spec.Mounts) != 0 {
+			t.Errorf("staging with volume %q: error %v, first container mounts %v", dest, err, ctrs[0].spec.Mounts)
+		}
+	}
+}
+
+func TestUnmountWorkerWorkspace(t *testing.T) {
+	roottest.Require(t, "binds a directory into the actor's share")
+	uid := uuid.NewString()
+	t.Setenv("SUBSTRATE_WORKSPACE_ACTOR_UID", uid)
+	t.Cleanup(func() { kata.CleanupSandboxState(t.Context(), uid) })
+	source := t.TempDir()
+	marker := filepath.Join(source, "keep")
+	if err := os.WriteFile(marker, []byte("source data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := kata.BindIntoShare(t.Context(), source, uid, workspaceShare); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(kata.SharedDir(uid), workspaceShare)
+	if _, err := os.Stat(filepath.Join(target, "keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := unmountWorkerWorkspace(uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "keep")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bind after cleanup: got %v, want ENOENT", err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "source data" {
+		t.Fatalf("source after cleanup: got %q, %v", got, err)
 	}
 }
