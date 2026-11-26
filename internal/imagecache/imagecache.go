@@ -432,6 +432,49 @@ func (s *Store) sweepTempDirs() error {
 	return nil
 }
 
+// CachedImage returns ref's image if ref is digest-pinned and the image is
+// complete on disk, with no network I/O. It returns (nil, nil) on a miss and
+// for refs that are not digest-pinned or do not parse, so the caller can fall
+// back to EnsureImage, which reports the parse error.
+//
+// CachedImage counts its hits and failures in ate.imagecache.requests, but not
+// its misses. The caller counts a miss by falling back to EnsureImage, or gets
+// the image elsewhere without a pull.
+func (s *Store) CachedImage(ctx context.Context, ref string) (*Image, error) {
+	parsedRef, err := s.parseRef(ref)
+	if err != nil {
+		return nil, nil
+	}
+	digest, ok, err := pinnedDigest(parsedRef)
+	if err != nil || !ok {
+		return nil, nil
+	}
+	img, err := s.lookup(ctx, ref, digest)
+	if img != nil || err != nil {
+		s.recordRequest(ctx, ateattr.ImageCacheOutcomeHit, err)
+	}
+	return img, err
+}
+
+// pinnedDigest returns the digest of a digest ref, and false for a tag ref.
+func pinnedDigest(ref name.Reference) (v1.Hash, bool, error) {
+	d, ok := ref.(name.Digest)
+	if !ok {
+		return v1.Hash{}, false, nil
+	}
+	digest, err := v1.NewHash(d.DigestStr())
+	return digest, true, err
+}
+
+// lookup returns digest's image if it is complete on disk, and logs a hit.
+func (s *Store) lookup(ctx context.Context, ref string, digest v1.Hash) (*Image, error) {
+	img, err := s.cachedImageHit(digest)
+	if img != nil {
+		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
+	}
+	return img, err
+}
+
 // EnsureImage makes ref's image available in the pool and returns its config
 // and ordered layer directories. Digest refs hit the cache with no network
 // I/O; tag refs cost one HEAD request to resolve the tag to a manifest
@@ -448,13 +491,11 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 		return nil, fmt.Errorf("while parsing reference: %w", err)
 	}
 
-	var digest v1.Hash
-	if d, ok := parsedRef.(name.Digest); ok {
-		digest, err = v1.NewHash(d.DigestStr())
-		if err != nil {
-			return nil, fmt.Errorf("while parsing digest of %q: %w", ref, err)
-		}
-	} else {
+	digest, ok, err := pinnedDigest(parsedRef)
+	if err != nil {
+		return nil, fmt.Errorf("while parsing digest of %q: %w", ref, err)
+	}
+	if !ok {
 		// Tag ref: one small HEAD request pins it to an immutable manifest
 		// digest, which is the only safe cache key for mutable tags.
 		var desc *v1.Descriptor
@@ -469,13 +510,12 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 		digest = desc.Digest
 	}
 
-	img, err := s.cachedImageHit(digest)
+	img, err := s.lookup(ctx, ref, digest)
 	if err != nil {
 		return nil, err
 	}
 	if img != nil {
 		outcome = ateattr.ImageCacheOutcomeHit
-		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
 		return img, nil
 	}
 	slog.InfoContext(ctx, "Image cache miss", slog.String("ref", ref), slog.String("digest", digest.String()))
