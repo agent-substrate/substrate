@@ -104,13 +104,14 @@ if you don't have access.
 - [#substrate-users](https://cloud-native.slack.com/archives/C0B6RCAJULW) to discuss using substrate.
 - [#substrate-dev](https://cloud-native.slack.com/archives/C0B6M3E2J3D) to discuss developing substrate.
 
-## Developing
+## Contributing
 
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to
-the project.  We welcome contributions of all kinds, but the project is VERY
-young.  Our immediate focus is on building out the core system and demos, so we
-may not be able to review or merge contributions that don't align with those
-goals in the near term.
+Before starting work or opening a pull request, read
+**[CONTRIBUTING.md](CONTRIBUTING.md)**. Every pull request (including drafts and
+small fixes) must link an issue with the
+[`ready-for-pr`](https://github.com/agent-substrate/substrate/issues?q=state%3Aopen%20label%3Aready-for-pr)
+label, indicating maintainer consensus on the direction. Pull requests without a
+linked `ready-for-pr` issue will be closed without review.
 
 ## Quickstart (Development)
 
