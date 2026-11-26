@@ -21,27 +21,198 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
+	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/moby/sys/user"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/status"
 )
 
 const (
 	// capabilityAll is the sentinel a template may put in drop to clear the
 	// whole default set. It is rejected in add (see ateapi.Capabilities).
 	capabilityAll = "ALL"
+
+	// providerReleaseTimeout bounds one ReleaseImage call. Releases run on a
+	// context detached from the caller, so a failed or cancelled request still
+	// returns its leases.
+	providerReleaseTimeout = 30 * time.Second
+	// providerCanProvideTimeout and providerPrepareTimeout bound the plugin
+	// calls that prepare an image, so a hung plugin leaves the image cache
+	// the rest of the caller's time to pull it.
+	providerCanProvideTimeout = 5 * time.Second
+	providerPrepareTimeout    = time.Minute
 )
+
+// errProviderDeclined reports that the image provider plugin does not serve
+// an image, which is not a failure of the plugin.
+var errProviderDeclined = errors.New("the image provider plugin declined the image")
+
+// imageSource resolves container and volume images. With the
+// ImageProviderPlugin preview gate on, it asks the image provider plugin first
+// when one is configured, and pulls into the image cache when the plugin
+// declines or fails. With the gate off, it only pulls into the image cache.
+type imageSource struct {
+	cache *imagecache.Store
+	// provider is nil when --image-provider-socket is empty.
+	provider providerclient.Client
+	// keychain resolves the registry credentials the provider gets.
+	keychain authn.Keychain
+	// leases tracks the provider leases taken but not yet recorded in a spec.
+	leases      *providerLeaseTracker
+	instruments *Instruments
+}
+
+// ensure returns ref's image. A digest ref already in the cache is served from
+// it. If the provider prepares the image, it does so under the lease leaseID,
+// and the Image's LeaseID is set. The caller releases the lease with release.
+func (s imageSource) ensure(ctx context.Context, ref, leaseID string) (*imagecache.Image, error) {
+	if s.provider == nil || !preview.IsEnabled(preview.GateImageProviderPlugin) {
+		return s.cache.EnsureImage(ctx, ref)
+	}
+	if img, err := s.cache.CachedImage(ctx, ref); err != nil || img != nil {
+		return img, err
+	}
+	// Leases with the same auth key share credentials, which atelet refreshes
+	// per auth key.
+	authKey, err := providerclient.AuthKey(ref)
+	if err != nil {
+		return nil, err
+	}
+	img, d, err := s.prepare(ctx, ref, leaseID, authKey)
+	if errors.Is(err, providerclient.ErrNoPlugin) {
+		return s.cache.EnsureImage(ctx, ref)
+	}
+	outcome, errorType := pluginOutcome(err)
+	s.instruments.recordImageProvider(ctx, s.provider.Name(), outcome, errorType, d)
+	if err == nil {
+		return img, nil
+	}
+	if outcome == ateattr.ImageProviderOutcomeError {
+		slog.WarnContext(ctx, "Image provider plugin failed; pulling into the image cache",
+			slog.String("image", ref), slog.String("provider", s.provider.Name()), slog.Any("err", err))
+	}
+	return s.cache.EnsureImage(ctx, ref)
+}
+
+// pluginOutcome classifies prepare's error for ate.imageprovider.requests.
+// A failed call reports its gRPC status code, and an answer atelet rejected
+// reports invalid_result.
+func pluginOutcome(err error) (outcome, errorType string) {
+	switch {
+	case err == nil:
+		return ateattr.ImageProviderOutcomeSuccess, ""
+	case errors.Is(err, errProviderDeclined):
+		return ateattr.ImageProviderOutcomeDeclined, ""
+	}
+	if st, ok := status.FromError(err); ok {
+		return ateattr.ImageProviderOutcomeError, st.Code().String()
+	}
+	return ateattr.ImageProviderOutcomeError, "invalid_result"
+}
+
+// prepare has the provider prepare ref's layers under the lease leaseID with
+// authKey, and returns how long the plugin calls took. It returns an error wrapping
+// errProviderDeclined if the provider does not serve ref, and
+// providerclient.ErrNoPlugin if no plugin socket exists.
+func (s imageSource) prepare(ctx context.Context, ref, leaseID, authKey string) (*imagecache.Image, time.Duration, error) {
+	start := time.Now()
+	req := &providerclient.PrepareRequest{ImageRef: ref, LeaseID: leaseID, AuthKey: authKey}
+	canCtx, cancel := context.WithTimeout(ctx, providerCanProvideTimeout)
+	ok, err := s.provider.CanProvide(canCtx, req)
+	cancel()
+	if err != nil {
+		return nil, time.Since(start), err
+	}
+	if !ok {
+		return nil, time.Since(start), errProviderDeclined
+	}
+	s.leases.take(leaseID)
+	// Only PrepareImage gets registry credentials, for an image the plugin
+	// agreed to serve.
+	prepCtx, cancel := context.WithTimeout(ctx, providerPrepareTimeout)
+	if s.keychain != nil {
+		prepCtx = providerclient.WithKeychainContext(prepCtx, s.keychain)
+	}
+	res, err := s.provider.PrepareImage(prepCtx, req)
+	cancel()
+	d := time.Since(start)
+	if err != nil {
+		// The plugin may have taken the lease before the call failed, for
+		// example on a timeout.
+		s.release(ctx, leaseID)
+	}
+	if errors.Is(err, providerclient.ErrNotSupported) {
+		return nil, d, fmt.Errorf("%w: %w", errProviderDeclined, err)
+	}
+	if err != nil {
+		return nil, d, err
+	}
+	img, err := streamedImage(res, ref, leaseID)
+	if err != nil {
+		s.release(ctx, leaseID)
+		return nil, d, err
+	}
+	return img, d, nil
+}
+
+// streamedImage converts the provider's result for ref, held under the lease
+// leaseID. It rejects a digest that differs from the one ref pins.
+func streamedImage(res *providerclient.PrepareResult, ref, leaseID string) (*imagecache.Image, error) {
+	if res.Rootfs == "" {
+		return nil, errors.New("the image provider plugin returned no rootfs")
+	}
+	if res.Config == nil {
+		return nil, errors.New("the image provider plugin returned no image config")
+	}
+	digest, err := v1.NewHash(res.ImageDigest)
+	if err != nil {
+		return nil, fmt.Errorf("the image provider plugin returned image digest %q: %w", res.ImageDigest, err)
+	}
+	if pinned, err := name.NewDigest(ref); err == nil && pinned.DigestStr() != digest.String() {
+		return nil, fmt.Errorf("the image provider plugin returned digest %s for %s", digest, ref)
+	}
+	return &imagecache.Image{Digest: digest, Config: *res.Config, ProviderRootfs: res.Rootfs, LeaseID: leaseID}, nil
+}
+
+// release drops the provider lease leaseID. A failed release is logged.
+func (s imageSource) release(ctx context.Context, leaseID string) {
+	s.leases.forget(leaseID)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerReleaseTimeout)
+	defer cancel()
+	if err := s.provider.ReleaseImage(ctx, &providerclient.ReleaseRequest{LeaseID: leaseID}); err != nil {
+		slog.WarnContext(ctx, "Failed to release an image provider lease",
+			slog.String("lease", leaseID), slog.String("provider", s.provider.Name()), slog.Any("err", err))
+	}
+}
+
+// providerLeaseID names the provider lease on a container's image, or on the
+// image of its volume when volume is set. The name stays the same across runs
+// of the actor, so a retried PrepareImage takes no second lease.
+func providerLeaseID(actorUID, containerName, volume string) string {
+	id := actorUID + "/" + containerName
+	if volume != "" {
+		id += "/" + volume
+	}
+	return id
+}
 
 // defaultCapabilities is what an actor container gets when its template asks
 // for no adjustment. Names are unprefixed; resolveCapabilities adds the OCI
@@ -80,10 +251,12 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-// prepareOCIDirectory pulls the container's image and writes the overlay spec
-// the worker composes its rootfs from. It returns the image and the process's
-// working directory, which the worker creates through the overlay.
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*imagecache.Image, string, error) {
+// prepareOCIDirectory resolves the container's image and writes the overlay
+// spec the worker composes its rootfs from. It returns the image and the
+// process's working directory, which the worker creates through the overlay.
+// The spec records which images hold provider leases; on failure, the leases
+// this call took are released.
+func prepareOCIDirectory(ctx context.Context, images imageSource, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (_ *imagecache.Image, _ string, err error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -115,17 +288,30 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		img          *imagecache.Image
 		imageVolumes []imagecache.ImageVolumeOverlay
 	)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if img != nil && img.LeaseID != "" {
+			images.release(ctx, img.LeaseID)
+		}
+		for _, v := range imageVolumes {
+			if v.LeaseID != "" {
+				images.release(ctx, v.LeaseID)
+			}
+		}
+	}()
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
-			return fmt.Errorf("in imageCache.EnsureImage(%q): %w", ref, err)
+		if img, err = images.ensure(gctx, ref, providerLeaseID(actorUID, containerName, "")); err != nil {
+			return fmt.Errorf("while resolving image %q: %w", ref, err)
 		}
 		return nil
 	})
 	g.Go(func() error {
 		var err error
-		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts)
+		imageVolumes, err = resolveImageVolumes(gctx, images, actorUID, containerName, volumes, volumeMounts)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -148,13 +334,23 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
-		Layers:       img.LayerDirs,
+		ImageRef:     ref,
+		LeaseID:      img.LeaseID,
+		LowerDirs:    img.LowerDirs(),
+		StoreLayers:  img.LayerDirs,
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
 		return nil, "", fmt.Errorf("while writing overlay spec: %w", err)
 	}
-
+	if img.LeaseID != "" {
+		images.leases.forget(img.LeaseID)
+	}
+	for _, v := range imageVolumes {
+		if v.LeaseID != "" {
+			images.leases.forget(v.LeaseID)
+		}
+	}
 	return img, cwd, nil
 }
 
@@ -170,9 +366,10 @@ func resolveCwd(imageCfg *v1.Config) (string, error) {
 	return path.Clean(imageCfg.WorkingDir), nil
 }
 
-// resolveImageVolumes pulls the image behind every image-typed volume this
-// container mounts and returns what the overlay spec needs to compose each.
-func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+// resolveImageVolumes resolves the image behind every image-typed volume this
+// container mounts and returns what the overlay spec needs to compose each. On
+// failure, the provider leases it took are released.
+func resolveImageVolumes(ctx context.Context, images imageSource, actorUID, containerName string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
 	mounted := make(map[string]bool, len(volumeMounts))
 	for _, vm := range volumeMounts {
 		mounted[vm.GetName()] = true
@@ -186,26 +383,34 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 		wanted = append(wanted, vol)
 	}
 
-	// Pull the volumes concurrently; each entry lands at its own index so the
-	// spec order stays the template order.
+	// Resolve the volumes concurrently; each entry lands at its own index so
+	// the spec order stays the template order.
 	out := make([]imagecache.ImageVolumeOverlay, len(wanted))
 	g, gctx := errgroup.WithContext(ctx)
 	for i, vol := range wanted {
 		g.Go(func() error {
 			volRef := vol.GetImage().GetReference()
-			img, err := imageCache.EnsureImage(gctx, volRef)
+			img, err := images.ensure(gctx, volRef, providerLeaseID(actorUID, containerName, vol.GetName()))
 			if err != nil {
-				return fmt.Errorf("in imageCache.EnsureImage(%q) for volume %q: %w", volRef, vol.GetName(), err)
+				return fmt.Errorf("while resolving image %q for volume %q: %w", volRef, vol.GetName(), err)
 			}
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),
 				ImageDigest: img.Digest.String(),
-				Layers:      img.LayerDirs,
+				ImageRef:    volRef,
+				LeaseID:     img.LeaseID,
+				LowerDirs:   img.LowerDirs(),
+				StoreLayers: img.LayerDirs,
 			}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
+		for _, v := range out {
+			if v.LeaseID != "" {
+				images.release(ctx, v.LeaseID)
+			}
+		}
 		return nil, err
 	}
 	return out, nil

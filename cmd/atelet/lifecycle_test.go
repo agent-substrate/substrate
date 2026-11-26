@@ -88,6 +88,8 @@ type fakeWorker struct {
 	// restoreErr, if set, fails every RestoreWorkload after it recorded the
 	// request, as a worker that could not start the sandbox would.
 	restoreErr error
+	// runErr, if set, fails every RunWorkload after it recorded the request.
+	runErr error
 	// checkpointErr, if set, fails every CheckpointWorkload after it recorded
 	// the request, before it writes any snapshot file.
 	checkpointErr error
