@@ -84,5 +84,6 @@ check() {
 check ./cmd/ateapi "${ateapi_banned[@]}"
 check ./internal/objectstoreplugin/actorauthz "${actorauthz_banned[@]}"
 check ./pkg/objectstore/actorauthz "${actorauthz_banned[@]}" "${pkg_actorauthz_banned[@]}"
+check ./pkg/oidcjwt "${pkg_actorauthz_banned[@]}"
 
 exit "${status}"
