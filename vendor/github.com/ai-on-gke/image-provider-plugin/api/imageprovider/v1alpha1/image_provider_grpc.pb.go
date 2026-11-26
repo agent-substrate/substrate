@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             (unknown)
-// source: api/imageprovider/v1alpha1/image_provider.proto
+// source: imageprovider/v1alpha1/image_provider.proto
 
 package imageprovider
 
@@ -33,6 +33,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	ImageProviderPlugin_GetPluginInfo_FullMethodName   = "/imageprovider.v1alpha1.ImageProviderPlugin/GetPluginInfo"
 	ImageProviderPlugin_CanProvide_FullMethodName      = "/imageprovider.v1alpha1.ImageProviderPlugin/CanProvide"
 	ImageProviderPlugin_PrepareImage_FullMethodName    = "/imageprovider.v1alpha1.ImageProviderPlugin/PrepareImage"
 	ImageProviderPlugin_ReleaseImage_FullMethodName    = "/imageprovider.v1alpha1.ImageProviderPlugin/ReleaseImage"
@@ -49,7 +50,7 @@ const (
 // Riptide or Nydus.
 //
 // Given an OCI image reference and resolved registry credentials, the plugin
-// prepares the image on the host in the requested LayerForm.
+// prepares the image on the host in the requested ImageForm.
 //
 // Several clients, for example Substrate and Ray, can share one plugin on a
 // node. Each client passes its own mount_root in every request. The plugin
@@ -58,6 +59,12 @@ const (
 // leases. Two clients must not use the same mount_root. The plugin serves
 // only the mount roots it was configured with.
 //
+// The plugin trusts every client that can connect to its socket. The
+// socket's file permissions are the only access control, so a deployment
+// makes the socket reachable only by trusted node agents, for example
+// owned by root with mode 0600. mount_root keeps clients' leases apart. It
+// does not authenticate clients, so any client can name any mount_root.
+//
 // The extensions fields exist only for customized forks of Substrate and
 // their plugins, which define their own message types. Upstream Substrate,
 // its client and its plugin library never set, read, store or forward them,
@@ -65,19 +72,23 @@ const (
 // receiver ignores them, so a fork must check that a response carries the
 // extensions it asked for. Every request and response has an extensions
 // field, and so does every list item that a fork may annotate.
+//
+// The extensions fields are alpha-only. v1beta1 may remove them, for example
+// once the API supports block devices.
 type ImageProviderPluginClient interface {
+	// GetPluginInfo returns the plugin's provider name and lifecycle state.
+	// The caller polls it as a heartbeat, for example to learn when the plugin
+	// starts draining. The plugin answers it in every state, including while
+	// draining, until it exits. It reports only plugin-wide state that the
+	// caller acts on. Whether to prepare an image now is CanProvide's answer.
+	GetPluginInfo(ctx context.Context, in *GetPluginInfoRequest, opts ...grpc.CallOption) (*GetPluginInfoResponse, error)
 	// CanProvide reports whether the plugin and its provider are healthy and
 	// able to serve the given OCI image in the requested form under
-	// mount_root.
+	// mount_root. A draining plugin returns can_provide = false.
 	CanProvide(ctx context.Context, in *CanProvideRequest, opts ...grpc.CallOption) (*CanProvideResponse, error)
 	// PrepareImage prepares the image in the requested form under mount_root,
-	// takes the lease named by mount_root and lease_id on the image, and
-	// returns the image in that form.
-	//
-	// If the plugin already holds the lease, PrepareImage returns the leased
-	// image again without taking another lease, so the caller can retry it.
-	// Reusing a lease for a different image_ref or form returns
-	// codes.AlreadyExists.
+	// takes the lease that lease_id names, and returns the image in that form.
+	// PrepareImageRequest.lease_id describes leases.
 	//
 	// If the plugin cannot serve the image, or does not serve mount_root,
 	// PrepareImage returns codes.FailedPrecondition so the caller can fall back
@@ -92,17 +103,31 @@ type ImageProviderPluginClient interface {
 	// ReconcileImages replaces the plugin's leases under mount_root with the
 	// leases that the caller's surviving workloads still hold. It does not
 	// change leases under other mount roots. The caller sends it after it
-	// restarts or finds the plugin socket. The plugin removes images that no
-	// lease uses.
+	// restarts or finds the plugin socket. The plugin releases the leases not
+	// in active_leases, and removes images that no lease uses.
 	//
-	// The caller then calls RefreshAuth on each surviving lease. Until then, a
-	// plugin that reported AUTH_REFRESH_REQUIRED may have no credentials for
-	// it.
+	// A starting plugin restores the leases it recorded before it stopped, so
+	// it serves requests that arrive before ReconcileImages with the same
+	// leases and images. It drops none of them, since only the caller knows
+	// which leases are still in use.
+	//
+	// The caller may call PrepareImage and ReleaseImage while ReconcileImages
+	// runs. It includes in active_leases the leases that its in-flight
+	// PrepareImage calls are taking, and the plugin keeps every lease in
+	// active_leases that it holds or is taking. A lease whose PrepareImage has
+	// not reached the plugin yet may come back in lost_leases, so the caller
+	// ignores the lost leases it is still taking. A lease that a concurrent
+	// ReleaseImage releases is not in active_leases, so the plugin drops it
+	// either way.
+	//
+	// The caller then calls RefreshAuth on each auth_key in
+	// auth_refresh_required. Until then, the plugin has no credentials for
+	// the leases with those auth_keys.
 	ReconcileImages(ctx context.Context, in *ReconcileImagesRequest, opts ...grpc.CallOption) (*ReconcileImagesResponse, error)
-	// RefreshAuth replaces the registry credentials of a lease the plugin
-	// holds. The plugin uses the latest credentials it got for a lease. It
-	// returns codes.NotFound if the plugin does not hold the lease, and never
-	// takes a lease.
+	// RefreshAuth replaces the registry credentials that auth_key names under
+	// mount_root, for every lease with that auth_key. The plugin uses the
+	// latest credentials it got for an auth_key. It returns codes.NotFound if
+	// no lease under mount_root has auth_key, and never takes a lease.
 	RefreshAuth(ctx context.Context, in *RefreshAuthRequest, opts ...grpc.CallOption) (*RefreshAuthResponse, error)
 }
 
@@ -112,6 +137,16 @@ type imageProviderPluginClient struct {
 
 func NewImageProviderPluginClient(cc grpc.ClientConnInterface) ImageProviderPluginClient {
 	return &imageProviderPluginClient{cc}
+}
+
+func (c *imageProviderPluginClient) GetPluginInfo(ctx context.Context, in *GetPluginInfoRequest, opts ...grpc.CallOption) (*GetPluginInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPluginInfoResponse)
+	err := c.cc.Invoke(ctx, ImageProviderPlugin_GetPluginInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *imageProviderPluginClient) CanProvide(ctx context.Context, in *CanProvideRequest, opts ...grpc.CallOption) (*CanProvideResponse, error) {
@@ -173,7 +208,7 @@ func (c *imageProviderPluginClient) RefreshAuth(ctx context.Context, in *Refresh
 // Riptide or Nydus.
 //
 // Given an OCI image reference and resolved registry credentials, the plugin
-// prepares the image on the host in the requested LayerForm.
+// prepares the image on the host in the requested ImageForm.
 //
 // Several clients, for example Substrate and Ray, can share one plugin on a
 // node. Each client passes its own mount_root in every request. The plugin
@@ -182,6 +217,12 @@ func (c *imageProviderPluginClient) RefreshAuth(ctx context.Context, in *Refresh
 // leases. Two clients must not use the same mount_root. The plugin serves
 // only the mount roots it was configured with.
 //
+// The plugin trusts every client that can connect to its socket. The
+// socket's file permissions are the only access control, so a deployment
+// makes the socket reachable only by trusted node agents, for example
+// owned by root with mode 0600. mount_root keeps clients' leases apart. It
+// does not authenticate clients, so any client can name any mount_root.
+//
 // The extensions fields exist only for customized forks of Substrate and
 // their plugins, which define their own message types. Upstream Substrate,
 // its client and its plugin library never set, read, store or forward them,
@@ -189,19 +230,23 @@ func (c *imageProviderPluginClient) RefreshAuth(ctx context.Context, in *Refresh
 // receiver ignores them, so a fork must check that a response carries the
 // extensions it asked for. Every request and response has an extensions
 // field, and so does every list item that a fork may annotate.
+//
+// The extensions fields are alpha-only. v1beta1 may remove them, for example
+// once the API supports block devices.
 type ImageProviderPluginServer interface {
+	// GetPluginInfo returns the plugin's provider name and lifecycle state.
+	// The caller polls it as a heartbeat, for example to learn when the plugin
+	// starts draining. The plugin answers it in every state, including while
+	// draining, until it exits. It reports only plugin-wide state that the
+	// caller acts on. Whether to prepare an image now is CanProvide's answer.
+	GetPluginInfo(context.Context, *GetPluginInfoRequest) (*GetPluginInfoResponse, error)
 	// CanProvide reports whether the plugin and its provider are healthy and
 	// able to serve the given OCI image in the requested form under
-	// mount_root.
+	// mount_root. A draining plugin returns can_provide = false.
 	CanProvide(context.Context, *CanProvideRequest) (*CanProvideResponse, error)
 	// PrepareImage prepares the image in the requested form under mount_root,
-	// takes the lease named by mount_root and lease_id on the image, and
-	// returns the image in that form.
-	//
-	// If the plugin already holds the lease, PrepareImage returns the leased
-	// image again without taking another lease, so the caller can retry it.
-	// Reusing a lease for a different image_ref or form returns
-	// codes.AlreadyExists.
+	// takes the lease that lease_id names, and returns the image in that form.
+	// PrepareImageRequest.lease_id describes leases.
 	//
 	// If the plugin cannot serve the image, or does not serve mount_root,
 	// PrepareImage returns codes.FailedPrecondition so the caller can fall back
@@ -216,17 +261,31 @@ type ImageProviderPluginServer interface {
 	// ReconcileImages replaces the plugin's leases under mount_root with the
 	// leases that the caller's surviving workloads still hold. It does not
 	// change leases under other mount roots. The caller sends it after it
-	// restarts or finds the plugin socket. The plugin removes images that no
-	// lease uses.
+	// restarts or finds the plugin socket. The plugin releases the leases not
+	// in active_leases, and removes images that no lease uses.
 	//
-	// The caller then calls RefreshAuth on each surviving lease. Until then, a
-	// plugin that reported AUTH_REFRESH_REQUIRED may have no credentials for
-	// it.
+	// A starting plugin restores the leases it recorded before it stopped, so
+	// it serves requests that arrive before ReconcileImages with the same
+	// leases and images. It drops none of them, since only the caller knows
+	// which leases are still in use.
+	//
+	// The caller may call PrepareImage and ReleaseImage while ReconcileImages
+	// runs. It includes in active_leases the leases that its in-flight
+	// PrepareImage calls are taking, and the plugin keeps every lease in
+	// active_leases that it holds or is taking. A lease whose PrepareImage has
+	// not reached the plugin yet may come back in lost_leases, so the caller
+	// ignores the lost leases it is still taking. A lease that a concurrent
+	// ReleaseImage releases is not in active_leases, so the plugin drops it
+	// either way.
+	//
+	// The caller then calls RefreshAuth on each auth_key in
+	// auth_refresh_required. Until then, the plugin has no credentials for
+	// the leases with those auth_keys.
 	ReconcileImages(context.Context, *ReconcileImagesRequest) (*ReconcileImagesResponse, error)
-	// RefreshAuth replaces the registry credentials of a lease the plugin
-	// holds. The plugin uses the latest credentials it got for a lease. It
-	// returns codes.NotFound if the plugin does not hold the lease, and never
-	// takes a lease.
+	// RefreshAuth replaces the registry credentials that auth_key names under
+	// mount_root, for every lease with that auth_key. The plugin uses the
+	// latest credentials it got for an auth_key. It returns codes.NotFound if
+	// no lease under mount_root has auth_key, and never takes a lease.
 	RefreshAuth(context.Context, *RefreshAuthRequest) (*RefreshAuthResponse, error)
 	mustEmbedUnimplementedImageProviderPluginServer()
 }
@@ -238,6 +297,9 @@ type ImageProviderPluginServer interface {
 // pointer dereference when methods are called.
 type UnimplementedImageProviderPluginServer struct{}
 
+func (UnimplementedImageProviderPluginServer) GetPluginInfo(context.Context, *GetPluginInfoRequest) (*GetPluginInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPluginInfo not implemented")
+}
 func (UnimplementedImageProviderPluginServer) CanProvide(context.Context, *CanProvideRequest) (*CanProvideResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CanProvide not implemented")
 }
@@ -272,6 +334,24 @@ func RegisterImageProviderPluginServer(s grpc.ServiceRegistrar, srv ImageProvide
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ImageProviderPlugin_ServiceDesc, srv)
+}
+
+func _ImageProviderPlugin_GetPluginInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPluginInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageProviderPluginServer).GetPluginInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageProviderPlugin_GetPluginInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageProviderPluginServer).GetPluginInfo(ctx, req.(*GetPluginInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ImageProviderPlugin_CanProvide_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -372,6 +452,10 @@ var ImageProviderPlugin_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ImageProviderPluginServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "GetPluginInfo",
+			Handler:    _ImageProviderPlugin_GetPluginInfo_Handler,
+		},
+		{
 			MethodName: "CanProvide",
 			Handler:    _ImageProviderPlugin_CanProvide_Handler,
 		},
@@ -393,5 +477,5 @@ var ImageProviderPlugin_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/imageprovider/v1alpha1/image_provider.proto",
+	Metadata: "imageprovider/v1alpha1/image_provider.proto",
 }

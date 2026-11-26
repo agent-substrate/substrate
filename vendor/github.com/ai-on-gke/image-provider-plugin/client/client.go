@@ -45,8 +45,8 @@ const DefaultSocketPath = "/run/ate/image-provider/plugin.sock"
 // should pull the image themselves.
 var ErrNotSupported = errors.New("image not supported by the image provider plugin")
 
-// ErrLeaseNotHeld reports that the plugin does not hold a lease.
-var ErrLeaseNotHeld = errors.New("lease not held by the image provider plugin")
+// ErrLeaseNotHeld reports that the plugin holds no lease with an auth key.
+var ErrLeaseNotHeld = errors.New("no lease with the auth key held by the image provider plugin")
 
 // ErrNoPlugin reports that no plugin socket exists. Callers pull the image
 // themselves, and do not count it as a request to a plugin.
@@ -93,6 +93,12 @@ type PrepareRequest struct {
 	// LeaseID names the lease PrepareImage takes. PrepareImage requires it,
 	// and CanProvide ignores it.
 	LeaseID string
+
+	// AuthKey names the credentials. Leases with the same AuthKey share
+	// credentials, and one RefreshAuth refreshes them all. Empty means
+	// AuthKey(ImageRef), which fits keychain credentials. PrepareImage
+	// requires it when AuthConfig is set, and CanProvide ignores it.
+	AuthKey string
 }
 
 // PrepareResult holds the prepared read-only root filesystem of an OCI
@@ -118,33 +124,51 @@ type PrepareResult struct {
 
 // RefreshRequest holds the parameters for RefreshAuth.
 type RefreshRequest struct {
-	// ImageRef is the lease's image. The client resolves credentials for it
-	// with the keychain in the request context when AuthConfig is nil.
+	// AuthKey is the AuthKey of the leases to refresh.
+	AuthKey string
+
+	// ImageRef is the image of a lease with AuthKey. The client resolves
+	// credentials for it with the keychain in the request context when
+	// AuthConfig is nil.
 	ImageRef string
 
 	// AuthConfig holds explicit workload credentials.
 	AuthConfig *AuthConfig
-
-	// LeaseID is the LeaseID passed to PrepareImage.
-	LeaseID string
 }
 
 // ReleaseRequest holds the parameters for ReleaseImage.
 type ReleaseRequest struct {
 	// LeaseID is the LeaseID passed to PrepareImage.
 	LeaseID string
-
-	// ImageDigest is the ImageDigest PrepareImage returned, or empty if
-	// PrepareImage failed.
-	ImageDigest string
 }
 
-// ActiveLease is a lease that a surviving workload still holds, sent in
-// ReconcileImages.
-type ActiveLease struct {
-	LeaseID     string
-	ImageRef    string
-	ImageDigest string
+// LostLease is an active lease that ReconcileImages could not restore.
+type LostLease struct {
+	LeaseID string
+
+	// Message says why the plugin could not restore the lease.
+	Message string
+}
+
+// ReconcileResult is what ReconcileImages returns.
+type ReconcileResult struct {
+	// LostLeases are the active leases the plugin could not restore. The
+	// caller stops the workloads that hold them.
+	LostLeases []LostLease
+
+	// AuthRefreshRequired are the auth keys of restored leases that need
+	// RefreshAuth now.
+	AuthRefreshRequired []string
+}
+
+// AuthKey returns the default auth key of imageRef: its repository, for
+// example "us-docker.pkg.dev/project/repo/image".
+func AuthKey(imageRef string) (string, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return "", fmt.Errorf("parsing image reference %q: %w", imageRef, err)
+	}
+	return ref.Context().Name(), nil
 }
 
 // Client talks to an image provider plugin.
@@ -154,13 +178,13 @@ type Client interface {
 	State(ctx context.Context) (imageprovider.PluginState, error)
 	PrepareImage(ctx context.Context, req *PrepareRequest) (*PrepareResult, error)
 	ReleaseImage(ctx context.Context, req *ReleaseRequest) error
-	ReconcileImages(ctx context.Context, active []*ActiveLease) error
+	ReconcileImages(ctx context.Context, leaseIDs []string) (*ReconcileResult, error)
 	RefreshAuth(ctx context.Context, req *RefreshRequest) (imageprovider.AuthRefresh, error)
 	Close() error
 }
 
 // GRPCClient implements Client over a Unix domain socket. It always asks for
-// LAYER_FORM_ROOTFS, and sends its mount root in every request.
+// IMAGE_FORM_ROOTFS, and sends its mount root in every request.
 type GRPCClient struct {
 	mu           sync.RWMutex
 	socketPath   string
@@ -279,9 +303,8 @@ func keychainAuth(ctx context.Context, imageRef string) (*imageprovider.Registry
 
 // CanProvide reports whether the plugin serves the image. It returns
 // ErrNoPlugin when the plugin socket does not exist, so callers notice when a
-// plugin is installed or removed. A plugin that is draining, or in a state
-// this client does not know, is not used for new images. CanProvide sends no
-// registry credentials.
+// plugin is installed or removed. A draining plugin returns false.
+// CanProvide sends no registry credentials.
 func (c *GRPCClient) CanProvide(ctx context.Context, req *PrepareRequest) (bool, error) {
 	if req == nil {
 		return false, errors.New("prepare request cannot be nil")
@@ -291,28 +314,25 @@ func (c *GRPCClient) CanProvide(ctx context.Context, req *PrepareRequest) (bool,
 	}
 	res, err := c.client.CanProvide(ctx, &imageprovider.CanProvideRequest{
 		ImageRef:  req.ImageRef,
-		Form:      imageprovider.LayerForm_LAYER_FORM_ROOTFS,
+		Form:      imageprovider.ImageForm_IMAGE_FORM_ROOTFS,
 		MountRoot: c.mountRoot,
 	})
 	if err != nil {
 		return false, fmt.Errorf("calling CanProvide on image provider: %w", err)
 	}
-	c.setName(res.GetProviderName())
-	return res.GetCanProvide() && res.GetState() == imageprovider.PluginState_PLUGIN_STATE_SERVING, nil
+	return res.GetCanProvide(), nil
 }
 
-// State returns the plugin's lifecycle state. It returns
-// PLUGIN_STATE_UNSPECIFIED when the plugin socket does not exist.
+// State returns the plugin's lifecycle state from GetPluginInfo, the
+// plugin's heartbeat. It returns PLUGIN_STATE_UNSPECIFIED when the plugin
+// socket does not exist.
 func (c *GRPCClient) State(ctx context.Context) (imageprovider.PluginState, error) {
 	if !IsSocketAvailable(c.socketPath) {
 		return imageprovider.PluginState_PLUGIN_STATE_UNSPECIFIED, nil
 	}
-	res, err := c.client.CanProvide(ctx, &imageprovider.CanProvideRequest{
-		Form:      imageprovider.LayerForm_LAYER_FORM_ROOTFS,
-		MountRoot: c.mountRoot,
-	})
+	res, err := c.client.GetPluginInfo(ctx, &imageprovider.GetPluginInfoRequest{})
 	if err != nil {
-		return imageprovider.PluginState_PLUGIN_STATE_UNSPECIFIED, fmt.Errorf("calling CanProvide on image provider: %w", err)
+		return imageprovider.PluginState_PLUGIN_STATE_UNSPECIFIED, fmt.Errorf("calling GetPluginInfo on image provider: %w", err)
 	}
 	c.setName(res.GetProviderName())
 	return res.GetState(), nil
@@ -326,12 +346,23 @@ func (c *GRPCClient) PrepareImage(ctx context.Context, req *PrepareRequest) (*Pr
 	if req == nil {
 		return nil, errors.New("prepare request cannot be nil")
 	}
+	authKey := req.AuthKey
+	if authKey == "" {
+		if req.AuthConfig != nil {
+			return nil, errors.New("prepare request with AuthConfig needs an AuthKey")
+		}
+		var err error
+		if authKey, err = AuthKey(req.ImageRef); err != nil {
+			return nil, err
+		}
+	}
 	res, err := c.client.PrepareImage(ctx, &imageprovider.PrepareImageRequest{
 		ImageRef:  req.ImageRef,
 		Auth:      resolveAuth(ctx, req),
-		Form:      imageprovider.LayerForm_LAYER_FORM_ROOTFS,
+		Form:      imageprovider.ImageForm_IMAGE_FORM_ROOTFS,
 		LeaseId:   req.LeaseID,
 		MountRoot: c.mountRoot,
+		AuthKey:   authKey,
 	})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && (st.Code() == codes.FailedPrecondition || st.Code() == codes.Unimplemented) {
@@ -350,7 +381,7 @@ func (c *GRPCClient) PrepareImage(ctx context.Context, req *PrepareRequest) (*Pr
 	}
 	rootfs := res.GetRootfs()
 	if rootfs == nil {
-		return nil, fmt.Errorf("image provider returned %T for %s, want a rootfs", res.GetLayers(), req.ImageRef)
+		return nil, fmt.Errorf("image provider returned %T for %s, want a rootfs", res.GetImage(), req.ImageRef)
 	}
 	dir := filepath.Clean(rootfs.GetDir())
 	if !isUnder(c.mountRoot, dir) {
@@ -371,10 +402,8 @@ func (c *GRPCClient) ReleaseImage(ctx context.Context, req *ReleaseRequest) erro
 		return errors.New("release request cannot be nil")
 	}
 	if _, err := c.client.ReleaseImage(ctx, &imageprovider.ReleaseImageRequest{
-		LeaseId:     req.LeaseID,
-		ImageDigest: req.ImageDigest,
-		Form:        imageprovider.LayerForm_LAYER_FORM_ROOTFS,
-		MountRoot:   c.mountRoot,
+		LeaseId:   req.LeaseID,
+		MountRoot: c.mountRoot,
 	}); err != nil {
 		return fmt.Errorf("calling ReleaseImage on image provider: %w", err)
 	}
@@ -382,38 +411,38 @@ func (c *GRPCClient) ReleaseImage(ctx context.Context, req *ReleaseRequest) erro
 }
 
 // ReconcileImages replaces the plugin's leases under the mount root with
-// active.
-func (c *GRPCClient) ReconcileImages(ctx context.Context, active []*ActiveLease) error {
+// leaseIDs.
+func (c *GRPCClient) ReconcileImages(ctx context.Context, leaseIDs []string) (*ReconcileResult, error) {
 	req := &imageprovider.ReconcileImagesRequest{
-		ActiveLeases: make([]*imageprovider.ActiveLease, 0, len(active)),
+		ActiveLeases: make([]*imageprovider.ActiveLease, 0, len(leaseIDs)),
 		MountRoot:    c.mountRoot,
 	}
-	for _, a := range active {
-		if a == nil {
-			continue
-		}
-		req.ActiveLeases = append(req.ActiveLeases, &imageprovider.ActiveLease{
-			LeaseId:     a.LeaseID,
-			ImageRef:    a.ImageRef,
-			ImageDigest: a.ImageDigest,
-			Form:        imageprovider.LayerForm_LAYER_FORM_ROOTFS,
-		})
+	for _, id := range leaseIDs {
+		req.ActiveLeases = append(req.ActiveLeases, &imageprovider.ActiveLease{LeaseId: id})
 	}
-	if _, err := c.client.ReconcileImages(ctx, req); err != nil {
-		return fmt.Errorf("calling ReconcileImages on image provider: %w", err)
+	res, err := c.client.ReconcileImages(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("calling ReconcileImages on image provider: %w", err)
 	}
-	return nil
+	out := &ReconcileResult{AuthRefreshRequired: res.GetAuthRefreshRequired()}
+	for _, l := range res.GetLostLeases() {
+		out.LostLeases = append(out.LostLeases, LostLease{LeaseID: l.GetLeaseId(), Message: l.GetMessage()})
+	}
+	return out, nil
 }
 
-// RefreshAuth sends fresh credentials for the lease req.LeaseID and returns
-// whether the plugin needs more refreshes. It resolves req.AuthConfig, or
-// credentials for req.ImageRef from the keychain in ctx, and fails if the
-// keychain fails. It returns an error wrapping ErrLeaseNotHeld when the
-// plugin does not hold the lease, and ErrNotSupported when the plugin does
-// not implement RefreshAuth.
+// RefreshAuth sends fresh credentials for the leases with req.AuthKey and
+// returns whether the plugin needs more refreshes. It resolves
+// req.AuthConfig, or credentials for req.ImageRef from the keychain in ctx,
+// and fails if the keychain fails. It returns an error wrapping
+// ErrLeaseNotHeld when the plugin holds no lease with the auth key, and
+// ErrNotSupported when the plugin does not implement RefreshAuth.
 func (c *GRPCClient) RefreshAuth(ctx context.Context, req *RefreshRequest) (imageprovider.AuthRefresh, error) {
 	if req == nil {
 		return imageprovider.AuthRefresh_AUTH_REFRESH_UNSPECIFIED, errors.New("refresh request cannot be nil")
+	}
+	if req.AuthKey == "" {
+		return imageprovider.AuthRefresh_AUTH_REFRESH_UNSPECIFIED, errors.New("refresh request needs an AuthKey")
 	}
 	var auth *imageprovider.RegistryAuth
 	if req.AuthConfig != nil {
@@ -425,7 +454,7 @@ func (c *GRPCClient) RefreshAuth(ctx context.Context, req *RefreshRequest) (imag
 		}
 	}
 	res, err := c.client.RefreshAuth(ctx, &imageprovider.RefreshAuthRequest{
-		LeaseId:   req.LeaseID,
+		AuthKey:   req.AuthKey,
 		Auth:      auth,
 		MountRoot: c.mountRoot,
 	})

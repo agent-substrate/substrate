@@ -15,11 +15,11 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,7 +28,6 @@ import (
 	"time"
 
 	imageprovider "github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1"
-	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -40,8 +39,8 @@ const (
 	imageProviderMonitorPeriod = 2 * time.Second
 	// imageProviderStateTimeout bounds one State call to the plugin.
 	imageProviderStateTimeout = 2 * time.Second
-	// drainSuspendTimeout bounds one suspend of an actor off a draining image
-	// provider plugin, checkpoint included.
+	// drainSuspendTimeout bounds one suspend of an actor that holds image
+	// provider leases, checkpoint included.
 	drainSuspendTimeout = 10 * time.Minute
 )
 
@@ -87,25 +86,31 @@ func forEachOverlaySpec(actorsDir string, fn func(actorUID string, spec *imageca
 	return errors.Join(errs...)
 }
 
+// providerLease is a provider lease that an overlay spec records.
+type providerLease struct {
+	leaseID  string
+	imageRef string
+	actorUID string
+}
+
 // activeProviderLeases returns the provider leases that the overlay specs
-// under actorsDir record.
-func activeProviderLeases(actorsDir string) ([]*providerclient.ActiveLease, error) {
-	var leases []*providerclient.ActiveLease
-	add := func(leaseID, ref, digest string) {
-		if leaseID != "" {
-			leases = append(leases, &providerclient.ActiveLease{LeaseID: leaseID, ImageRef: ref, ImageDigest: digest})
+// under actorsDir record, sorted by lease ID.
+func activeProviderLeases(actorsDir string) ([]providerLease, error) {
+	var leases []providerLease
+	err := forEachOverlaySpec(actorsDir, func(actorUID string, spec *imagecache.OverlaySpec) {
+		if spec.LeaseID != "" {
+			leases = append(leases, providerLease{spec.LeaseID, spec.ImageRef, actorUID})
 		}
-	}
-	err := forEachOverlaySpec(actorsDir, func(_ string, spec *imagecache.OverlaySpec) {
-		add(spec.LeaseID, spec.ImageRef, spec.ImageDigest)
 		for _, v := range spec.ImageVolumes {
-			add(v.LeaseID, v.ImageRef, v.ImageDigest)
+			if v.LeaseID != "" {
+				leases = append(leases, providerLease{v.LeaseID, v.ImageRef, actorUID})
+			}
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
-	slices.SortFunc(leases, func(a, b *providerclient.ActiveLease) int { return cmp.Compare(a.LeaseID, b.LeaseID) })
+	slices.SortFunc(leases, func(a, b providerLease) int { return strings.Compare(a.leaseID, b.leaseID) })
 	return leases, nil
 }
 
@@ -126,19 +131,22 @@ const (
 // reconcile read the specs if its prepare finished first.
 type providerLeaseTracker struct {
 	mu sync.Mutex
-	// inflight maps the leases taken, or being taken, and not yet recorded in
-	// an overlay spec, to their image refs.
-	inflight map[string]string
+	// inflight holds the leases taken, or being taken, and not yet recorded
+	// in an overlay spec.
+	inflight map[string]bool
+	// lost holds the leases that the last reconcile reported lost, that a
+	// spec recorded then, and that were not released or taken again since.
+	lost map[string]bool
 }
 
-// take records that a bundle is about to take leaseID on ref.
-func (t *providerLeaseTracker) take(leaseID, ref string) {
+// take records that a bundle is about to take leaseID.
+func (t *providerLeaseTracker) take(leaseID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.inflight == nil {
-		t.inflight = make(map[string]string)
+		t.inflight = make(map[string]bool)
 	}
-	t.inflight[leaseID] = ref
+	t.inflight[leaseID] = true
 }
 
 // forget drops leaseIDs once a spec records them or they are released.
@@ -147,7 +155,15 @@ func (t *providerLeaseTracker) forget(leaseIDs ...string) {
 	defer t.mu.Unlock()
 	for _, id := range leaseIDs {
 		delete(t.inflight, id)
+		delete(t.lost, id)
 	}
+}
+
+// lostLeases returns a copy of the lost leases.
+func (t *providerLeaseTracker) lostLeases() map[string]bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return maps.Clone(t.lost)
 }
 
 // removeSpec removes bundle's overlay spec, so that a reconcile sees its
@@ -159,56 +175,99 @@ func (t *providerLeaseTracker) removeSpec(bundle string) error {
 }
 
 // reconcileProviderLeases replaces the plugin's leases with those the overlay
-// specs on the node record and those bundles are taking.
-func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) error {
+// specs on the node record and those bundles are taking. It records the
+// leases the plugin lost, so the monitor suspends the actors that hold them,
+// and marks the auth keys the plugin needs credentials for. It returns
+// whether any auth key needs a refresh now.
+func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) (bool, error) {
 	t := &s.providerLeases
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	leases, err := activeProviderLeases(actorsDir)
 	if err != nil {
-		return err
+		return false, err
 	}
-	for id, ref := range t.inflight {
-		if !slices.ContainsFunc(leases, func(l *providerclient.ActiveLease) bool { return l.LeaseID == id }) {
-			leases = append(leases, &providerclient.ActiveLease{LeaseID: id, ImageRef: ref})
+	// holders maps each lease a spec records to its actor.
+	holders := make(map[string]string, len(leases))
+	ids := make([]string, 0, len(leases)+len(t.inflight))
+	for _, l := range leases {
+		holders[l.leaseID] = l.actorUID
+		ids = append(ids, l.leaseID)
+	}
+	for id := range t.inflight {
+		if _, ok := holders[id]; !ok {
+			ids = append(ids, id)
 		}
 	}
-	slices.SortFunc(leases, func(a, b *providerclient.ActiveLease) int { return cmp.Compare(a.LeaseID, b.LeaseID) })
+	slices.Sort(ids)
 	rpcCtx, cancel := context.WithTimeout(ctx, providerReconcileTimeout)
 	defer cancel()
-	if err := s.imageProvider.ReconcileImages(rpcCtx, leases); err != nil {
-		return fmt.Errorf("while reconciling leases with the image provider plugin: %w", err)
+	res, err := s.imageProvider.ReconcileImages(rpcCtx, ids)
+	if err != nil {
+		return false, fmt.Errorf("while reconciling leases with the image provider plugin: %w", err)
 	}
-	slog.InfoContext(ctx, "Reconciled image provider leases",
-		slog.String("provider", s.imageProvider.Name()), slog.Int("leases", len(leases)))
-	return nil
-}
-
-// streamedActorUIDs returns the actors under actorsDir whose overlay specs
-// record a provider lease.
-func streamedActorUIDs(actorsDir string) (map[string]bool, error) {
-	uids := map[string]bool{}
-	err := forEachOverlaySpec(actorsDir, func(actorUID string, spec *imagecache.OverlaySpec) {
-		if spec.LeaseID != "" || slices.ContainsFunc(spec.ImageVolumes, func(v imagecache.ImageVolumeOverlay) bool { return v.LeaseID != "" }) {
-			uids[actorUID] = true
+	t.lost = map[string]bool{}
+	lostHolders := map[string]bool{}
+	for _, l := range res.LostLeases {
+		slog.WarnContext(ctx, "Image provider plugin lost a lease",
+			slog.String("provider", s.imageProvider.Name()), slog.String("lease", l.LeaseID), slog.String("message", l.Message))
+		// A lease whose PrepareImage has not reached the plugin yet may come
+		// back lost, so only a lease a spec records counts.
+		if uid, ok := holders[l.LeaseID]; ok {
+			t.lost[l.LeaseID] = true
+			lostHolders[uid] = true
 		}
-	})
-	return uids, err
+	}
+	if len(lostHolders) > 0 {
+		// An actor asked to suspend before still holds the lease, so ask
+		// again.
+		s.drain.reask(lostHolders)
+	}
+	s.providerAuth.require(res.AuthRefreshRequired)
+	slog.InfoContext(ctx, "Reconciled image provider leases",
+		slog.String("provider", s.imageProvider.Name()), slog.Int("leases", len(ids)),
+		slog.Int("lost", len(res.LostLeases)), slog.Int("auth_refresh_required", len(res.AuthRefreshRequired)))
+	return len(res.AuthRefreshRequired) > 0, nil
 }
 
-// startDrainSuspends finds the actors running on the node that hold provider
-// leases and has s.drain suspend those that are due. It returns how many
-// suspends it started, and a func that waits for them.
-func (s *Atelet) startDrainSuspends(ctx context.Context, actorsDir, workersDir string) (int, func()) {
-	holders, err := streamedActorUIDs(actorsDir)
+// suspendHolders returns the actors under actorsDir to suspend: those that
+// hold a lost lease, and, if draining, every actor that holds a provider
+// lease.
+func (s *Atelet) suspendHolders(actorsDir string, draining bool) (map[string]bool, error) {
+	lost := s.providerLeases.lostLeases()
+	holders := map[string]bool{}
+	if !draining && len(lost) == 0 {
+		return holders, nil
+	}
+	leases, err := activeProviderLeases(actorsDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range leases {
+		if draining || lost[l.leaseID] {
+			holders[l.actorUID] = true
+		}
+	}
+	return holders, nil
+}
+
+// startProviderSuspends finds the actors running on the node that hold lost
+// provider leases, or any provider lease while the plugin drains, and has
+// s.drain suspend those that are due. It returns how many suspends it
+// started, and a func that waits for them.
+func (s *Atelet) startProviderSuspends(ctx context.Context, actorsDir, workersDir string, draining bool) (int, func()) {
+	holders, err := s.suspendHolders(actorsDir, draining)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to find the actors that hold image provider leases", slog.Any("err", err))
+		return 0, func() {}
+	}
+	if !draining && len(holders) == 0 {
 		return 0, func() {}
 	}
 	var candidates []drainCandidate
 	if len(holders) > 0 {
 		if candidates, err = s.runningLeaseHolders(ctx, workersDir, holders); err != nil {
-			slog.WarnContext(ctx, "Failed to list workers to suspend actors off the image provider plugin", slog.Any("err", err))
+			slog.WarnContext(ctx, "Failed to list workers to suspend actors that hold image provider leases", slog.Any("err", err))
 			return 0, func() {}
 		}
 	}
@@ -269,12 +328,29 @@ func (s *Atelet) activeWorkloads(ctx context.Context, podUID string) (*ateworker
 // plugin restarts, it reconciles the plugin's leases, and retries a failed
 // reconcile on the next check. It also reconciles every
 // providerReconcilePeriod. A goroutine refreshes the registry credentials of
-// the leases that need it every providerAuthRefreshPeriod, and right after
-// each reconcile that follows a socket change. While the plugin reports
-// PLUGIN_STATE_DRAINING, it suspends the actors that hold its leases.
+// the auth keys that need it every providerAuthRefreshPeriod, and right after
+// a reconcile that reports auth keys without credentials. It suspends the
+// actors that hold the leases the last reconcile reported lost, and, while
+// the plugin reports PLUGIN_STATE_DRAINING, the actors that hold any of its
+// leases.
 func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir, workersDir string) {
 	refreshNow := make(chan struct{}, 1)
 	go s.runProviderAuthRefresh(ctx, socket, actorsDir, refreshNow)
+	reconcile := func() bool {
+		refresh, err := s.reconcileProviderLeases(ctx, actorsDir)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
+			return false
+		}
+		if refresh {
+			select {
+			case refreshNow <- struct{}{}:
+			default:
+				// A refresh is already due.
+			}
+		}
+		return true
+	}
 	var last os.FileInfo
 	var lastReconcile time.Time
 	ticker := time.NewTicker(imageProviderMonitorPeriod)
@@ -282,32 +358,23 @@ func (s *Atelet) monitorImageProvider(ctx context.Context, socket, actorsDir, wo
 	for {
 		info := providerSocketInfo(socket)
 		if newProviderSocket(last, info) {
-			if err := s.reconcileProviderLeases(ctx, actorsDir); err != nil {
-				slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
-				info = nil
-			} else {
-				// The plugin may have restarted and lost the credentials.
-				s.providerAuth.reset()
-				select {
-				case refreshNow <- struct{}{}:
-				default:
-					// A refresh is already due.
-				}
+			// A new plugin may implement RefreshAuth. Clear the flag before
+			// the reconcile kicks a refresh.
+			s.providerAuth.clearUnsupported()
+			if reconcile() {
 				s.drain.forget()
+			} else {
+				info = nil
 			}
 			lastReconcile = time.Now()
 		} else if info != nil && time.Since(lastReconcile) >= providerReconcilePeriod {
-			if err := s.reconcileProviderLeases(ctx, actorsDir); err != nil {
-				slog.WarnContext(ctx, "Failed to reconcile image provider leases", slog.Any("err", err))
-			}
+			reconcile()
 			lastReconcile = time.Now()
 		}
 		last = info
-		if info != nil && s.imageProviderDraining(ctx) {
-			// Suspends run in the background, drainSuspendConcurrency at a
-			// time. Each tick starts those that are due.
-			s.startDrainSuspends(ctx, actorsDir, workersDir)
-		}
+		// Suspends run in the background, drainSuspendConcurrency at a
+		// time. Each tick starts those that are due.
+		s.startProviderSuspends(ctx, actorsDir, workersDir, info != nil && s.imageProviderDraining(ctx))
 		select {
 		case <-ctx.Done():
 			return

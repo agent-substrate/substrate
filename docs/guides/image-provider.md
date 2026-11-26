@@ -80,17 +80,24 @@ each lease `<actor UID>/<container>`, or `<actor UID>/<container>/<volume>` for
 an image volume, and records it in the bundle's `rootfs-overlay.json`.
 
 atelet releases an actor's leases when the actor checkpoints or terminates, and
-when a Run or Restore fails. Each time the plugin's socket appears, atelet
-sends `ReconcileImages` with the leases the overlay specs on the node record.
-The plugin drops atelet's other leases and leaves other clients' leases alone.
+when a Run or Restore fails. Each time the plugin's socket appears, and every 5
+minutes, atelet sends `ReconcileImages` with the IDs of the leases the overlay
+specs on the node record. The plugin drops atelet's other leases and leaves
+other clients' leases alone. When the plugin reports a lease lost, atelet logs
+it and asks the control plane to suspend the actor that holds it. A restarted
+plugin restores its leases from disk before it serves, so activations do not
+wait for the reconcile.
 
-When the plugin reports `AUTH_REFRESH_REQUIRED` for a lease, atelet sends fresh
-registry credentials with `RefreshAuth` every minute, and right after
-`ReconcileImages`.
+atelet gives each lease the image's repository as its auth key, for example
+`us-docker.pkg.dev/project/repo/image`. Leases with the same auth key share
+registry credentials. While the plugin reports `AUTH_REFRESH_REQUIRED` for an
+auth key, atelet sends fresh credentials with one `RefreshAuth` per auth key
+every minute. It also refreshes right away the auth keys that
+`ReconcileImages` returns in `auth_refresh_required`.
 
 ## Draining the plugin
 
-A stopping plugin reports `PLUGIN_STATE_DRAINING` and serves no new images, so
-new activations use the image cache. While it drains, atelet asks the control
-plane to suspend each running actor on the node that holds a lease. The actor
-resumes later from its snapshot.
+A stopping plugin reports `PLUGIN_STATE_DRAINING` from `GetPluginInfo` and
+serves no new images, so new activations use the image cache. While it drains,
+atelet asks the control plane to suspend each running actor on the node that
+holds a lease. The actor resumes later from its snapshot.

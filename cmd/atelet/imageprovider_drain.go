@@ -28,9 +28,9 @@ import (
 )
 
 const (
-	// drainSuspendConcurrency is how many actors atelet suspends at once off
-	// a draining image provider plugin. Each suspend checkpoints the actor
-	// and uploads its snapshot.
+	// drainSuspendConcurrency is how many actors that hold image provider
+	// leases atelet suspends at once. Each suspend checkpoints the actor and
+	// uploads its snapshot.
 	drainSuspendConcurrency = 4
 	// drainRetryMin and drainRetryMax bound the backoff before atelet asks
 	// again to suspend an actor the control plane refused.
@@ -57,9 +57,9 @@ type drainSuspend struct {
 }
 
 // drainSuspender asks the control plane to suspend the actors that hold image
-// provider leases while the plugin drains, so the plugin can exit. A suspend
-// checkpoints the actor and releases its leases, and the actor resumes later
-// from its snapshot.
+// provider leases while the plugin drains, so the plugin can exit, and the
+// actors that hold leases the plugin lost. A suspend checkpoints the actor and
+// releases its leases, and the actor resumes later from its snapshot.
 type drainSuspender struct {
 	workers ateapi.WorkerServiceClient
 	clock   clock.PassiveClock
@@ -81,8 +81,8 @@ func newDrainSuspender(workers ateapi.WorkerServiceClient, clk clock.PassiveCloc
 // start asks the control plane to suspend each candidate that is not asked
 // yet, not in flight and not backing off, while one of the
 // drainSuspendConcurrency slots is free. A later call tries the candidates
-// left over. holders is every actor on the node that holds a provider lease;
-// start forgets the others. It returns how many suspends it started, and a
+// left over. holders is every actor on the node to suspend; start forgets
+// the others. It returns how many suspends it started, and a
 // func that waits for them.
 func (d *drainSuspender) start(ctx context.Context, holders map[string]bool, candidates []drainCandidate) (int, func()) {
 	var wg sync.WaitGroup
@@ -139,7 +139,7 @@ func (d *drainSuspender) suspend(ctx context.Context, c drainCandidate, a *drain
 	switch {
 	case err == nil:
 		a.asked = true
-		slog.InfoContext(ctx, "Suspended an actor off the draining image provider plugin", attrs...)
+		slog.InfoContext(ctx, "Suspended an actor that holds image provider leases", attrs...)
 	case status.Code(err) == codes.NotFound:
 		// The actor is not hosted on this node anymore, so asking again
 		// cannot help.
@@ -155,13 +155,27 @@ func (d *drainSuspender) suspend(ctx context.Context, c drainCandidate, a *drain
 		if a.failures == 1 || (delay == drainRetryMax && drainRetryDelay(a.failures-1) < drainRetryMax) {
 			level = slog.LevelWarn
 		}
-		slog.Log(ctx, level, "Failed to suspend an actor off the draining image provider plugin",
+		slog.Log(ctx, level, "Failed to suspend an actor that holds image provider leases",
 			append(attrs, slog.Int("failures", a.failures), slog.Duration("retry_in", delay), slog.Any("err", err))...)
 	}
 }
 
+// reask lets start ask again to suspend the actors in uids, keeping their
+// backoff. The reconcile calls it for the actors whose leases the plugin
+// still reports lost after an earlier suspend.
+func (d *drainSuspender) reask(uids map[string]bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for uid := range uids {
+		if a := d.actors[uid]; a != nil {
+			a.asked = false
+		}
+	}
+}
+
 // forget forgets the actors that are not in flight, so a later plugin
-// instance that drains suspends the actors that resumed since.
+// instance that drains or loses leases suspends the actors that resumed
+// since.
 func (d *drainSuspender) forget() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
