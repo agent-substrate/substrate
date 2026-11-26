@@ -104,10 +104,11 @@ func TestHelpOutputGoesToStdout(t *testing.T) {
 
 func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 	tests := []struct {
-		name          string
-		args          []string
-		wantErrorLine string
-		wantUsageLine string
+		name            string
+		args            []string
+		wantErrorLine   string
+		notWantErrorSub string
+		wantUsageLine   string
 	}{
 		// Flag value / parsing errors
 		{
@@ -164,35 +165,60 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			wantErrorLine: `Error: unknown flag "--bogus"`,
 			wantUsageLine: "kubectl-ate get atespace [atespace-name ...] [flags]",
 		},
+		{
+			name:          "unknown -n on atespaced command hints -a/--atespace",
+			args:          []string{"get", "actors", "-n", "space-1"},
+			wantErrorLine: `Error: unknown flag "-n" (use -a/--atespace to specify an atespace)`,
+			wantUsageLine: "kubectl-ate get actor [actor-name ...] [flags]",
+		},
+		{
+			name:          "unknown --namespace on atespaced command hints -a/--atespace",
+			args:          []string{"logs", "actor", "my-actor", "--namespace", "space-1"},
+			wantErrorLine: `Error: unknown flag "--namespace" (use -a/--atespace to specify an atespace)`,
+			wantUsageLine: "kubectl-ate logs actor <actor-name> [flags]",
+		},
+		{
+			name:            "unknown -n on non-atespaced command has no atespace hint",
+			args:            []string{"get", "atespaces", "-n", "space-1"},
+			wantErrorLine:   `Error: unknown flag "-n"`,
+			notWantErrorSub: "--atespace",
+			wantUsageLine:   "kubectl-ate get atespace [atespace-name ...] [flags]",
+		},
 
 		// Combined positional-arg and required-flag errors
 		{
-			name:          "create actor with only -a reports missing arg and --template",
+			name:          "create actor with only -a reports missing arg and -t/--template",
 			args:          []string{"create", "actor", "-a", "my-atespace"},
-			wantErrorLine: "Error: missing required argument <actor-name> and required flag --template",
+			wantErrorLine: "Error: missing required argument <actor-name> and required flag -t/--template",
 			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
 		},
 		{
 			name:          "create actor with nothing reports missing arg and both required flags",
 			args:          []string{"create", "actor"},
-			wantErrorLine: "Error: missing required argument <actor-name> and required flags -a/--atespace, --template",
+			wantErrorLine: "Error: missing required argument <actor-name> and required flags -a/--atespace, -t/--template",
 			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
 		},
 		{
 			name:          "create actor with name only reports both missing flags",
 			args:          []string{"create", "actor", "my-actor"},
-			wantErrorLine: "Error: missing required flags -a/--atespace, --template",
+			wantErrorLine: "Error: missing required flags -a/--atespace, -t/--template",
 			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
 		},
 		{
-			name:          "create actor with name and -a reports missing --template",
+			name:          "create actor with name and -a reports missing -t/--template",
 			args:          []string{"create", "actor", "my-actor", "-a", "my-atespace"},
-			wantErrorLine: "Error: missing required flag --template",
+			wantErrorLine: "Error: missing required flag -t/--template",
 			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
 		},
 		{
 			name:          "create actor with both flags but no name reports missing <actor-name>",
 			args:          []string{"create", "actor", "-a", "my-atespace", "--template", "counter"},
+			wantErrorLine: "Error: missing required argument <actor-name>",
+			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
+		},
+		{
+			name:          "create actor accepts -t shorthand for --template",
+			args:          []string{"create", "actor", "-a", "my-atespace", "-t", "counter"},
 			wantErrorLine: "Error: missing required argument <actor-name>",
 			wantUsageLine: "kubectl-ate create actor <actor-name> [flags]",
 		},
@@ -273,6 +299,30 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			args:          []string{"delete", "actor-template"},
 			wantErrorLine: "Error: missing required argument <template-name> and required flag -a/--atespace",
 			wantUsageLine: "kubectl-ate delete actor-template <template-name> [flags]",
+		},
+		{
+			name:          "create template alias resolves to create actor-template",
+			args:          []string{"create", "template"},
+			wantErrorLine: "Error: missing required flag -f/--filename",
+			wantUsageLine: "kubectl-ate create actor-template -f <manifest> [flags]",
+		},
+		{
+			name:          "delete template alias resolves to delete actor-template",
+			args:          []string{"delete", "template"},
+			wantErrorLine: "Error: missing required argument <template-name> and required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate delete actor-template <template-name> [flags]",
+		},
+		{
+			name:          "get template alias resolves to get actor-template",
+			args:          []string{"get", "template"},
+			wantErrorLine: "Error: -a/--atespace <name> or -A/--all-atespaces is required",
+			wantUsageLine: "kubectl-ate get actor-template [template-name ...] [flags]",
+		},
+		{
+			name:          "get templates alias resolves to get actor-template",
+			args:          []string{"get", "templates"},
+			wantErrorLine: "Error: -a/--atespace <name> or -A/--all-atespaces is required",
+			wantUsageLine: "kubectl-ate get actor-template [template-name ...] [flags]",
 		},
 		{
 			name:          "create atespace missing name",
@@ -435,12 +485,18 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 		{
 			name:          "update actor without --template or --worker-selector",
 			args:          []string{"update", "actor", "my-actor", "-a", "space-1"},
-			wantErrorLine: "Error: at least one of --template or --worker-selector is required",
+			wantErrorLine: "Error: at least one of -t/--template or --worker-selector is required",
 			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
 		},
 		{
 			name:          "update actor with malformed --template",
 			args:          []string{"update", "actor", "my-actor", "-a", "space-1", "--template", "a/b/c"},
+			wantErrorLine: `Error: malformed reference "a/b/c" (expected <name> or <atespace>/<name>)`,
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
+		},
+		{
+			name:          "update actor accepts -t shorthand",
+			args:          []string{"update", "actor", "my-actor", "-a", "space-1", "-t", "a/b/c"},
 			wantErrorLine: `Error: malformed reference "a/b/c" (expected <name> or <atespace>/<name>)`,
 			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
 		},
@@ -532,6 +588,9 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			firstLine, _, _ := strings.Cut(stderr, "\n")
 			if !strings.Contains(firstLine, tc.wantErrorLine) {
 				t.Errorf("first stderr line = %q, want it to contain %q\nfull stderr:\n%s", firstLine, tc.wantErrorLine, stderr)
+			}
+			if tc.notWantErrorSub != "" && strings.Contains(firstLine, tc.notWantErrorSub) {
+				t.Errorf("first stderr line = %q, must not contain %q\nfull stderr:\n%s", firstLine, tc.notWantErrorSub, stderr)
 			}
 			if !strings.Contains(stderr, "\n\nUsage:\n") {
 				t.Errorf("stderr missing Usage section:\n%s", stderr)

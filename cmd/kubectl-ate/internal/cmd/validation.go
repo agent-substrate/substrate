@@ -76,7 +76,11 @@ func handleFlagError(cmd *cobra.Command, err error) error {
 
 	var notExist *pflag.NotExistError
 	if errors.As(err, &notExist) {
-		return usageErrorf("unknown flag %q", specifiedNotExistFlag(notExist))
+		flag := specifiedNotExistFlag(notExist)
+		if (flag == "-n" || flag == "--namespace") && cmd.Flags().Lookup("atespace") != nil {
+			return usageErrorf("unknown flag %q (use -a/--atespace to specify an atespace)", flag)
+		}
+		return usageErrorf("unknown flag %q", flag)
 	}
 
 	return wrapUsageError(err)
