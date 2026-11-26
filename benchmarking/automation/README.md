@@ -17,9 +17,10 @@ To run the cold resume tests from your workstation instead, see
 
 1. CronJob fires on the orchestration cluster; pod starts (orchestrator +
    DIND sidecar).
-2. Orchestrator waits for DIND, copies the appropriate `ate-dev-env.sh`, runs
-   `gcloud container clusters get-credentials` for the test cluster.
-3. Shallow-clones `--repo` at `--branch`, captures the commit hash.
+2. Orchestrator waits for Docker and shallow-clones `--repo` at `--branch`
+   or uses the checkout at `--substrate-dir`.
+3. Sources each target's env file and selects its
+   [cluster credentials](#target-cluster-credentials).
 4. `docker build && docker push` builds the runner image for each test type
    in use, tagged with the commit hash: `${KO_DOCKER_REPO}/locust-test:<commit>`,
    `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>` and/or
@@ -129,19 +130,14 @@ Two flags replace the CronJob's clone and ConfigMap:
 
 Every test runs `ate-setup delete ate-system` and
 `benchmarking/workloads/deploy.sh --delete` on the cluster the env file
-names, both before and after it runs. Do not point it at a cluster you
-share. The orchestrator runs `gcloud container clusters get-credentials`
-into a kubeconfig of its own under a temporary directory, so your kubectl
-context is not changed. Scripts that source `.ate-dev-env.sh` themselves,
-such as `benchmarking/workloads/deploy.sh`, still use a `KUBECONFIG` that
-file exports, so leave it out of the env file. Set up docker auth for the
-env file's `KO_DOCKER_REPO` registry before you run it.
+names, both before and after the test. Use a dedicated test cluster. Set up
+Docker auth for the env file's `KO_DOCKER_REPO` registry before you run it.
 
-You need Python 3.10 or newer, `docker`, `git`, Go, `gcloud` with the
-`gke-gcloud-auth-plugin` component, and `kubectl` on the `PATH`. ko runs
-from `hack/tools/ko` through `go tool`. The orchestrator polls `docker info`
-first and fails if Docker is not running within 2 minutes. Relative paths
-in flags resolve against your current directory.
+You need Python 3.10 or newer, Docker, Git, Go, and `kubectl` on the PATH.
+Install any credential plugin your kubeconfig needs. For GKE discovery,
+install `gcloud` and `gke-gcloud-auth-plugin`. ko runs from `hack/tools/ko`
+through `go tool`. The orchestrator waits up to two minutes for Docker.
+Relative paths in command-line flags resolve against your current directory.
 
 ```bash
 python3 -m venv benchmarking/automation/venv
@@ -156,6 +152,26 @@ benchmarking/automation/venv/bin/python -u benchmarking/automation/orchestrator.
 of the cold resume tests this way. For a quicker loop that only rebuilds the
 runner against a cluster that already has substrate, see
 [benchmarking/nighthawk-ingress/run-dev.sh](../nighthawk-ingress/run-dev.sh).
+
+## Target cluster credentials
+
+Each target env file sets `KO_DOCKER_REPO` and chooses one credential mode:
+
+- **Existing kubeconfig.** Set `KUBECONFIG` to use that file's current context
+  or set `KUBECTL_CONTEXT` to choose a named context. With only
+  `KUBECTL_CONTEXT`, the orchestrator looks in the default kubeconfig.
+  For a CronJob, mount the kubeconfig in the orchestrator and set its
+  absolute path in the target env file. Use an exec plugin for OIDC credentials
+  that need refresh. For Kind, set `ATE_INSTALL_KIND=true` to use the Kind
+  profile. The default context for that profile is `kind-${KIND_CLUSTER_NAME:-kind}`.
+- **GKE discovery.** Set `PROJECT_ID`, `CLUSTER_NAME`, and `CLUSTER_LOCATION`.
+  Remove `KUBECTL_CONTEXT` and `KUBECONFIG` from GKE target scripts
+  copied by `setup.sh` so the CronJob can fetch its own credentials.
+
+The orchestrator rejects ambiguous or missing target settings before it
+deploys or deletes anything. It selects the cluster in a private kubeconfig
+and uses it for installation, workloads, Jobs, and cleanup. The source
+kubeconfig and its current context stay intact.
 
 ## Test cluster prerequisites
 
