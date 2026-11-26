@@ -19,6 +19,7 @@ require (
 	github.com/distribution/reference v0.6.0
 	github.com/envoyproxy/go-control-plane v0.14.0
 	github.com/envoyproxy/go-control-plane/envoy v1.39.1-0.20260819172001-e6e3fd93e4be
+	github.com/erofs/go-erofs v0.3.2-0.20261012133254-3772b1e68e1a
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-cmp v0.7.0
