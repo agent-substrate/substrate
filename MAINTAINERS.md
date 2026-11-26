@@ -5,12 +5,12 @@ The current maintainers of the Agent Substrate project are listed below.
 | Name                      | GitHub/GitLab ID | Company/Organization |
 | ------------------------- | ---------------- | -------------------- |
 | Taahir Ahmed              | ahmedtd          | Google               |
+| Tim Bai                   | baizhenyu        | Google               |
 | Benjamin Elder            | BenTheElder      | Google               |
 | Bowei Du                  | bowei            | Google               |
 | Dmitry Berkovich          | dberkov          | Google               |
 | Eitan Yarmush             | EItanya          | Solo                 |
 | Haven Xia                 | HavenXia         | Google               |
-| Jeff Luo                  | JeffLuoo         | Google               |
 | Julian Gutierrez Oschmann | juli4n           | Google               |
 | Keith Mattix              | keithmattix      | Solo                 |
 | Krisztian F               | krisztianfekete  | Solo                 |
