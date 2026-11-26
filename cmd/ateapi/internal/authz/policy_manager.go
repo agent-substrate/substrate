@@ -36,6 +36,16 @@ type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
+	cache     *checkCache
+}
+
+// InvalidateCache evicts cached authorization reads on this replica after a
+// policy-mutating transaction commits, closing any window where a concurrent
+// Check ran between tuple mutation and transaction commit.
+func (m *PolicyManager) InvalidateCache() {
+	if m != nil {
+		m.cache.Invalidate()
+	}
 }
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root

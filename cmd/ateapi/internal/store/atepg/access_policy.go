@@ -55,6 +55,7 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing global access policy create: %w", err)
 	}
+	p.policyManager.InvalidateCache()
 	return dbPolicy, nil
 }
 
@@ -105,6 +106,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing global access policy update: %w", err)
 	}
+	p.policyManager.InvalidateCache()
 	return dbPolicy, nil
 }
 
@@ -140,6 +142,7 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy create for %s: %w", name, err)
 	}
+	p.policyManager.InvalidateCache()
 	return dbPolicy, nil
 }
 
@@ -190,6 +193,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy update for %s: %w", name, err)
 	}
+	p.policyManager.InvalidateCache()
 	return dbPolicy, nil
 }
 
@@ -226,6 +230,7 @@ func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy delete for %s: %w", name, err)
 	}
+	p.policyManager.InvalidateCache()
 	deleted.Metadata.DeleteTime = timestamppb.Now()
 	return deleted, nil
 }

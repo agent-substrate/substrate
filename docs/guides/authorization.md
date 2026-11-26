@@ -332,3 +332,9 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 - **Any atelet can read any actor's egress policy.** Every node's atelet
   shares one identity, so the `atelet` role isn't limited to actors on its
   node ([#1564](https://github.com/agent-substrate/substrate/issues/1564)).
+- **`--authz-cache-ttl` delays cross-replica policy revocations.** When set
+  above `0` on `ate-api-server`, each replica caches positive scope-level
+  authorization checks and OpenFGA tuple reads for that duration. Policy and
+  atespace mutations invalidate the cache immediately on the replica that
+  handles the write, while other replicas serve cached grants for up to one
+  TTL.

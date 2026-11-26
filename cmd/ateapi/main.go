@@ -91,6 +91,7 @@ var (
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
 	// changes take effect without a restart.
 	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. Required: at least one.")
+	authzCacheTTL        = pflag.Duration("authz-cache-ttl", 0, "How long to cache positive scope-level authorization checks and OpenFGA tuple reads in memory. 0 disables caching. Policy revocations take effect immediately on the replica handling the write and within one TTL on other replicas.")
 	// These SPIFFE IDs hold the matching system component role when they call
 	// over mTLS.
 	controllerSPIFFEID       = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
@@ -250,7 +251,7 @@ func main() {
 	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
 	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	fgaServer, err := authz.NewOpenFGAServerWithCache(pool, *authzCacheTTL)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
@@ -511,6 +512,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
+		slog.Duration("authz-cache-ttl", *authzCacheTTL),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
