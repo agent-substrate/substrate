@@ -121,14 +121,14 @@ func scopeFromFlags(atespace string, global bool) (accessPolicyScope, error) {
 // document into an AccessPolicy. Parsing is strict: unknown fields are an
 // error.
 func accessPolicyFromManifest(data []byte) (*ateapi.AccessPolicy, error) {
-	msgs, err := manifestMessages(data, &ateapi.AccessPolicy{})
+	docs, err := manifestMessages(data, &ateapi.AccessPolicy{})
 	if err != nil {
 		return nil, err
 	}
-	if len(msgs) > 1 {
+	if len(docs) > 1 {
 		return nil, errors.New("manifest holds more than one document, expected one")
 	}
-	return msgs[0].(*ateapi.AccessPolicy), nil
+	return docs[0].Message.(*ateapi.AccessPolicy), nil
 }
 
 // loadAccessPolicyManifest reads a manifest from filename, or from in when

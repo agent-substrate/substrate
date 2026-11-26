@@ -75,7 +75,7 @@ func TestActorTemplatesFromManifest(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("actorTemplatesFromManifest returned %d templates, want 1", len(got))
 	}
-	template := got[0]
+	template := got[0].template
 
 	want := &ateapi.ActorTemplate{
 		Metadata:       &ateapi.ResourceMetadata{Atespace: "ate-demo-counter", Name: "counter"},
@@ -119,8 +119,8 @@ snapshot_config:
 	if len(got) != 1 {
 		t.Fatalf("actorTemplatesFromManifest returned %d templates, want 1", len(got))
 	}
-	if got[0].GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
-		t.Errorf("storage_location = %q", got[0].GetSnapshotConfig().GetStorageLocation())
+	if got[0].template.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
+		t.Errorf("storage_location = %q", got[0].template.GetSnapshotConfig().GetStorageLocation())
 	}
 }
 
@@ -138,7 +138,7 @@ metadata: {atespace: a, name: three}
 	}
 	var names []string
 	for _, tmpl := range got {
-		names = append(names, tmpl.GetMetadata().GetName())
+		names = append(names, tmpl.template.GetMetadata().GetName())
 	}
 	if diff := cmp.Diff([]string{"one", "two", "three"}, names); diff != "" {
 		t.Errorf("names mismatch (-want +got):\n%s", diff)
@@ -210,7 +210,7 @@ func TestActorTemplatesFromManifest_DemoManifests(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("actorTemplatesFromManifest returned %d templates, want 1", len(got))
 			}
-			template := got[0]
+			template := got[0].template
 			if template.GetMetadata().GetAtespace() != test.atespace || template.GetMetadata().GetName() != test.name {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					template.GetMetadata().GetAtespace(), template.GetMetadata().GetName(), test.atespace, test.name)
@@ -253,37 +253,138 @@ func (f *fakeActorTemplateCreator) CreateActorTemplate(_ context.Context, req *a
 }
 
 func TestCreateActorTemplatesRunner(t *testing.T) {
-	mkTemplate := func(name string) *ateapi.ActorTemplate {
-		return &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: "a", Name: name}}
-	}
-	creator := &fakeActorTemplateCreator{
-		fail: map[string]error{"two": status.Error(codes.AlreadyExists, "already exists")},
-	}
-	var stdout bytes.Buffer
-	runner := &createActorTemplatesRunner{
-		creator:   creator,
-		templates: []*ateapi.ActorTemplate{mkTemplate("one"), mkTemplate("two"), mkTemplate("three")},
-		outputFmt: "table",
-		stdout:    &stdout,
-	}
-
-	err := runner.Run(context.Background())
-	if err == nil {
-		t.Fatal("Run succeeded, want an aggregated error")
-	}
-	if !strings.Contains(err.Error(), "two") || !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("Run error = %v, want it to mention the failed template", err)
-	}
-	if diff := cmp.Diff([]string{"one", "two", "three"}, creator.got); diff != "" {
-		t.Errorf("create calls mismatch (-want +got):\n%s", diff)
-	}
-	// The two successful templates are printed; the failed one is not.
-	for _, want := range []string{"one", "three"} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
+	mkDocument := func(index int, atespace, name string) actorTemplateDocument {
+		return actorTemplateDocument{
+			index:    index,
+			template: &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: atespace, Name: name}},
 		}
 	}
-	if strings.Contains(stdout.String(), "two") {
-		t.Errorf("stdout = %q, want no row for the failed template", stdout.String())
+	tests := []struct {
+		name string
+		// documents is the parsed manifest the runner works from.
+		documents []actorTemplateDocument
+		// fail maps a template name to the error its create call returns.
+		fail map[string]error
+		// wantCalls is the order in which the runner calls CreateActorTemplate.
+		wantCalls []string
+		wantErrs  []string
+		wantNoErr []string
+		// outputFmt is the -o format; empty means yaml.
+		outputFmt string
+		// wantStdout and wantNoStdout are substrings of the printed output.
+		wantStdout   []string
+		wantNoStdout []string
+	}{
+		{
+			name:       "single document prints one template",
+			documents:  []actorTemplateDocument{mkDocument(1, "a", "one")},
+			wantCalls:  []string{"one"},
+			wantStdout: []string{"name: one"},
+			// -o yaml of a list wraps the templates in a response message.
+			wantNoStdout: []string{"actorTemplates:"},
+		},
+		{
+			name:       "multi-document all created prints a list",
+			documents:  []actorTemplateDocument{mkDocument(1, "a", "one"), mkDocument(2, "a", "two")},
+			wantCalls:  []string{"one", "two"},
+			wantStdout: []string{"actorTemplates:", "one", "two"},
+		},
+		{
+			name:      "partial failure still prints a list",
+			documents: []actorTemplateDocument{mkDocument(1, "a", "one"), mkDocument(2, "a", "two"), mkDocument(3, "a", "three")},
+			fail:      map[string]error{"two": status.Error(codes.AlreadyExists, "already exists")},
+			wantCalls: []string{"one", "two", "three"},
+			wantErrs: []string{
+				`document 2: failed to create actor template "two" in atespace "a"`,
+				"already exists",
+			},
+			wantStdout:   []string{"actorTemplates:", "one", "three"},
+			wantNoStdout: []string{"two"},
+		},
+		{
+			name:      "all creates fail prints nothing",
+			documents: []actorTemplateDocument{mkDocument(1, "a", "one"), mkDocument(2, "a", "two")},
+			fail: map[string]error{
+				"one": status.Error(codes.NotFound, "no such atespace"),
+				"two": status.Error(codes.NotFound, "no such atespace"),
+			},
+			wantCalls: []string{"one", "two"},
+			wantErrs: []string{
+				`document 1: failed to create actor template "one" in atespace "a"`,
+				`document 2: failed to create actor template "two" in atespace "a"`,
+			},
+			wantNoStdout: []string{"actorTemplates:", "metadata"},
+		},
+		{
+			name:       "table output prints a header and a row per template",
+			documents:  []actorTemplateDocument{mkDocument(1, "a", "one"), mkDocument(2, "a", "two")},
+			outputFmt:  "table",
+			wantCalls:  []string{"one", "two"},
+			wantStdout: []string{"ATESPACE", "NAME", "one", "two"},
+			// The table renderer is the list renderer, not the response message.
+			wantNoStdout: []string{"actorTemplates:"},
+		},
+		{
+			name: "missing metadata names the document",
+			documents: []actorTemplateDocument{
+				mkDocument(1, "a", "one"),
+				{index: 2, template: &ateapi.ActorTemplate{}},
+			},
+			fail:      map[string]error{"": status.Error(codes.InvalidArgument, "metadata is required")},
+			wantCalls: []string{"one", ""},
+			wantErrs:  []string{"document 2: failed to create actor template: rpc error", "metadata is required"},
+			// The empty metadata rendered as "/:" before the document was named.
+			wantNoErr: []string{"/: "},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creator := &fakeActorTemplateCreator{fail: tt.fail}
+			format := tt.outputFmt
+			if format == "" {
+				format = "yaml"
+			}
+			var stdout bytes.Buffer
+			runner := &createActorTemplatesRunner{
+				creator:   creator,
+				documents: tt.documents,
+				outputFmt: format,
+				stdout:    &stdout,
+			}
+
+			err := runner.Run(context.Background())
+			switch {
+			case len(tt.wantErrs) > 0:
+				if err == nil {
+					t.Fatal("Run succeeded, want an aggregated error")
+				}
+				for _, want := range tt.wantErrs {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("Run error = %q, want it to contain %q", err, want)
+					}
+				}
+				for _, no := range tt.wantNoErr {
+					if strings.Contains(err.Error(), no) {
+						t.Errorf("Run error = %q, want it not to contain %q", err, no)
+					}
+				}
+			case err != nil:
+				t.Fatalf("Run: %v", err)
+			}
+			if diff := cmp.Diff(tt.wantCalls, creator.got); diff != "" {
+				t.Errorf("create calls mismatch (-want +got):\n%s", diff)
+			}
+			for _, want := range tt.wantStdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
+				}
+			}
+			for _, no := range tt.wantNoStdout {
+				if strings.Contains(stdout.String(), no) {
+					t.Errorf("stdout = %q, want it not to contain %q", stdout.String(), no)
+				}
+			}
+		})
 	}
 }

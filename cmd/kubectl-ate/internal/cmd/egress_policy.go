@@ -81,14 +81,14 @@ var deleteEgressPolicyCmd = &cobra.Command{
 // document into an EgressPolicy. Parsing is strict: unknown fields are an
 // error.
 func egressPolicyFromManifest(data []byte) (*ateapi.EgressPolicy, error) {
-	msgs, err := manifestMessages(data, &ateapi.EgressPolicy{})
+	docs, err := manifestMessages(data, &ateapi.EgressPolicy{})
 	if err != nil {
 		return nil, err
 	}
-	if len(msgs) > 1 {
+	if len(docs) > 1 {
 		return nil, errors.New("manifest holds more than one document, expected one")
 	}
-	return msgs[0].(*ateapi.EgressPolicy), nil
+	return docs[0].Message.(*ateapi.EgressPolicy), nil
 }
 
 // overrideEgressPolicyMetadata defaults each of metadata.atespace and
