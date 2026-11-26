@@ -487,14 +487,6 @@ func pgErrCode(err error) string {
 	return ""
 }
 
-func pgErrConstraint(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.ConstraintName
-	}
-	return ""
-}
-
 const (
 	// Paces the maintenance loop (outbox partitions and expired leases).
 	maintenanceInterval = time.Minute

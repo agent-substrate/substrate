@@ -46,9 +46,9 @@ func TestActorsTablePartitionable(t *testing.T) {
 	spansPartitions := map[string][]string{
 		// A global list walks every atespace.
 		"atespace": {globalList("actors"), globalList("actor_templates"), globalList("tags")},
-		// A global list walks every name, and a list within one atespace
-		// spans every name hash.
-		"name": {globalList("actors"), scopedActorList},
+		// A global list walks every name, and a list or emptiness check within
+		// one atespace spans every name hash.
+		"name": {globalList("actors"), scopedActorList, normalizeSQL(atespaceHasActorsSQL)},
 	}
 
 	t.Run("by atespace", func(t *testing.T) {
