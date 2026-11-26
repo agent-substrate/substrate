@@ -15,7 +15,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,8 +25,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 
 	"go.ate.dev/substrate/internal/imagecache"
 )
@@ -78,26 +75,25 @@ func forEachOverlaySpec(actorsDir string, fn func(actorUID string, spec *imageca
 	return errors.Join(errs...)
 }
 
-// activeProviderLeases returns the provider leases that the overlay specs
-// under actorsDir record.
-func activeProviderLeases(actorsDir string) ([]*providerclient.ActiveLease, error) {
-	var leases []*providerclient.ActiveLease
-	add := func(leaseID, ref, digest string) {
-		if leaseID != "" {
-			leases = append(leases, &providerclient.ActiveLease{LeaseID: leaseID, ImageRef: ref, ImageDigest: digest})
-		}
-	}
+// activeProviderLeases returns the IDs of the provider leases that the
+// overlay specs under actorsDir record, sorted.
+func activeProviderLeases(actorsDir string) ([]string, error) {
+	var ids []string
 	err := forEachOverlaySpec(actorsDir, func(_ string, spec *imagecache.OverlaySpec) {
-		add(spec.LeaseID, spec.ImageRef, spec.ImageDigest)
+		if spec.LeaseID != "" {
+			ids = append(ids, spec.LeaseID)
+		}
 		for _, v := range spec.ImageVolumes {
-			add(v.LeaseID, v.ImageRef, v.ImageDigest)
+			if v.LeaseID != "" {
+				ids = append(ids, v.LeaseID)
+			}
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
-	slices.SortFunc(leases, func(a, b *providerclient.ActiveLease) int { return cmp.Compare(a.LeaseID, b.LeaseID) })
-	return leases, nil
+	slices.Sort(ids)
+	return ids, nil
 }
 
 const (
@@ -117,19 +113,19 @@ const (
 // reconcile read the specs if its prepare finished first.
 type providerLeaseTracker struct {
 	mu sync.Mutex
-	// inflight maps the leases taken, or being taken, and not yet recorded in
-	// an overlay spec, to their image refs.
-	inflight map[string]string
+	// inflight holds the leases taken, or being taken, and not yet recorded
+	// in an overlay spec.
+	inflight map[string]bool
 }
 
-// take records that a bundle is about to take leaseID on ref.
-func (t *providerLeaseTracker) take(leaseID, ref string) {
+// take records that a bundle is about to take leaseID.
+func (t *providerLeaseTracker) take(leaseID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.inflight == nil {
-		t.inflight = make(map[string]string)
+		t.inflight = make(map[string]bool)
 	}
-	t.inflight[leaseID] = ref
+	t.inflight[leaseID] = true
 }
 
 // forget drops leaseIDs once a spec records them or they are released.
@@ -150,28 +146,34 @@ func (t *providerLeaseTracker) removeSpec(bundle string) error {
 }
 
 // reconcileProviderLeases replaces the plugin's leases with those the overlay
-// specs on the node record and those bundles are taking.
+// specs on the node record and those bundles are taking, and logs the leases
+// the plugin lost.
 func (s *Atelet) reconcileProviderLeases(ctx context.Context, actorsDir string) error {
 	t := &s.providerLeases
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	leases, err := activeProviderLeases(actorsDir)
+	ids, err := activeProviderLeases(actorsDir)
 	if err != nil {
 		return err
 	}
-	for id, ref := range t.inflight {
-		if !slices.ContainsFunc(leases, func(l *providerclient.ActiveLease) bool { return l.LeaseID == id }) {
-			leases = append(leases, &providerclient.ActiveLease{LeaseID: id, ImageRef: ref})
+	for id := range t.inflight {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
 		}
 	}
-	slices.SortFunc(leases, func(a, b *providerclient.ActiveLease) int { return cmp.Compare(a.LeaseID, b.LeaseID) })
+	slices.Sort(ids)
 	rpcCtx, cancel := context.WithTimeout(ctx, providerReconcileTimeout)
 	defer cancel()
-	if err := s.imageProvider.ReconcileImages(rpcCtx, leases); err != nil {
+	res, err := s.imageProvider.ReconcileImages(rpcCtx, ids)
+	if err != nil {
 		return fmt.Errorf("while reconciling leases with the image provider plugin: %w", err)
 	}
+	for _, l := range res.LostLeases {
+		slog.WarnContext(ctx, "Image provider plugin lost a lease",
+			slog.String("provider", s.imageProvider.Name()), slog.String("lease", l.LeaseID), slog.String("message", l.Message))
+	}
 	slog.InfoContext(ctx, "Reconciled image provider leases",
-		slog.String("provider", s.imageProvider.Name()), slog.Int("leases", len(leases)))
+		slog.String("provider", s.imageProvider.Name()), slog.Int("leases", len(ids)), slog.Int("lost", len(res.LostLeases)))
 	return nil
 }
 

@@ -68,11 +68,7 @@ func TestReconcileProviderLeases(t *testing.T) {
 	if err := s.reconcileProviderLeases(t.Context(), actorsDir); err != nil {
 		t.Fatalf("reconcileProviderLeases: %v", err)
 	}
-	want := [][]*providerclient.ActiveLease{{
-		{LeaseID: "actor-1/main", ImageRef: app, ImageDigest: "sha256:aaa"},
-		{LeaseID: "actor-1/main/tools", ImageRef: tools, ImageDigest: "sha256:bbb"},
-		{LeaseID: "actor-2/main", ImageRef: app, ImageDigest: "sha256:aaa"},
-	}}
+	want := [][]string{{"actor-1/main", "actor-1/main/tools", "actor-2/main"}}
 	if diff := cmp.Diff(want, provider.ReconcileCalls); diff != "" {
 		t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
 	}
@@ -134,11 +130,7 @@ func TestReconcileProviderLeasesWithBundles(t *testing.T) {
 		t.Fatalf("reconcileProviderLeases: %v", err)
 	}
 
-	want := [][]*providerclient.ActiveLease{
-		{{LeaseID: "actor-1/app", ImageRef: ref}},
-		{{LeaseID: "actor-1/app", ImageRef: ref, ImageDigest: testStreamedDigest}},
-		nil,
-	}
+	want := [][]string{{"actor-1/app"}, {"actor-1/app"}, nil}
 	if diff := cmp.Diff(want, provider.ReconcileCalls, cmpopts.EquateEmpty()); diff != "" {
 		t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
 	}
