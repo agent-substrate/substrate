@@ -20,10 +20,13 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
+
+	erofs "github.com/erofs/go-erofs"
 )
 
 // maxImageFileSize caps ReadFile: it reads small config files from untrusted images.
@@ -43,6 +46,9 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 	}
 	if skip {
 		return nil, fmt.Errorf("image file %q: %w", name, fs.ErrInvalid)
+	}
+	if img.EROFS {
+		return img.readEROFSFile(name, rel)
 	}
 	for _, layerDir := range slices.Backward(img.LayerDirs) {
 		b, err := readLayerFile(layerDir, rel)
@@ -64,6 +70,80 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("image file %q: %w", name, fs.ErrNotExist)
+}
+
+func (img *Image) readEROFSFile(name, rel string) ([]byte, error) {
+	for _, layerDir := range slices.Backward(img.LayerDirs) {
+		b, found, hidden, err := readEROFSLayerFile(layerDir, rel)
+		if err != nil {
+			return nil, fmt.Errorf("image file %q: %w", name, err)
+		}
+		if found {
+			return b, nil
+		}
+		if hidden {
+			break
+		}
+	}
+	return nil, fmt.Errorf("image file %q: %w", name, fs.ErrNotExist)
+}
+
+func readEROFSLayerFile(layerDir, rel string) (data []byte, found, hidden bool, err error) {
+	raw, err := os.Open(LayerEROFSPath(layerDir))
+	if err != nil {
+		return nil, false, false, err
+	}
+	defer raw.Close()
+	fsys, err := erofs.Open(raw)
+	if err != nil {
+		return nil, false, false, err
+	}
+	f, err := fsys.Open(rel)
+	switch {
+	case err == nil:
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, false, false, err
+		}
+		if st, ok := fi.Sys().(*erofs.Stat); ok && fi.Mode()&fs.ModeCharDevice != 0 && st.Rdev == 0 {
+			return nil, false, true, nil
+		}
+		if !fi.Mode().IsRegular() {
+			return nil, false, false, &fs.PathError{Op: "read", Path: rel, Err: syscall.EISDIR}
+		}
+		b, err := io.ReadAll(io.LimitReader(f, maxImageFileSize+1))
+		if err != nil {
+			return nil, false, false, err
+		}
+		if len(b) > maxImageFileSize {
+			return nil, false, false, fmt.Errorf("larger than %d bytes", maxImageFileSize)
+		}
+		return b, true, false, nil
+	case errors.Is(err, erofs.ErrNotDirectory):
+		return nil, false, true, nil
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, false, false, err
+	}
+	for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+		fi, err := fs.Stat(fsys, dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if errors.Is(err, erofs.ErrNotDirectory) {
+			return nil, false, true, nil
+		}
+		if err != nil {
+			return nil, false, false, err
+		}
+		if !fi.IsDir() {
+			return nil, false, true, nil
+		}
+		if st, ok := fi.Sys().(*erofs.Stat); ok && (st.Xattrs[overlayOpaqueXattr] == "y" || st.Xattrs[overlayUserOpaqueXattr] == "y") {
+			return nil, false, true, nil
+		}
+	}
+	return nil, false, false, nil
 }
 
 // readLayerFile reads rel from one layer's tree, confined to it.

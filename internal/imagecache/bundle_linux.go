@@ -49,6 +49,11 @@ func SetupBundleRootfs(bundlePath string) error {
 	if spec == nil {
 		return nil
 	}
+	// The consumer that asked for EROFS layers mounts them; the host
+	// composes fs/ trees only.
+	if spec.EROFS {
+		return errors.New("bundle names EROFS layer images, which the host does not mount")
+	}
 
 	for _, layerDir := range spec.Layers {
 		if err := FinalizeLayer(layerDir); err != nil {
