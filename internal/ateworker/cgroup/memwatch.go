@@ -80,7 +80,7 @@ func (w *MemoryWatch) Check(dir string, limit uint64, now time.Time) (bool, uint
 	}
 	// page cache aside, e.g. a snapshot write's dirty pages, which reclaim
 	// can't drop until they're written back
-	used, err := memoryUsed(dir)
+	used, err := MemoryUsed(dir)
 	if err != nil {
 		return false, current, err
 	}
@@ -123,7 +123,7 @@ func memoryCurrent(dir string) (uint64, error) {
 	return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
 }
 
-// memoryUsed is what the cgroup holds besides page cache, from one
+// MemoryUsed is what the cgroup holds besides page cache, from one
 // memory.stat read. memory.stat splits charged memory into anon, file, kernel
 // and sock, where file is page cache plus shmem (memfd-backed memory such as a
 // gVisor sentry's or a microVM guest's), so this is anon + shmem + kernel +
@@ -131,11 +131,11 @@ func memoryCurrent(dir string) (uint64, error) {
 // can trail memory.current, and mixing the two could count fresh page cache as
 // used.
 // https://github.com/torvalds/linux/blob/v7.0/mm/memcontrol.c#L561-L564
-func memoryUsed(dir string) (uint64, error) {
+func MemoryUsed(dir string) (uint64, error) {
 	return sumMemoryStat(dir, memoryUsedStats...)
 }
 
-// memoryUsedStats are the memory.stat keys memoryUsed sums
+// memoryUsedStats are the memory.stat keys MemoryUsed sums
 var memoryUsedStats = []string{"anon", "shmem", "kernel", "sock"}
 
 // sumMemoryStat sums keys from one read of dir's memory.stat, which must have

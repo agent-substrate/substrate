@@ -207,7 +207,7 @@ func TestMemoryUsed(t *testing.T) {
 	writeCgroupFiles(t, dir, map[string]string{
 		"memory.stat": "anon 1\nfile 104\nkernel 2\nsock 4\nshmem 8\nfile_dirty 16\ninactive_file 32\nactive_file 64\n",
 	})
-	if got, err := memoryUsed(dir); err != nil || got != 1+2+4+8 {
-		t.Errorf("memoryUsed() = %d, %v, want 15", got, err)
+	if got, err := MemoryUsed(dir); err != nil || got != 1+2+4+8 {
+		t.Errorf("MemoryUsed() = %d, %v, want 15", got, err)
 	}
 }

@@ -246,6 +246,36 @@ func TestCheckpointIsolated(t *testing.T) {
 		}
 	})
 
+	t.Run("limits only the page cache during checkpoint", func(t *testing.T) {
+		f := newCkptFixture(t, "101")
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		// cgroupfs provides these itself
+		mustMkdir(t, ckptDir)
+		mustWrite(t, filepath.Join(ckptDir, "memory.high"), "max\n")
+		mustWrite(t, filepath.Join(ckptDir, "memory.stat"), "anon 20971520\nfile 8388608\nkernel 1048576\nshmem 0\nsock 0\n")
+		mustWrite(t, filepath.Join(f.root, "memory.max"), "max\n")
+
+		err := checkpointIsolated(
+			context.Background(),
+			f.root, testActorUID, 16<<20, f.actorDirs,
+			func(context.Context) error {
+				if got, want := mustRead(t, filepath.Join(ckptDir, "memory.high")), strconv.Itoa(16<<20+20<<20+1<<20); got != want {
+					t.Errorf("checkpoint memory.high during checkpoint = %q, want %s", got, want)
+				}
+				return nil
+			},
+			func() error {
+				for _, name := range []string{"cpu.max", "memory.high", "memory.stat"} {
+					_ = os.Remove(filepath.Join(ckptDir, name))
+				}
+				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+			},
+		)
+		if err != nil {
+			t.Fatalf("checkpointIsolated: %v", err)
+		}
+	})
+
 	t.Run("checkpoints without isolation when the sandbox pid is unknown", func(t *testing.T) {
 		f := newCkptFixture(t, "")
 		ckptDir := checkpointCgroupDir(f.root, testActorUID)
@@ -635,5 +665,50 @@ func TestIsolateCheckpointCacheLimitsTheCache(t *testing.T) {
 	}
 	if got := mustRead(t, filepath.Join(dir, "memory.high")); got != "max" {
 		t.Errorf("checkpoint memory.high = %q, want max", got)
+	}
+}
+
+func TestSetCacheHigh(t *testing.T) {
+	const (
+		cacheHigh = 16 << 20
+		used      = 21 << 20 // anon + kernel below
+	)
+	for _, tc := range []struct {
+		name     string
+		podMax   string
+		podStat  string
+		high     int64
+		wantHigh int64
+	}{
+		{name: "no pod limit", podMax: "max", high: cacheHigh, wantHigh: cacheHigh + used},
+		{name: "pod has room", podMax: "1073741824", podStat: "anon 536870912\n", high: cacheHigh, wantHigh: cacheHigh + used},
+		{name: "pod has some room", podMax: "1073741824", podStat: "anon 1035993088\n", high: cacheHigh, wantHigh: cacheHigh + 4<<20},
+		{name: "pod full", podMax: "1073741824", podStat: "anon 1073741824\n", high: cacheHigh, wantHigh: cacheHigh},
+		// lowering never needs pod memory
+		{name: "sentry freed memory", high: 64 << 20, wantHigh: cacheHigh + used},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.podMax != "" {
+				mustWrite(t, filepath.Join(root, "memory.max"), tc.podMax)
+			}
+			if tc.podStat != "" {
+				mustWrite(t, filepath.Join(root, "memory.stat"), tc.podStat)
+			}
+			c := &checkpointCgroup{dir: checkpointCgroupDir(root, testActorUID)}
+			mustMkdir(t, c.dir)
+			mustWrite(t, filepath.Join(c.dir, "memory.high"), strconv.FormatInt(tc.high, 10))
+			mustWrite(t, filepath.Join(c.dir, "memory.stat"), "anon 20971520\nfile 8388608\nkernel 1048576\nshmem 0\nsock 0\n")
+			got, err := c.setCacheHigh(cacheHigh, tc.high)
+			if err != nil {
+				t.Fatalf("setCacheHigh: %v", err)
+			}
+			if got != tc.wantHigh {
+				t.Errorf("setCacheHigh() = %d, want %d", got, tc.wantHigh)
+			}
+			if got, want := mustRead(t, filepath.Join(c.dir, "memory.high")), strconv.FormatInt(tc.wantHigh, 10); got != want {
+				t.Errorf("checkpoint memory.high = %q, want %s", got, want)
+			}
+		})
 	}
 }

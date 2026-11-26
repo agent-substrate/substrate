@@ -189,7 +189,7 @@ func TestPodMemory(t *testing.T) {
 	root := t.TempDir()
 	for name, content := range map[string]string{
 		"memory.max": "4294967296\n",
-		// memory.stat trails memory.current, so podMemory reads it alone
+		// memory.stat trails memory.current, so PodMemoryUnder reads it alone
 		"memory.current": "4294967296\n",
 		// 512MiB of file cache, 64MiB of it dirty or under writeback
 		"memory.stat": "anon 1073741824\nfile 805306368\nkernel 16777216\nsock 0\nshmem 268435456\nactive_file 268435456\ninactive_file 268435456\nfile_dirty 33554432\nfile_writeback 33554432\n",
@@ -198,9 +198,9 @@ func TestPodMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	limit, unreclaimable, err := podMemory(root)
+	limit, unreclaimable, err := PodMemoryUnder(root)
 	if want := int64(1<<30 + 256<<20 + 16<<20 + 64<<20); err != nil || limit != 4<<30 || unreclaimable != want {
-		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, unreclaimable, err, int64(4<<30), want)
+		t.Errorf("PodMemoryUnder() = %d, %d, %v, want %d, %d", limit, unreclaimable, err, int64(4<<30), want)
 	}
 	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("max\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestPodMemory(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "memory.stat")); err != nil {
 		t.Fatal(err)
 	}
-	if limit, unreclaimable, err := podMemory(root); err != nil || limit != 0 || unreclaimable != 0 {
-		t.Errorf("podMemory() without a limit = %d, %d, %v, want 0, 0 without reading memory.stat", limit, unreclaimable, err)
+	if limit, unreclaimable, err := PodMemoryUnder(root); err != nil || limit != 0 || unreclaimable != 0 {
+		t.Errorf("PodMemoryUnder() without a limit = %d, %d, %v, want 0, 0 without reading memory.stat", limit, unreclaimable, err)
 	}
 }

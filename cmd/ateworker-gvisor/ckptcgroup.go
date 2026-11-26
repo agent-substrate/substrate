@@ -28,7 +28,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/memborrow"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -63,7 +66,7 @@ func checkpointCgroupDir(root, actorUID string) string {
 // isolateCheckpointCache moves the actor's sentry from its sandbox leaf into a
 // sibling <uid>-_ckpt cgroup, preserving the sandbox leaf's cpu.max so checkpoint
 // serialization remains capped to the actor's CPU limit. cacheHigh, when set,
-// is the sibling's memory.high.
+// is the sibling's starting memory.high (see limitCacheOnly).
 func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actorUID string, cacheHigh int64) (*checkpointCgroup, error) {
 	pid, err := readSandboxPID(actorDirs)
 	if err != nil {
@@ -168,6 +171,79 @@ func (c *checkpointCgroup) remove() error {
 	return nil
 }
 
+// limitCacheOnly keeps the cgroup's memory.high at cacheHigh over what it holds
+// besides page cache, until the returned func is called. Memory the sentry
+// allocates after the move is charged here, and reclaim can't drop it, so a
+// fixed memory.high would throttle the sentry once that outgrows cacheHigh.
+// It raises memory.high only as far as the worker pod has memory to spare.
+// When the pod has none, the kernel throttles the sentry again.
+func (c *checkpointCgroup) limitCacheOnly(ctx context.Context, cacheHigh int64) (stop func()) {
+	if c == nil || cacheHigh <= 0 {
+		return func() {}
+	}
+	// isolateCheckpointCache set memory.high to cacheHigh
+	high := cacheHigh
+	set := func() bool {
+		var err error
+		high, err = c.setCacheHigh(cacheHigh, high)
+		// a node without the memory controller has no memory.stat
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.WarnContext(ctx, "Failed to raise the checkpoint cgroup's memory.high",
+				slog.String("cgroup", c.dir), slog.Any("err", err))
+		}
+		return err == nil
+	}
+	if !set() {
+		return func() {}
+	}
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(cgroup.MemoryGuardInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
+			if !set() {
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-stopped
+	}
+}
+
+// setCacheHigh sets memory.high to cacheHigh plus what the cgroup holds besides
+// page cache, raising it from high by no more than the pod has free less
+// memborrow.Margin. It returns the memory.high it set.
+func (c *checkpointCgroup) setCacheHigh(cacheHigh, high int64) (int64, error) {
+	used, err := cgroup.MemoryUsed(c.dir)
+	if err != nil {
+		return high, err
+	}
+	want := cacheHigh + int64(used)
+	if want > high {
+		// the checkpoint cgroup is a child of the pod's
+		limit, unreclaimable, err := cgroup.PodMemoryUnder(filepath.Dir(c.dir))
+		if err != nil {
+			return high, err
+		}
+		if limit > 0 {
+			want = min(want, high+max(0, limit-unreclaimable-memborrow.Margin))
+		}
+	}
+	if err := writeExisting(filepath.Join(c.dir, "memory.high"), strconv.FormatInt(want, 10)); err != nil {
+		return high, err
+	}
+	return want, nil
+}
+
 // checkpointIsolated isolates the sentry into a sibling cgroup, runs
 // checkpoint, and tears down the workload
 // before removing the sibling cgroup so its page cache reparents cleanly. If
@@ -207,7 +283,10 @@ func checkpointIsolated(
 		}
 	}()
 
-	if err := checkpoint(ctx); err != nil {
+	stopLimit := ckptCgroup.limitCacheOnly(ctx, cacheHigh)
+	err = checkpoint(ctx)
+	stopLimit()
+	if err != nil {
 		if rerr := ckptCgroup.restore(); rerr != nil {
 			slog.WarnContext(ctx, "Failed to move the sentry back into its sandbox leaf; terminating workload",
 				slog.String("actorUID", actorUID), slog.Any("err", rerr))

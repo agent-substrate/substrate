@@ -28,8 +28,8 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 )
 
-// margin is pod memory a write leaves free when it borrows.
-const margin = 32 << 20
+// Margin is pod memory a write leaves free when it borrows.
+const Margin = 32 << 20
 
 // Ledger is memory snapshot writes hold for their page cache beyond what their
 // actors booked: capacity no actor has booked, that the pod also has free.
@@ -79,7 +79,7 @@ func (l *Ledger) take(want int64, all bool) int64 {
 	defer l.mu.Unlock()
 	n := want
 	if limit != 0 {
-		n = min(want, l.Unbooked(limit)-l.bytes, limit-unreclaimable-margin)
+		n = min(want, l.Unbooked(limit)-l.bytes, limit-unreclaimable-Margin)
 	}
 	if n <= 0 || (all && n < want) {
 		return 0

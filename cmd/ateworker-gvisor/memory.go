@@ -46,8 +46,8 @@ func (s *AteWorkerService) unbookedMemory(podLimit int64) int64 {
 	return unbooked
 }
 
-// checkpointCacheLimit returns the memory.high for the actor's checkpoint
-// cgroup, 0 for none, and what it borrowed for it.
+// checkpointCacheLimit returns how much page cache the actor's checkpoint
+// cgroup may hold, 0 for no limit, and what it borrowed for it.
 //
 // The checkpoint writes about as much as the sandbox holds through the page
 // cache, charged to the checkpoint cgroup. At the worker pod's memory limit
