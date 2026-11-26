@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	imageprovider "github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1"
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	providermock "github.com/ai-on-gke/image-provider-plugin/client/mock"
 	"github.com/google/go-cmp/cmp"
@@ -46,35 +47,69 @@ func writeTestBundle(t *testing.T, actorsDir, actorUID, container string, spec *
 }
 
 // The plugin learns every lease the bundles record, and nothing about images
-// from the cache.
+// from the cache. atelet marks the auth keys the plugin asks to refresh.
 func TestReconcileProviderLeases(t *testing.T) {
-	actorsDir := t.TempDir()
 	const app, tools, local = "registry.example/app:1", "registry.example/tools:1", "registry.example/local:1"
-	writeTestBundle(t, actorsDir, "actor-1", "main", &imagecache.OverlaySpec{
-		ImageRef: app, ImageDigest: "sha256:aaa", LeaseID: "actor-1/main", LowerDirs: []string{"/plugin/app/0"},
-		ImageVolumes: []imagecache.ImageVolumeOverlay{{
-			Name: "tools", ImageRef: tools, ImageDigest: "sha256:bbb", LeaseID: "actor-1/main/tools", LowerDirs: []string{"/plugin/tools/0"},
-		}},
-	})
-	writeTestBundle(t, actorsDir, "actor-2", "main", &imagecache.OverlaySpec{
-		ImageRef: app, ImageDigest: "sha256:aaa", LeaseID: "actor-2/main", LowerDirs: []string{"/plugin/app/0"},
-	})
-	writeTestBundle(t, actorsDir, "actor-3", "main", &imagecache.OverlaySpec{
-		ImageRef: local, ImageDigest: "sha256:ccc", StoreLayers: []string{"/cache/ccc"},
-	})
+	const appKey, toolsKey = "registry.example/app", "registry.example/tools"
+	for _, tc := range []struct {
+		name        string
+		result      *providerclient.ReconcileResult
+		wantRefresh bool
+		// wantNeedsRefresh lists the auth keys that need a refresh after
+		// the reconcile. Both start as AUTH_REFRESH_NOT_NEEDED.
+		wantNeedsRefresh []string
+	}{{
+		name:   "plugin restores every lease",
+		result: &providerclient.ReconcileResult{},
+	}, {
+		name:             "auth refresh required",
+		result:           &providerclient.ReconcileResult{AuthRefreshRequired: []string{toolsKey}},
+		wantRefresh:      true,
+		wantNeedsRefresh: []string{toolsKey},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			actorsDir := t.TempDir()
+			writeTestBundle(t, actorsDir, "actor-1", "main", &imagecache.OverlaySpec{
+				ImageRef: app, ImageDigest: "sha256:aaa", LeaseID: "actor-1/main", LowerDirs: []string{"/plugin/app/0"},
+				ImageVolumes: []imagecache.ImageVolumeOverlay{{
+					Name: "tools", ImageRef: tools, ImageDigest: "sha256:bbb", LeaseID: "actor-1/main/tools", LowerDirs: []string{"/plugin/tools/0"},
+				}},
+			})
+			writeTestBundle(t, actorsDir, "actor-2", "main", &imagecache.OverlaySpec{
+				ImageRef: app, ImageDigest: "sha256:aaa", LeaseID: "actor-2/main", LowerDirs: []string{"/plugin/app/0"},
+			})
+			writeTestBundle(t, actorsDir, "actor-3", "main", &imagecache.OverlaySpec{
+				ImageRef: local, ImageDigest: "sha256:ccc", StoreLayers: []string{"/cache/ccc"},
+			})
 
-	provider := providermock.New("nydus")
-	s := &Atelet{imageProvider: provider}
-	if err := s.reconcileProviderLeases(t.Context(), actorsDir); err != nil {
-		t.Fatalf("reconcileProviderLeases: %v", err)
-	}
-	want := [][]*providerclient.ActiveLease{{
-		{LeaseID: "actor-1/main", ImageRef: app, ImageDigest: "sha256:aaa"},
-		{LeaseID: "actor-1/main/tools", ImageRef: tools, ImageDigest: "sha256:bbb"},
-		{LeaseID: "actor-2/main", ImageRef: app, ImageDigest: "sha256:aaa"},
-	}}
-	if diff := cmp.Diff(want, provider.ReconcileCalls); diff != "" {
-		t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
+			provider := providermock.New("nydus")
+			provider.ReconcileFunc = func(context.Context, []string) (*providerclient.ReconcileResult, error) {
+				return tc.result, nil
+			}
+			s := &Atelet{imageProvider: provider}
+			s.providerAuth.prepared(appKey, imageprovider.AuthRefresh_AUTH_REFRESH_NOT_NEEDED)
+			s.providerAuth.prepared(toolsKey, imageprovider.AuthRefresh_AUTH_REFRESH_NOT_NEEDED)
+			refresh, err := s.reconcileProviderLeases(t.Context(), actorsDir)
+			if err != nil {
+				t.Fatalf("reconcileProviderLeases: %v", err)
+			}
+			want := [][]string{{"actor-1/main", "actor-1/main/tools", "actor-2/main"}}
+			if diff := cmp.Diff(want, provider.ReconcileCalls); diff != "" {
+				t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
+			}
+			if refresh != tc.wantRefresh {
+				t.Errorf("reconcileProviderLeases refresh = %v, want %v", refresh, tc.wantRefresh)
+			}
+			var needs []string
+			for _, k := range []string{appKey, toolsKey} {
+				if need, _ := s.providerAuth.needsRefresh(k); need {
+					needs = append(needs, k)
+				}
+			}
+			if diff := cmp.Diff(tc.wantNeedsRefresh, needs); diff != "" {
+				t.Errorf("auth keys that need a refresh mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -95,7 +130,7 @@ func TestReconcileProviderLeasesUnreadableSpec(t *testing.T) {
 
 	provider := providermock.New("riptide")
 	s := &Atelet{imageProvider: provider}
-	if err := s.reconcileProviderLeases(t.Context(), actorsDir); err == nil {
+	if _, err := s.reconcileProviderLeases(t.Context(), actorsDir); err == nil {
 		t.Fatal("reconcileProviderLeases succeeded with an unreadable spec")
 	}
 	if len(provider.ReconcileCalls) != 0 {
@@ -114,7 +149,7 @@ func TestReconcileProviderLeasesWithBundles(t *testing.T) {
 	s := &Atelet{imageProvider: provider, imageCache: newImageVolumeStore(t)}
 	rootfs := streamedRootfs(t)
 	provider.PrepareImageFunc = func(ctx context.Context, _ *providerclient.PrepareRequest) (*providerclient.PrepareResult, error) {
-		if err := s.reconcileProviderLeases(ctx, nodepath.ActorsDir); err != nil {
+		if _, err := s.reconcileProviderLeases(ctx, nodepath.ActorsDir); err != nil {
 			return nil, err
 		}
 		return streamedResult(rootfs), nil
@@ -126,19 +161,15 @@ func TestReconcileProviderLeasesWithBundles(t *testing.T) {
 	if _, _, err := prepareOCIDirectory(t.Context(), s.imageSource(), "actor-1", "app", ref, nil, nil); err != nil {
 		t.Fatalf("prepareOCIDirectory: %v", err)
 	}
-	if err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
+	if _, err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
 		t.Fatalf("reconcileProviderLeases: %v", err)
 	}
 	s.releaseProviderLeases(t.Context(), "actor-1")
-	if err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
+	if _, err := s.reconcileProviderLeases(t.Context(), nodepath.ActorsDir); err != nil {
 		t.Fatalf("reconcileProviderLeases: %v", err)
 	}
 
-	want := [][]*providerclient.ActiveLease{
-		{{LeaseID: "actor-1/app", ImageRef: ref}},
-		{{LeaseID: "actor-1/app", ImageRef: ref, ImageDigest: testStreamedDigest}},
-		nil,
-	}
+	want := [][]string{{"actor-1/app"}, {"actor-1/app"}, nil}
 	if diff := cmp.Diff(want, provider.ReconcileCalls, cmpopts.EquateEmpty()); diff != "" {
 		t.Errorf("ReconcileImages calls mismatch (-want +got):\n%s", diff)
 	}

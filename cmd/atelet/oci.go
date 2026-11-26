@@ -93,7 +93,13 @@ func (s imageSource) ensure(ctx context.Context, ref, leaseID string) (*imagecac
 	if img, err := s.cache.CachedImage(ctx, ref); err != nil || img != nil {
 		return img, err
 	}
-	img, d, err := s.prepare(ctx, ref, leaseID)
+	// Leases with the same auth key share credentials, which atelet refreshes
+	// per auth key.
+	authKey, err := providerclient.AuthKey(ref)
+	if err != nil {
+		return nil, err
+	}
+	img, d, err := s.prepare(ctx, ref, leaseID, authKey)
 	if errors.Is(err, providerclient.ErrNoPlugin) {
 		return s.cache.EnsureImage(ctx, ref)
 	}
@@ -125,13 +131,13 @@ func pluginOutcome(err error) (outcome, errorType string) {
 	return ateattr.ImageProviderOutcomeError, "invalid_result"
 }
 
-// prepare has the provider prepare ref's layers under the lease leaseID, and
-// returns how long the plugin calls took. It returns an error wrapping
+// prepare has the provider prepare ref's layers under the lease leaseID with
+// authKey, and returns how long the plugin calls took. It returns an error wrapping
 // errProviderDeclined if the provider does not serve ref, and
 // providerclient.ErrNoPlugin if no plugin socket exists.
-func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imagecache.Image, time.Duration, error) {
+func (s imageSource) prepare(ctx context.Context, ref, leaseID, authKey string) (*imagecache.Image, time.Duration, error) {
 	start := time.Now()
-	req := &providerclient.PrepareRequest{ImageRef: ref, LeaseID: leaseID}
+	req := &providerclient.PrepareRequest{ImageRef: ref, LeaseID: leaseID, AuthKey: authKey}
 	canCtx, cancel := context.WithTimeout(ctx, providerCanProvideTimeout)
 	ok, err := s.provider.CanProvide(canCtx, req)
 	cancel()
@@ -141,7 +147,7 @@ func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imageca
 	if !ok {
 		return nil, time.Since(start), errProviderDeclined
 	}
-	s.leases.take(leaseID, ref)
+	s.leases.take(leaseID)
 	// Only PrepareImage gets registry credentials, for an image the plugin
 	// agreed to serve.
 	prepCtx, cancel := context.WithTimeout(ctx, providerPrepareTimeout)
@@ -153,8 +159,8 @@ func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imageca
 	d := time.Since(start)
 	if err != nil {
 		// The plugin may have taken the lease before the call failed, for
-		// example on a timeout. A release without a digest matches it.
-		s.release(ctx, leaseID, "")
+		// example on a timeout.
+		s.release(ctx, leaseID)
 	}
 	if errors.Is(err, providerclient.ErrNotSupported) {
 		return nil, d, fmt.Errorf("%w: %w", errProviderDeclined, err)
@@ -164,10 +170,10 @@ func (s imageSource) prepare(ctx context.Context, ref, leaseID string) (*imageca
 	}
 	img, err := streamedImage(res, ref, leaseID)
 	if err != nil {
-		s.release(ctx, leaseID, res.ImageDigest)
+		s.release(ctx, leaseID)
 		return nil, d, err
 	}
-	s.authModes.set(leaseID, res.AuthRefresh)
+	s.authModes.prepared(authKey, res.AuthRefresh)
 	return img, d, nil
 }
 
@@ -190,14 +196,12 @@ func streamedImage(res *providerclient.PrepareResult, ref, leaseID string) (*ima
 	return &imagecache.Image{Digest: digest, Config: *res.Config, ProviderRootfs: res.Rootfs, LeaseID: leaseID}, nil
 }
 
-// release drops the provider lease leaseID on the image with digest. A failed
-// release is logged.
-func (s imageSource) release(ctx context.Context, leaseID, digest string) {
+// release drops the provider lease leaseID. A failed release is logged.
+func (s imageSource) release(ctx context.Context, leaseID string) {
 	s.leases.forget(leaseID)
-	s.authModes.forget(leaseID)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerReleaseTimeout)
 	defer cancel()
-	if err := s.provider.ReleaseImage(ctx, &providerclient.ReleaseRequest{LeaseID: leaseID, ImageDigest: digest}); err != nil {
+	if err := s.provider.ReleaseImage(ctx, &providerclient.ReleaseRequest{LeaseID: leaseID}); err != nil {
 		slog.WarnContext(ctx, "Failed to release an image provider lease",
 			slog.String("lease", leaseID), slog.String("provider", s.provider.Name()), slog.Any("err", err))
 	}
@@ -293,11 +297,11 @@ func prepareOCIDirectory(ctx context.Context, images imageSource, actorUID, cont
 			return
 		}
 		if img != nil && img.LeaseID != "" {
-			images.release(ctx, img.LeaseID, img.Digest.String())
+			images.release(ctx, img.LeaseID)
 		}
 		for _, v := range imageVolumes {
 			if v.LeaseID != "" {
-				images.release(ctx, v.LeaseID, v.ImageDigest)
+				images.release(ctx, v.LeaseID)
 			}
 		}
 	}()
@@ -408,7 +412,7 @@ func resolveImageVolumes(ctx context.Context, images imageSource, actorUID, cont
 	if err := g.Wait(); err != nil {
 		for _, v := range out {
 			if v.LeaseID != "" {
-				images.release(ctx, v.LeaseID, v.ImageDigest)
+				images.release(ctx, v.LeaseID)
 			}
 		}
 		return nil, err

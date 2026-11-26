@@ -752,7 +752,7 @@ type Atelet struct {
 	// against reconciles of the plugin's leases.
 	providerLeases providerLeaseTracker
 	// providerAuth is what the plugin reported in auth_refresh for each
-	// provider lease.
+	// auth key.
 	providerAuth providerAuthModes
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
@@ -2391,14 +2391,13 @@ func (s *Atelet) releaseProviderLeases(ctx context.Context, actorUID string) {
 		if spec == nil {
 			continue
 		}
-		type lease struct{ id, digest string }
-		var leases []lease
+		var leases []string
 		if spec.LeaseID != "" {
-			leases = append(leases, lease{spec.LeaseID, spec.ImageDigest})
+			leases = append(leases, spec.LeaseID)
 		}
 		for _, v := range spec.ImageVolumes {
 			if v.LeaseID != "" {
-				leases = append(leases, lease{v.LeaseID, v.ImageDigest})
+				leases = append(leases, v.LeaseID)
 			}
 		}
 		if len(leases) == 0 {
@@ -2409,8 +2408,8 @@ func (s *Atelet) releaseProviderLeases(ctx context.Context, actorUID string) {
 				slog.String("bundle", bundle), slog.Any("err", err))
 			continue
 		}
-		for _, l := range leases {
-			images.release(ctx, l.id, l.digest)
+		for _, id := range leases {
+			images.release(ctx, id)
 		}
 	}
 }

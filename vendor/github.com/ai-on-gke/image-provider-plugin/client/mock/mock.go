@@ -35,12 +35,12 @@ type Client struct {
 	StateFunc        func(ctx context.Context) (imageprovider.PluginState, error)
 	PrepareImageFunc func(ctx context.Context, req *client.PrepareRequest) (*client.PrepareResult, error)
 	ReleaseImageFunc func(ctx context.Context, req *client.ReleaseRequest) error
-	ReconcileFunc    func(ctx context.Context, active []*client.ActiveLease) error
+	ReconcileFunc    func(ctx context.Context, leaseIDs []string) (*client.ReconcileResult, error)
 	RefreshAuthFunc  func(ctx context.Context, req *client.RefreshRequest) (imageprovider.AuthRefresh, error)
 
 	PrepareCalls   []*client.PrepareRequest
 	ReleaseCalls   []*client.ReleaseRequest
-	ReconcileCalls [][]*client.ActiveLease
+	ReconcileCalls [][]string
 	RefreshCalls   []*client.RefreshRequest
 }
 
@@ -114,15 +114,16 @@ func (m *Client) ReleaseImage(ctx context.Context, req *client.ReleaseRequest) e
 }
 
 // ReconcileImages records the call and calls ReconcileFunc if set.
-func (m *Client) ReconcileImages(ctx context.Context, active []*client.ActiveLease) error {
+// Otherwise it restores every lease.
+func (m *Client) ReconcileImages(ctx context.Context, leaseIDs []string) (*client.ReconcileResult, error) {
 	m.mu.Lock()
-	m.ReconcileCalls = append(m.ReconcileCalls, active)
+	m.ReconcileCalls = append(m.ReconcileCalls, leaseIDs)
 	fn := m.ReconcileFunc
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, active)
+		return fn(ctx, leaseIDs)
 	}
-	return nil
+	return &client.ReconcileResult{}, nil
 }
 
 // RefreshAuth records the call and calls RefreshAuthFunc if set. Otherwise

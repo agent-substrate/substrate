@@ -107,9 +107,7 @@ func TestImageSourceEnsure(t *testing.T) {
 		canProvide func(context.Context, *providerclient.PrepareRequest) (bool, error)
 		prepare    func(context.Context, *providerclient.PrepareRequest) (*providerclient.PrepareResult, error)
 		// result is what prepare returns when it is nil.
-		result func(rootfs string) *providerclient.PrepareResult
-		// releaseDigest is the digest a release names, if not ref's.
-		releaseDigest string
+		result        func(rootfs string) *providerclient.PrepareResult
 		wantStreamed  bool
 		wantOutcome   string
 		wantErrorType string
@@ -179,7 +177,6 @@ func TestImageSourceEnsure(t *testing.T) {
 	}, {
 		name:          "digest that ref does not pin is released",
 		result:        streamedResult,
-		releaseDigest: testStreamedDigest,
 		wantOutcome:   ateattr.ImageProviderOutcomeError,
 		wantErrorType: "invalid_result",
 		wantPrepares:  1,
@@ -241,22 +238,18 @@ func TestImageSourceEnsure(t *testing.T) {
 			if img.LeaseID != wantLease {
 				t.Errorf("LeaseID = %q, want %q", img.LeaseID, wantLease)
 			}
+			wantAuthKey, err := providerclient.AuthKey(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, r := range provider.PrepareCalls {
-				if r.LeaseID != leaseID {
-					t.Errorf("PrepareImage lease = %q, want %q", r.LeaseID, leaseID)
+				if r.LeaseID != leaseID || r.AuthKey != wantAuthKey {
+					t.Errorf("PrepareImage lease = %q auth key %q, want %q %q", r.LeaseID, r.AuthKey, leaseID, wantAuthKey)
 				}
 			}
-			// A failed PrepareImage returns no digest to release with.
-			wantDigest := refDigest
-			switch {
-			case tc.prepare != nil:
-				wantDigest = ""
-			case tc.releaseDigest != "":
-				wantDigest = tc.releaseDigest
-			}
 			for _, r := range provider.ReleaseCalls {
-				if r.LeaseID != leaseID || r.ImageDigest != wantDigest {
-					t.Errorf("released %+v, want lease %q on %q", r, leaseID, wantDigest)
+				if r.LeaseID != leaseID {
+					t.Errorf("released %+v, want lease %q", r, leaseID)
 				}
 			}
 			if tc.wantStreamed {
@@ -334,10 +327,10 @@ func TestPrepareOCIDirectoryProviderLeases(t *testing.T) {
 	}
 	var released []string
 	for _, r := range provider.ReleaseCalls {
-		released = append(released, r.LeaseID+"@"+r.ImageDigest)
+		released = append(released, r.LeaseID)
 	}
 	slices.Sort(released)
-	if want := []string{"actor-2/app/models@" + testStreamedDigest, "actor-2/app@" + testStreamedDigest}; !slices.Equal(released, want) {
+	if want := []string{"actor-2/app", "actor-2/app/models"}; !slices.Equal(released, want) {
 		t.Errorf("released %v, want %v", released, want)
 	}
 }
@@ -374,10 +367,10 @@ func TestReleaseProviderLeases(t *testing.T) {
 	s.releaseProviderLeases(t.Context(), actorUID)
 	var released []string
 	for _, r := range provider.ReleaseCalls {
-		released = append(released, r.LeaseID+"@"+r.ImageDigest)
+		released = append(released, r.LeaseID)
 	}
 	slices.Sort(released)
-	if want := []string{"actor-1/app/models@sha256:bbb", "actor-1/app@sha256:aaa"}; !slices.Equal(released, want) {
+	if want := []string{"actor-1/app", "actor-1/app/models"}; !slices.Equal(released, want) {
 		t.Errorf("released %v, want %v", released, want)
 	}
 
