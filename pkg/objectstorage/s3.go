@@ -16,12 +16,57 @@ package objectstorage
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
+
+// s3Token matches the error codes and request IDs describeS3Error keeps:
+// short tokens, as S3's are.
+var s3Token = regexp.MustCompile(`^[A-Za-z0-9._=+-]{1,128}$`)
+
+// describeS3Error describes an S3 response error in err's chain for
+// DescribeServiceError by its status, error code and request ID. It leaves out
+// the message, which can name the caller and the resource, as AccessDenied's
+// does, and a code or request ID that is not a short token. It also leaves out
+// the code the SDK makes up when the response has no error body, so such a
+// response is described as one.
+func describeS3Error(err error) (ServiceError, bool) {
+	respErr, ok := errors.AsType[s3.ResponseError](err)
+	if !ok {
+		return ServiceError{}, false
+	}
+	var desc ServiceError
+	if withStatus, ok := respErr.(interface{ HTTPStatusCode() int }); ok {
+		desc.HTTPStatus = withStatus.HTTPStatusCode()
+	}
+	if id := respErr.ServiceRequestID(); s3Token.MatchString(id) {
+		desc.RequestID = id
+	}
+	apiErr, ok := errors.AsType[smithy.APIError](err)
+	if ok && !sdkDefaultError(apiErr, desc.HTTPStatus) && s3Token.MatchString(apiErr.ErrorCode()) {
+		desc.Code = apiErr.ErrorCode()
+	}
+	return desc, true
+}
+
+// sdkDefaultError reports whether apiErr carries the code and message the SDK
+// fills in for an error response without a body: the status text, or
+// "UnknownError" for a status that has none.
+func sdkDefaultError(apiErr smithy.APIError, status int) bool {
+	text := http.StatusText(status)
+	if text == "" {
+		text = "UnknownError"
+	}
+	return apiErr.ErrorCode() == strings.ReplaceAll(text, " ", "") && apiErr.ErrorMessage() == text
+}
 
 const (
 	// uploadPartSize is how much of a streamed object the uploader buffers before it
