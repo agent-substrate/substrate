@@ -101,7 +101,7 @@ args: {{.Args}}</p>
 {{end}}
 </table>
 {{else}}
-<p><b>authorization disabled</b> — every namespace is allowed (dev only).</p>
+<p><b>no grants</b>: no atespace can resolve Secrets.</p>
 {{end}}
 
 <h2>Flags</h2>

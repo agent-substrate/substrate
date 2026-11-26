@@ -181,3 +181,18 @@ func TestStatuszHTMLNeverShowsSecret(t *testing.T) {
 		t.Fatal("statusz HTML leaked a label from a Kubernetes Secret rather than the policy")
 	}
 }
+
+func TestStatuszHTMLNoGrants(t *testing.T) {
+	authz, err := newNamespaceAuthorizer(namespacePolicyFile{})
+	if err != nil {
+		t.Fatalf("newNamespaceAuthorizer: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	newStatuszHandler(NewServer(fake.NewSimpleClientset(), authz, 0))(rec, httptest.NewRequest(http.MethodGet, "/statusz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "no atespace can resolve Secrets") {
+		t.Errorf("HTML page for a policy with no grants does not say every atespace is denied:\n%s", body)
+	}
+}
