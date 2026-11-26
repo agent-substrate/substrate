@@ -92,7 +92,7 @@ bindings: [{role: owner, members: ["user:alice"]}]
 		},
 		{name: "wrong name", manifest: "metadata: {name: other}\n", wantErr: `must be "default"`},
 		{name: "atespace set", manifest: "metadata: {atespace: team-a}\n", wantErr: "metadata.atespace must be empty"},
-		{name: "unknown field", manifest: "bindingz: []\n", wantErr: "invalid AccessPolicy"},
+		{name: "unknown field", manifest: "bindingz: []\n", wantErr: "manifest from stdin: invalid AccessPolicy"},
 		{name: "empty", manifest: "", wantErr: "manifest is empty"},
 	}
 	for _, tc := range tests {

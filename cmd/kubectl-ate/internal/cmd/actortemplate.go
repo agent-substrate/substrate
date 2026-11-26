@@ -111,7 +111,7 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		}
 		template, err := actorTemplateFromManifest(data)
 		if err != nil {
-			return fmt.Errorf("failed to parse actor template manifest %q: %w", createActorTemplateFilenameFlag, err)
+			return formatManifestParseError("actor template", createActorTemplateFilenameFlag, err)
 		}
 
 		ctx := cmd.Context()
@@ -181,6 +181,15 @@ func readFileOrStdin(in io.Reader, path string) ([]byte, error) {
 		return io.ReadAll(in)
 	}
 	return os.ReadFile(path)
+}
+
+// formatManifestParseError formats a manifest parse failure, naming stdin
+// instead of quoting "-" when the caller passed -f -.
+func formatManifestParseError(kind, filename string, err error) error {
+	if filename == "-" {
+		return fmt.Errorf("failed to parse %s manifest from stdin: %w", kind, err)
+	}
+	return fmt.Errorf("failed to parse %s manifest %q: %w", kind, filename, err)
 }
 
 func init() {

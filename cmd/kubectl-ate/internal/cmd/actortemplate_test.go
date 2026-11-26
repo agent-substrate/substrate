@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,5 +196,15 @@ func TestReadFileOrStdin(t *testing.T) {
 	}
 	if _, err := readFileOrStdin(nil, "/does/not/exist.yaml"); err == nil {
 		t.Fatal("readFileOrStdin on a missing file succeeded")
+	}
+}
+
+func TestFormatManifestParseError(t *testing.T) {
+	base := errors.New("boom")
+	if got, want := formatManifestParseError("actor template", "-", base).Error(), "failed to parse actor template manifest from stdin: boom"; got != want {
+		t.Errorf("formatManifestParseError(stdin) = %q, want %q", got, want)
+	}
+	if got, want := formatManifestParseError("actor template", "tpl.yaml", base).Error(), `failed to parse actor template manifest "tpl.yaml": boom`; got != want {
+		t.Errorf("formatManifestParseError(file) = %q, want %q", got, want)
 	}
 }
