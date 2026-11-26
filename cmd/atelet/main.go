@@ -45,6 +45,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/filecachegc"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
+	"go.ate.dev/substrate/cmd/atelet/internal/trash"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
@@ -408,6 +409,7 @@ func main() {
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
 	trackerCtx, stopTracker := context.WithCancel(ctx)
+	trashReaper := trash.New(trackerCtx)
 	store := &trackerStore{}
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{},
 		snapshottracker.WithBootCheck(localSnapshotBootCheck(bootID)),
@@ -420,7 +422,8 @@ func main() {
 		snapshottracker.WithInstruments(trackerInstruments),
 		snapshottracker.WithReporter(&trackerReporter{workers: workerService}),
 		snapshottracker.WithReportWorkers(*snapshotReportWorkers),
-		snapshottracker.WithReportGiveUpAfter(*snapshotReportGiveUpAfter))
+		snapshottracker.WithReportGiveUpAfter(*snapshotReportGiveUpAfter),
+		snapshottracker.WithTrashReaper(trashReaper))
 	// The runtimes this node's workers advertise, read by Run and Restore.
 	// Loaded from disk before anything serves, so a runtime a worker
 	// registered before a restart resolves at once; the worker sandbox
@@ -445,10 +448,12 @@ func main() {
 		csiDriverConfigGetter,
 		systemInfoVolumes,
 		snapshots,
+		trashReaper,
 		workerService,
 		bootID,
 	)
 	store.s = wmService
+	trashReaper.Start(ateletpath.ActorsTrashDir(), ateletpath.SnapshotsTrashDir())
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
 
@@ -571,6 +576,9 @@ func main() {
 	waitCtx, cancelWait := context.WithTimeout(ctx, 30*time.Second)
 	if err := snapshots.Wait(waitCtx); err != nil {
 		slog.WarnContext(ctx, "Background snapshot work did not stop in time; exiting anyway", slog.Any("err", err))
+	}
+	if err := trashReaper.Wait(waitCtx); err != nil {
+		slog.WarnContext(ctx, "Background trash cleanup did not stop in time; exiting anyway", slog.Any("err", err))
 	}
 	cancelWait()
 	slog.InfoContext(ctx, "Shutdown complete")
@@ -754,6 +762,10 @@ type Atelet struct {
 
 	// snapshots tracks each actor's snapshots on this node.
 	snapshots *snapshottracker.Tracker
+	// trash retires actor and snapshot directories for asynchronous removal.
+	trash *trash.Reaper
+	// actorDirs resets and removes per-actor directories through trash.
+	actorDirs *actordirs.Manager
 	// actorLocks serializes lifecycle RPCs per actor.
 	actorLocks actorlock.Locks
 	// workerActorJWTs mints the JWT every snapshot transfer carries.
@@ -804,6 +816,7 @@ func NewService(
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
 	snapshots *snapshottracker.Tracker,
+	trashReaper *trash.Reaper,
 	workers ateapi.WorkerServiceClient,
 	bootID string,
 ) *Atelet {
@@ -823,6 +836,8 @@ func NewService(
 		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
 		snapshots:             snapshots,
+		trash:                 trashReaper,
+		actorDirs:             actordirs.New(trashReaper),
 		workerActorJWTs:       newWorkerActorJWTs(workers),
 		bootID:                bootID,
 		checkpointTimeout:     defaultCheckpointTimeout,
@@ -885,7 +900,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	}()
 
 	s.systemInfoVolumes.Deregister(actorUID)
-	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
+	if err := s.actorDirs.ResetActorDirsKeepingVolumes(ctx, actorUID); err != nil {
 		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
 
@@ -1067,6 +1082,13 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		return &ateletpb.CheckpointResponse{State: state}, nil
 	}
 
+	// Wait for any previous retired directories of this actor to finish
+	// unlinking before writing a new snapshot, bounding per-actor backlog to
+	// one checkpoint cycle when the disk falls behind.
+	if err := s.trash.WaitForActor(ctx, actorUID); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+
 	// Detach from caller cancellation once the checkpoint is underway so a
 	// caller timeout does not abort the checkpoint after the worker has
 	// started stopping the workload; a retry waits on lockActor for this
@@ -1244,7 +1266,7 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 	//
 	// Best-effort: if this fails, the actor's next checkpoint or terminate
 	// prunes again.
-	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID, s.snapshots.LocalSnapshotsToKeep(actorUID)...); err != nil {
+	if err := s.snapshots.PruneLocalCheckpoints(ctx, actorUID, s.snapshots.LocalSnapshotsToKeep(actorUID)...); err != nil {
 		slog.WarnContext(ctx, "failed to prune superseded local checkpoints",
 			slog.Any("actor", resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}), slog.Any("err", err))
 	}
@@ -1255,11 +1277,11 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 
 	// Note: we do not crash the actor if resetting the directory fails.
 	if keepLocal {
-		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+		if err := s.actorDirs.ResetActorDirs(ctx, actorUID); err != nil {
 			return fmt.Errorf("while resetting actor dirs: %w", err)
 		}
 	} else {
-		if err := actordirs.RemoveActorFilesExceptState(actorUID); err != nil {
+		if err := s.actorDirs.RemoveActorFilesExceptState(ctx, actorUID); err != nil {
 			return fmt.Errorf("while removing actor files: %w", err)
 		}
 	}
@@ -1701,7 +1723,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// Canceled so ate-api-server retries instead of crashing the actor. A
 	// failure here points at atelet or the node's disk, not the actor.
 	s.systemInfoVolumes.Deregister(actorUID)
-	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
+	if err := s.actorDirs.ResetActorDirsKeepingVolumes(ctx, actorUID); err != nil {
 		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
 	// A restore may bring another runtime than the one staged here before,
@@ -2082,12 +2104,12 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	if err := s.snapshots.Forget(actorUID); err != nil {
 		return nil, fmt.Errorf("failed to delete snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
-	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
+	if err := s.snapshots.PruneLocalCheckpoints(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
 	// Reclaim the actor's directories on the node
-	if err := actordirs.RemoveActorDirs(actorUID); err != nil {
+	if err := s.actorDirs.RemoveActorDirs(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to remove actor directories during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 	s.restoreFailures.reset(actorUID)

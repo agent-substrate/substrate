@@ -21,8 +21,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/trash"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 func writeSnapshotDir(t *testing.T, dir, prefix string) {
@@ -90,7 +93,7 @@ func TestPruneRemovesEverySnapshot(t *testing.T) {
 	writeSnapshotDir(t, dir, "pause-2")
 	writeSnapshotDir(t, dir, "pause-3")
 
-	if err := pruneLocalCheckpointDir(context.Background(), dir); err != nil {
+	if err := pruneLocalCheckpointDir(context.Background(), nil, trackedActorUID, dir); err != nil {
 		t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
 	}
 
@@ -114,7 +117,7 @@ func TestPruneKeepsSpecifiedSnapshots(t *testing.T) {
 			writeSnapshotDir(t, dir, "pause-2")
 			writeSnapshotDir(t, dir, "pause-3")
 
-			if err := pruneLocalCheckpointDir(context.Background(), dir, tc.keep...); err != nil {
+			if err := pruneLocalCheckpointDir(context.Background(), nil, trackedActorUID, dir, tc.keep...); err != nil {
 				t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
 			}
 
@@ -133,7 +136,7 @@ func TestPruneKeepsSpecifiedSnapshots(t *testing.T) {
 }
 
 func TestPruneMissingDirIsNoop(t *testing.T) {
-	if err := pruneLocalCheckpointDir(context.Background(), filepath.Join(t.TempDir(), "absent")); err != nil {
+	if err := pruneLocalCheckpointDir(context.Background(), nil, trackedActorUID, filepath.Join(t.TempDir(), "absent")); err != nil {
 		t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
 	}
 }
@@ -157,7 +160,7 @@ func TestPruneReportsFailureAndStillRemovesTheRest(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
 
-	err := pruneLocalCheckpointDir(context.Background(), dir)
+	err := pruneLocalCheckpointDir(context.Background(), nil, trackedActorUID, dir)
 	if err == nil {
 		t.Fatal("pruneLocalCheckpointDir() = nil, want an error naming the undeletable snapshot")
 	}
@@ -168,5 +171,50 @@ func TestPruneReportsFailureAndStillRemovesTheRest(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			t.Errorf("%s still exists (err=%v), want removed", name, err)
 		}
+	}
+}
+
+func TestTrackerPruneLocalCheckpointsRetiresToTrash(t *testing.T) {
+	useTempNodeDirs(t)
+	dir := ateletpath.LocalCheckpointsDir(trackedActorUID)
+	writeSnapshotDir(t, dir, "pause-1")
+	writeSnapshotDir(t, dir, "pause-2")
+
+	reaper := trash.New(t.Context())
+	tr := New(t.Context(), nil, clocktesting.NewFakeClock(time.Now()), WithTrashReaper(reaper))
+
+	if err := tr.PruneLocalCheckpoints(t.Context(), trackedActorUID, "pause-2"); err != nil {
+		t.Fatalf("PruneLocalCheckpoints: %v", err)
+	}
+
+	// pause-1 is immediately gone from local-checkpoint/ and sits in .trash/.
+	if _, err := os.Stat(filepath.Join(dir, "pause-1")); !os.IsNotExist(err) {
+		t.Fatalf("pause-1 still in local-checkpoint/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pause-2", "memory.img")); err != nil {
+		t.Fatalf("pause-2 missing: %v", err)
+	}
+	trashed, err := os.ReadDir(ateletpath.SnapshotsTrashDir())
+	if err != nil {
+		t.Fatalf("ReadDir(SnapshotsTrashDir): %v", err)
+	}
+	if len(trashed) != 1 {
+		t.Fatalf("SnapshotsTrashDir has %d entries, want 1", len(trashed))
+	}
+
+	// Starting the reaper removes the retired snapshot asynchronously.
+	reaper.Start()
+	t.Cleanup(func() {
+		_ = reaper.Wait(context.Background())
+	})
+	if err := reaper.WaitForActor(t.Context(), trackedActorUID); err != nil {
+		t.Fatalf("WaitForActor: %v", err)
+	}
+	trashed, err = os.ReadDir(ateletpath.SnapshotsTrashDir())
+	if err != nil {
+		t.Fatalf("ReadDir(SnapshotsTrashDir): %v", err)
+	}
+	if len(trashed) != 0 {
+		t.Fatalf("SnapshotsTrashDir still has %d entries after WaitForActor", len(trashed))
 	}
 }

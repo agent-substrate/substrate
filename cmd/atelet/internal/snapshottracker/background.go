@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"time"
 
-	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
@@ -203,15 +202,18 @@ func (t *Tracker) prunePreRebootLocalLocked(a *actorSnapshots) {
 	// does. Uploading is never newer than LatestLocal, and that detach made
 	// LatestLocal durable first, so Uploading's copy can go too. Otherwise
 	// delete every local snapshot except a LatestLocal from this boot.
+	// Runs once during Tracker.Start before the gRPC server listens; blocking
+	// on trash headroom here bounds uncollected disk after a reboot while
+	// staying faster than synchronous removal.
 	var pruneErr error
 	if localPreReboot && !a.Started {
-		pruneErr = actordirs.RemoveActorFilesExceptState(a.actorUID)
+		pruneErr = t.actorDirs.RemoveActorFilesExceptState(t.ctx, a.actorUID)
 	} else {
 		var keep []string
 		if a.LatestLocal != nil && !localPreReboot {
 			keep = []string{a.LatestLocal.uuid()}
 		}
-		pruneErr = PruneLocalCheckpoints(t.ctx, a.actorUID, keep...)
+		pruneErr = t.PruneLocalCheckpoints(t.ctx, a.actorUID, keep...)
 	}
 	if pruneErr != nil {
 		// Restore and uploads refuse what is left, which the actor's next

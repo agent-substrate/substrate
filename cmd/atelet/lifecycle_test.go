@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
+	"go.ate.dev/substrate/cmd/atelet/internal/trash"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -4058,5 +4059,146 @@ func TestCheckpointKeepsWorkerUnavailable(t *testing.T) {
 	a.worker.checkpointErr = nil
 	if got := checkpointCode(); got != codes.OK {
 		t.Fatalf("Checkpoint with the worker back: code = %v, want %v", got, codes.OK)
+	}
+}
+
+// TestCheckpointRetiresDirsAndSnapshotsAsync verifies that Checkpoint returns
+// without waiting for background unlinking of durable-dir or superseded local
+// snapshots, and that starting the trash reaper drains both .trash directories.
+func TestCheckpointRetiresDirsAndSnapshotsAsync(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const (
+		atespace     = "ate-demo"
+		actorName    = "trash-actor"
+		actorUID     = "11111111-2222-3333-4444-555555555555"
+		workerPodUID = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	)
+
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}, workerEpoch: 1}
+	serveFakeWorker(t, worker)
+
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+	release := newGVisorTestRelease(t)
+
+	// Keep the reaper unstarted during Checkpoint 1 so background unlinking is
+	// held back and we can assert Checkpoint replies before removal runs.
+	reaper := trash.New(ctx)
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+		snapshots:         snapshottracker.New(ctx, nil, clock.RealClock{}, snapshottracker.WithTrashReaper(reaper)),
+		trash:             reaper,
+		actorDirs:         actordirs.New(reaper),
+		checkpointTimeout: defaultCheckpointTimeout,
+	}
+	sandboxRec := testSandboxRecord(release)
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
+	}
+
+	advertiseRuntime(t, s, sandboxRec)
+	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+		ExecutionUid:          "9947dd8d-f20a-4708-9fd0-1a00f1903519",
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          workerPodUID,
+		SandboxRuntime:        runtimeFor(t, sandboxRec),
+		Spec:                  spec,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Populate durable-dir to simulate workspace files.
+	wsFile := filepath.Join(ateletpath.DurableDirVolumeMountsDir(actorUID), "ws", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(wsFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wsFile, []byte("workspace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          workerPodUID,
+		Spec:                  spec,
+		Snapshot:              lifecycleSnapshot(actorUID, "snap-1", 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+		UploadConfig:          deferredUploadConfig(),
+	}); err != nil {
+		t.Fatalf("Checkpoint 1: %v", err)
+	}
+
+	// durable-dir is immediately empty and its old tree sits in ActorsTrashDir.
+	if entries, err := os.ReadDir(ateletpath.DurableDirVolumeMountsDir(actorUID)); err != nil || len(entries) != 0 {
+		t.Fatalf("DurableDirVolumeMountsDir after Checkpoint 1: entries=%v err=%v, want empty", entries, err)
+	}
+	if entries, err := os.ReadDir(ateletpath.ActorsTrashDir()); err != nil || len(entries) == 0 {
+		t.Fatalf("ActorsTrashDir after Checkpoint 1: entries=%v err=%v, want retired dirs", entries, err)
+	}
+
+	// Start the reaper and drain before Checkpoint 2.
+	reaper.Start()
+	t.Cleanup(func() {
+		_ = reaper.Wait(context.Background())
+	})
+	if err := reaper.WaitForActor(ctx, actorUID); err != nil {
+		t.Fatalf("WaitForActor after Checkpoint 1: %v", err)
+	}
+
+	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+		ExecutionUid:          "387adf79-f4de-4bb6-b4cf-c19df3566b3c",
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          workerPodUID,
+		SandboxRuntime:        runtimeFor(t, sandboxRec),
+		Spec:                  spec,
+		Snapshot:              lifecycleSnapshot(actorUID, "snap-1", 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+	}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          workerPodUID,
+		Spec:                  spec,
+		Snapshot:              lifecycleSnapshot(actorUID, "snap-2", 2, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+		UploadConfig:          deferredUploadConfig(),
+	}); err != nil {
+		t.Fatalf("Checkpoint 2: %v", err)
+	}
+
+	// Superseded snap-1 is gone from local-checkpoint/ immediately; snap-2 stays.
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(actorUID, "snap-1")); !os.IsNotExist(err) {
+		t.Fatalf("snap-1 still in local-checkpoint/: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(actorUID, "snap-2")); err != nil {
+		t.Fatalf("snap-2 missing: %v", err)
+	}
+	if err := reaper.WaitForActor(ctx, actorUID); err != nil {
+		t.Fatalf("WaitForActor after Checkpoint 2: %v", err)
+	}
+	for _, dir := range []string{ateletpath.ActorsTrashDir(), ateletpath.SnapshotsTrashDir()} {
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+			t.Fatalf("%s not empty after WaitForActor: entries=%v err=%v", dir, entries, err)
+		}
 	}
 }

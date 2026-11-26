@@ -26,15 +26,28 @@ import (
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
+	"go.ate.dev/substrate/cmd/atelet/internal/trash"
 )
 
 // PruneLocalCheckpoints removes every local snapshot of the actor except those
-// named in keep. A missing directory is not an error, so retries are safe.
+// named in keep synchronously. A missing directory is not an error, so retries
+// are safe.
 func PruneLocalCheckpoints(ctx context.Context, actorUID string, keep ...string) error {
-	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID), keep...)
+	return pruneLocalCheckpointDir(ctx, nil, actorUID, ateletpath.LocalCheckpointsDir(actorUID), keep...)
 }
 
-func pruneLocalCheckpointDir(ctx context.Context, dir string, keep ...string) error {
+// PruneLocalCheckpoints retires every local snapshot of the actor except those
+// named in keep through the tracker's trash reaper (or synchronously when none
+// is configured).
+func (t *Tracker) PruneLocalCheckpoints(ctx context.Context, actorUID string, keep ...string) error {
+	var r *trash.Reaper
+	if t != nil {
+		r = t.trash
+	}
+	return pruneLocalCheckpointDir(ctx, r, actorUID, ateletpath.LocalCheckpointsDir(actorUID), keep...)
+}
+
+func pruneLocalCheckpointDir(ctx context.Context, r *trash.Reaper, actorUID, dir string, keep ...string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -46,14 +59,26 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string, keep ...string) er
 	// others on disk.
 	var errs []error
 	kept := false
+	snapshotsTrash := ateletpath.SnapshotsTrashDir()
 	for _, entry := range entries {
 		if slices.Contains(keep, entry.Name()) {
 			kept = true
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		if err := os.RemoveAll(path); err != nil {
-			errs = append(errs, fmt.Errorf("while pruning local checkpoint %s: %w", path, err))
+		var rmErr error
+		if r != nil {
+			size, _ := localSnapshotSize(actorUID, entry.Name())
+			rmErr = r.Retire(ctx, snapshotsTrash, path, trash.RetireOptions{
+				ActorUID:       actorUID,
+				Kind:           trash.KindLocalSnapshot,
+				EstimatedBytes: size,
+			})
+		} else {
+			rmErr = os.RemoveAll(path)
+		}
+		if rmErr != nil {
+			errs = append(errs, fmt.Errorf("while pruning local checkpoint %s: %w", path, rmErr))
 			continue
 		}
 		slog.InfoContext(ctx, "pruned local checkpoint", slog.String("path", path))
@@ -71,9 +96,21 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string, keep ...string) er
 
 // removeLocalCheckpoint removes one local snapshot of the actor. A missing
 // snapshot is not an error.
-func removeLocalCheckpoint(ctx context.Context, actorUID, name string) error {
+func removeLocalCheckpoint(ctx context.Context, r *trash.Reaper, actorUID, name string, nonBlocking bool) error {
 	path := ateletpath.LocalSnapshotDir(actorUID, name)
-	if err := os.RemoveAll(path); err != nil {
+	var err error
+	if r != nil {
+		size, _ := localSnapshotSize(actorUID, name)
+		err = r.Retire(ctx, ateletpath.SnapshotsTrashDir(), path, trash.RetireOptions{
+			ActorUID:       actorUID,
+			Kind:           trash.KindLocalSnapshot,
+			EstimatedBytes: size,
+			NonBlocking:    nonBlocking,
+		})
+	} else {
+		err = os.RemoveAll(path)
+	}
+	if err != nil {
 		return fmt.Errorf("while removing local checkpoint %s: %w", path, err)
 	}
 	slog.InfoContext(ctx, "removed local checkpoint", slog.String("path", path))

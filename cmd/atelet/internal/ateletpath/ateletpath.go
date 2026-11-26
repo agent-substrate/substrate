@@ -18,6 +18,7 @@ package ateletpath
 
 import (
 	"path/filepath"
+	"strings"
 
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -72,6 +73,27 @@ var (
 	// mount, hits are served as copies instead.
 	SnapshotCacheDir = filepath.Join(nodepath.BasePath, "snapshot-cache")
 )
+
+const trashDirName = ".trash"
+
+// IsInternalDir reports whether a directory entry name under ActorsDir or
+// SnapshotsDir is an atelet-internal directory (such as .trash) rather than an
+// actor UID.
+func IsInternalDir(name string) bool {
+	return strings.HasPrefix(name, ".")
+}
+
+// ActorsTrashDir is the trash directory on the ActorsDir filesystem for
+// renamed-aside actor directories awaiting asynchronous deletion.
+func ActorsTrashDir() string {
+	return filepath.Join(nodepath.ActorsDir, trashDirName)
+}
+
+// SnapshotsTrashDir is the trash directory on the SnapshotsDir filesystem for
+// renamed-aside snapshot directories awaiting asynchronous deletion.
+func SnapshotsTrashDir() string {
+	return filepath.Join(nodepath.SnapshotsDir, trashDirName)
+}
 
 func ActorPath(actorUID string) string {
 	return filepath.Join(

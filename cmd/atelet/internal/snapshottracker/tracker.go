@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
+	"go.ate.dev/substrate/cmd/atelet/internal/trash"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -212,6 +214,12 @@ type Tracker struct {
 	// waiting reports that Wait has begun.
 	waiting bool
 
+	// trash retires superseded local snapshots and actor files asynchronously.
+	// Nil removes them synchronously.
+	trash *trash.Reaper
+	// actorDirs removes actor directories during detach and pre-reboot cleanup.
+	actorDirs *actordirs.Manager
+
 	// locks holds each actor's state lock. Short critical sections on an
 	// actor, including its snapshot state file I/O, hold that actor's lock, so
 	// they never hold up another actor.
@@ -322,6 +330,15 @@ func WithReportWorkers(n int) Option {
 func WithReportGiveUpAfter(d time.Duration) Option {
 	return func(t *Tracker) {
 		t.reporting.giveUpAfter = d
+	}
+}
+
+// WithTrashReaper configures the reaper used to retire superseded local
+// snapshots and detached actor directories asynchronously.
+func WithTrashReaper(r *trash.Reaper) Option {
+	return func(t *Tracker) {
+		t.trash = r
+		t.actorDirs = actordirs.New(r)
 	}
 }
 
