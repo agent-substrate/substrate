@@ -123,7 +123,8 @@ type statsPoller struct {
 	// which is the join key.
 	fetchWorkerPools func(ctx context.Context) map[string]workerPoolRef
 
-	inst *statsInstruments
+	inst         *statsInstruments
+	guestMetrics *actorGuestMetrics
 
 	// cachedPools carries pool resolutions across sweeps, so one failed pod
 	// list cannot re-home a tick's samples -- and the CPU counter's
@@ -259,6 +260,9 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 		// A node with no workers directory yet has no workers to measure; the
 		// first RunWorkload dispatch creates it.
 		slog.DebugContext(ctx, "Actor stats sweep: no workers directory", slog.Any("err", err))
+		if p.guestMetrics != nil {
+			p.guestMetrics.publish(nil)
+		}
 		return nil
 	}
 
@@ -271,6 +275,10 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 		}
 	}
 	pools := p.resolveWorkerPools(ctx, podUIDs)
+	var guestSamples map[string]*ateworkerpb.WorkloadStatsSample
+	if p.guestMetrics != nil {
+		guestSamples = make(map[string]*ateworkerpb.WorkloadStatsSample)
+	}
 
 	var (
 		mu      sync.Mutex
@@ -311,6 +319,11 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 			// One entry per workload the worker is hosting; empty when it is
 			// available.
 			for _, sample := range resp.GetSamples() {
+				if p.guestMetrics != nil {
+					mu.Lock()
+					p.guestMetrics.selectSample(guestSamples, sample)
+					mu.Unlock()
+				}
 				cpuAt := cpuKey{actorUID: sample.GetActorUid(), epoch: sample.GetEpochUnixNano()}
 				if sample.GetSource() == ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
 					// Pending: hosted but not measured, so it adds nothing
@@ -363,6 +376,9 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	// The tasks only ever return nil: a probe that fails is "not a target this
 	// tick", never a failed sweep.
 	_ = g.Wait()
+	if p.guestMetrics != nil {
+		p.guestMetrics.publish(guestSamples)
+	}
 	// A worker that did not answer keeps its activations' baselines: dropping
 	// one would charge the activation in full again once the worker answers.
 	// Everything else this sweep did not see is dropped, so lastCPU does not
@@ -582,7 +598,7 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 // The poller dials its own short-lived connection per probe (see
 // dialWorkerStats) and takes no WorkerDialer: the isolation from the lifecycle
 // RPCs' connection cache is structural, not just behavioral.
-func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
+func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface, guestMetrics *actorGuestMetrics) {
 	poller := &statsPoller{
 		interval:   interval,
 		workersDir: nodepath.WorkersDir(),
@@ -593,8 +609,9 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 			}
 			return ateworkerpb.NewWorkerClient(conn), closer, nil
 		},
-		inst:      inst,
-		startedAt: time.Now().UnixNano(),
+		inst:         inst,
+		guestMetrics: guestMetrics,
+		startedAt:    time.Now().UnixNano(),
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
