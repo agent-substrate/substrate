@@ -18,7 +18,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -26,10 +28,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	erofs "github.com/erofs/go-erofs"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -384,5 +389,257 @@ func TestRewriteLocalRegistry(t *testing.T) {
 				t.Errorf("rewriteLocalRegistry(%q) = %q; want %q", tt.ref, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnsureImage_EROFSLayers(t *testing.T) {
+	_, host := newTestRegistry(t)
+	ref := host + "/test/erofs:latest"
+	base := layerFromEntries(t, []tarEntry{
+		{name: "bin/", typeflag: tar.TypeDir},
+		{name: "bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: strings.Repeat("s", 9000)},
+	})
+	top := layerFromEntries(t, []tarEntry{
+		{name: "app/", typeflag: tar.TypeDir},
+		{name: "app/main", typeflag: tar.TypeReg, mode: 0o755, body: "main"},
+		{name: "bin/.wh.sh", typeflag: tar.TypeReg},
+	})
+	pushImage(t, ref, v1.Config{}, base, top)
+	ctx := context.Background()
+
+	// Form{} writes no EROFS image and reports EROFS false.
+	plain := newTestStore(t)
+	img, err := plain.EnsureImage(ctx, ref)
+	if err != nil {
+		t.Fatalf("EnsureImage (plain): %v", err)
+	}
+	if img.EROFS {
+		t.Error("plain store reported EROFS")
+	}
+	if _, err := os.Stat(LayerEROFSPath(img.LayerDirs[0])); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("plain store wrote %s: %v", layerEROFSFileName, err)
+	}
+
+	store := newTestStore(t)
+	img, err = store.EnsureImageAs(ctx, ref, Form{EROFS: true})
+	if err != nil {
+		t.Fatalf("EnsureImageAs: %v", err)
+	}
+	if !img.EROFS {
+		t.Error("EROFS = false, want true")
+	}
+	for i, dir := range img.LayerDirs {
+		f, err := os.Open(LayerEROFSPath(dir))
+		if err != nil {
+			t.Fatalf("layer %d: %v", i, err)
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Size()%erofsImageAlign != 0 {
+			t.Errorf("layer %d image size %d not a multiple of %d", i, fi.Size(), erofsImageAlign)
+		}
+		fsys, err := erofs.Open(f)
+		if err != nil {
+			t.Fatalf("layer %d: erofs.Open: %v", i, err)
+		}
+		switch i {
+		case 0:
+			if got, err := fs.ReadFile(fsys, "bin/sh"); err != nil || len(got) != 9000 {
+				t.Errorf("layer 0 bin/sh: len=%d err=%v", len(got), err)
+			}
+		case 1:
+			if got, err := fs.ReadFile(fsys, "app/main"); err != nil || string(got) != "main" {
+				t.Errorf("layer 1 app/main = %q, %v", got, err)
+			}
+			if fi, err := fs.Lstat(fsys, "bin/sh"); err != nil || fi.Mode()&fs.ModeCharDevice == 0 {
+				t.Errorf("layer 1 bin/sh whiteout: %v, %v", fi, err)
+			}
+		}
+		if d, err := LayerEROFSDigest(dir); err != nil || !strings.HasPrefix(d, "sha256:") {
+			t.Errorf("layer %d digest = %q, %v", i, d, err)
+		}
+		// The recorded size is the image's, and no fs/ tree is unpacked.
+		n, ok, err := recordedLayerSize(dir)
+		if err != nil || !ok {
+			t.Fatalf("layer %d size: ok=%v err=%v", i, ok, err)
+		}
+		if n != fi.Size() {
+			t.Errorf("layer %d recorded size %d, want image size %d", i, n, fi.Size())
+		}
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("layer %d fs/ should not be unpacked for an EROFS consumer: %v", i, err)
+		}
+	}
+
+	// A fresh store over the same pool hits without touching the registry.
+	store2, err := New(store.root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	img2, err := store2.EnsureImageAs(ctx, host+"/test/erofs@"+img.Digest.String(), Form{EROFS: true})
+	if err != nil {
+		t.Fatalf("EnsureImageAs (hit): %v", err)
+	}
+	if !img2.EROFS || !slices.Equal(img2.LayerDirs, img.LayerDirs) {
+		t.Errorf("hit = %+v, want EROFS with the same layer dirs", img2)
+	}
+
+	// A Form{} pull adds fs/ beside the image in the same layer
+	// directories, and whiteouts.json then lists the layer's whiteouts.
+	img3, err := store2.EnsureImageAs(ctx, ref, Form{})
+	if err != nil {
+		t.Fatalf("EnsureImageAs(fs/) over an EROFS pool: %v", err)
+	}
+	if img3.EROFS || !slices.Equal(img3.LayerDirs, img.LayerDirs) {
+		t.Errorf("fs/ pull = %+v, want the same layer dirs in fs/ form", img3)
+	}
+	for i, dir := range img.LayerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+			t.Errorf("layer %d has no fs/ tree after the fs/ pull: %v", i, err)
+		}
+		if _, err := os.Stat(LayerEROFSPath(dir)); err != nil {
+			t.Errorf("layer %d lost its EROFS image: %v", i, err)
+		}
+	}
+	wh, err := readWhiteouts(img.LayerDirs[1])
+	if err != nil || !slices.Contains(wh.Whiteouts, "bin/sh") {
+		t.Errorf("layer 1 whiteouts after the fs/ unpack = %+v, %v; want bin/sh recorded", wh, err)
+	}
+}
+
+// blobCounter counts blob GETs per digest on a test registry, to prove what
+// a pull did and did not download.
+type blobCounter struct {
+	mu   sync.Mutex
+	gets map[string]int
+}
+
+func (c *blobCounter) reset() { c.mu.Lock(); c.gets = map[string]int{}; c.mu.Unlock() }
+func (c *blobCounter) of(t *testing.T, l v1.Layer) int {
+	t.Helper()
+	d, err := l.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gets[d.String()]
+}
+
+// newBlobCountingRegistry is newTestRegistry with a blobCounter in front.
+func newBlobCountingRegistry(t *testing.T) (host string, blobs *blobCounter) {
+	t.Helper()
+	blobs = &blobCounter{gets: map[string]int{}}
+	inner := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if i := strings.LastIndex(r.URL.Path, "/blobs/"); r.Method == http.MethodGet && i >= 0 {
+			blobs.mu.Lock()
+			blobs.gets[r.URL.Path[i+len("/blobs/"):]]++
+			blobs.mu.Unlock()
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parsing registry URL: %v", err)
+	}
+	return u.Host, blobs
+}
+
+// A pull in the other form of a layer already in the pool builds that form
+// beside it: one blob download, no second layer directory.
+func TestEnsureImageAs_AddsMissingFormBeside(t *testing.T) {
+	host, blobs := newBlobCountingRegistry(t)
+	base := layerFromEntries(t, []tarEntry{
+		{name: "bin/", typeflag: tar.TypeDir},
+		{name: "bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: "sh"},
+	})
+	onlyB := layerFromEntries(t, []tarEntry{{name: "b", typeflag: tar.TypeReg, body: "b"}})
+	refA, refB := host+"/test/a:latest", host+"/test/b:latest"
+	pushImage(t, refA, v1.Config{}, base, layerFromEntries(t, []tarEntry{{name: "a", typeflag: tar.TypeReg, body: "a"}}))
+	pushImage(t, refB, v1.Config{}, base, onlyB)
+	store := newTestStore(t)
+	ctx := context.Background()
+	imgA, err := store.EnsureImageAs(ctx, refA, Form{EROFS: true})
+	if err != nil {
+		t.Fatalf("EnsureImageAs(EROFS): %v", err)
+	}
+	blobs.reset()
+	imgB, err := store.EnsureImage(ctx, refB)
+	if err != nil {
+		t.Fatalf("EnsureImage(fs/) over an EROFS base layer: %v", err)
+	}
+	if imgB.EROFS || imgB.LayerDirs[0] != imgA.LayerDirs[0] {
+		t.Fatalf("fs/ pull = %+v, want fs/ form sharing base layer dir %q", imgB, imgA.LayerDirs[0])
+	}
+	// The shared base was downloaded once more for its fs/ tree, b's own
+	// layer once.
+	if got, gotB := blobs.of(t, base), blobs.of(t, onlyB); got != 1 || gotB != 1 {
+		t.Errorf("downloads for the fs/ pull: base %d, b %d; want 1 and 1", got, gotB)
+	}
+	for _, p := range []string{LayerEROFSPath(imgA.LayerDirs[0]), filepath.Join(imgA.LayerDirs[0], layerFSDirName)} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("base layer missing %s after both pulls: %v", p, err)
+		}
+	}
+	// And the other way round: b's own layer is fs/-only until an EROFS
+	// consumer asks; the base already has both.
+	blobs.reset()
+	imgB2, err := store.EnsureImageAs(ctx, refB, Form{EROFS: true})
+	if err != nil {
+		t.Fatalf("EnsureImageAs(EROFS) over an fs/ pool: %v", err)
+	}
+	if !imgB2.EROFS || blobs.of(t, base) != 0 || blobs.of(t, onlyB) != 1 {
+		t.Errorf("EROFS pull over fs/ = %+v with base %d, b %d downloads; want EROFS form, 0 and 1", imgB2, blobs.of(t, base), blobs.of(t, onlyB))
+	}
+}
+
+// Two consumers pulling the same layer in different forms at the same time
+// both get theirs: the second joins or follows the first's flight and then
+// runs its own for the missing form.
+func TestEnsureImageAs_ConcurrentForms(t *testing.T) {
+	_, host := newTestRegistry(t)
+	base := layerFromEntries(t, []tarEntry{{name: "bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: strings.Repeat("s", 20000)}})
+	refA, refB := host+"/test/a:latest", host+"/test/b:latest"
+	pushImage(t, refA, v1.Config{}, base, layerFromEntries(t, []tarEntry{{name: "a", typeflag: tar.TypeReg, body: "a"}}))
+	pushImage(t, refB, v1.Config{}, base, layerFromEntries(t, []tarEntry{{name: "b", typeflag: tar.TypeReg, body: "b"}}))
+	store := newTestStore(t)
+	ctx := context.Background()
+	for range 5 {
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		imgs := make([]*Image, 2)
+		for i, pull := range []struct {
+			ref  string
+			form Form
+		}{{refA, Form{EROFS: true}}, {refB, Form{}}} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				imgs[i], errs[i] = store.EnsureImageAs(ctx, pull.ref, pull.form)
+			}()
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("pull %d: %v", i, err)
+			}
+		}
+		if !imgs[0].EROFS || imgs[1].EROFS || imgs[0].LayerDirs[0] != imgs[1].LayerDirs[0] {
+			t.Fatalf("pulls = %+v, %+v; want EROFS and fs/ forms sharing the base layer dir", imgs[0], imgs[1])
+		}
+		dir := imgs[0].LayerDirs[0]
+		if !layerComplete(dir, true) || !layerComplete(dir, false) {
+			t.Fatalf("base layer dir %q lacks a form after concurrent pulls", dir)
+		}
+		// Fresh pool each round so the race is real every time.
+		var err error
+		if store, err = New(t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
