@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -119,6 +120,7 @@ var (
 	imageCredentialProviderBinDir = pflag.String("image-credential-provider-bin-dir", "", "Directory holding the credential provider executables named by --image-credential-provider-config. Required when that flag is set.")
 
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+	imageProviderSocket          = pflag.String("image-provider-socket", providerclient.DefaultSocketPath, "Unix socket of the node's image provider plugin. While the socket exists, atelet asks the plugin to prepare each image, and pulls into the image cache when the plugin declines or fails. Empty disables the plugin.")
 	imageCacheDir                = pflag.String("image-cache-dir", ateletpath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the worker pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -292,6 +294,22 @@ func main() {
 	if *imageCacheGCPeriod > 0 {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
+	var imageProvider providerclient.Client
+	if *imageProviderSocket != "" {
+		if err := os.MkdirAll(ateletpath.ImageProviderMountRoot, 0o755); err != nil {
+			serverboot.Fatal(ctx, "Failed to create the image provider mount root", err)
+		}
+		c, err := providerclient.NewGRPCClient(*imageProviderSocket, ateletpath.ImageProviderMountRoot)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create the image provider client", err)
+		}
+		defer c.Close()
+		imageProvider = c
+		if !preview.IsEnabled(preview.GateImageProviderPlugin) {
+			slog.InfoContext(ctx, "The ImageProviderPlugin preview gate is off; atelet takes no new image provider leases",
+				slog.String("socket", *imageProviderSocket))
+		}
+	}
 
 	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
@@ -437,6 +455,8 @@ func main() {
 		objectstore.NewAssetProviderClient(objectStorePluginConn),
 		*objectStorePluginSocket,
 		imageCache,
+		imageProvider,
+		imageCredsKeychain,
 		sandboxAssetCache,
 		snapshotCache,
 		runtimes,
@@ -720,6 +740,11 @@ type Atelet struct {
 
 	workerDialer *WorkerDialer
 	imageCache   *imagecache.Store
+	// imageProvider is the node's image provider plugin, or nil when
+	// --image-provider-socket is empty.
+	imageProvider providerclient.Client
+	// imageKeychain resolves the registry credentials imageProvider gets.
+	imageKeychain authn.Keychain
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
@@ -796,6 +821,8 @@ func NewService(
 	assetPlugin objectstore.AssetProviderClient,
 	pluginSocket string,
 	imageCache *imagecache.Store,
+	imageProvider providerclient.Client,
+	imageKeychain authn.Keychain,
 	sandboxAssetCache *filecache.Store,
 	snapshotCache *filecache.Store,
 	runtimes *runtimeIndex,
@@ -810,6 +837,8 @@ func NewService(
 	wms := &Atelet{
 		workerDialer:          workerDialer,
 		imageCache:            imageCache,
+		imageProvider:         imageProvider,
+		imageKeychain:         imageKeychain,
 		sandboxAssetCache:     sandboxAssetCache,
 		snapshotCache:         snapshotCache,
 		runtimes:              runtimes,
@@ -2258,6 +2287,7 @@ func (s *Atelet) prepareOCIBundles(
 		}
 	}
 
+	images := s.imageSource()
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Application containers.
@@ -2268,7 +2298,7 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			img, cwd, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			img, cwd, err := prepareOCIDirectory(gCtx, images, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
@@ -2295,6 +2325,10 @@ func (s *Atelet) prepareOCIBundles(
 		return nil, err
 	}
 	return containerSpecs, nil
+}
+
+func (s *Atelet) imageSource() imageSource {
+	return imageSource{cache: s.imageCache, provider: s.imageProvider, keychain: s.imageKeychain, instruments: s.instruments}
 }
 
 // dialWorker opens (or reuses) the gRPC connection to the target worker

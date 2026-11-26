@@ -21,30 +21,50 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestOverlaySpecRoundTrip(t *testing.T) {
-	bundle := t.TempDir()
-	in := &OverlaySpec{
-		Layers:    []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"},
-		ExtraDirs: []string{"/run/ate"},
-	}
-	if err := WriteSpec(bundle, in); err != nil {
-		t.Fatalf("WriteSpec: %v", err)
-	}
-	out, err := ReadSpec(bundle)
-	if err != nil {
-		t.Fatalf("ReadSpec: %v", err)
-	}
-	if out == nil {
-		t.Fatalf("ReadSpec returned nil for a bundle with a spec")
-		return // unreachable; makes the non-nil-ness explicit to static analysis
-	}
-	if !slices.Equal(out.Layers, in.Layers) {
-		t.Errorf("Layers = %v, want %v", out.Layers, in.Layers)
-	}
-	if !slices.Equal(out.ExtraDirs, in.ExtraDirs) {
-		t.Errorf("ExtraDirs = %v, want %v", out.ExtraDirs, in.ExtraDirs)
+	for name, in := range map[string]*OverlaySpec{
+		"store images, version 1": {
+			ImageRef:    "registry.example/app:1",
+			LowerDirs:   []string{"/cache/layers/sha256/aaa/fs", "/cache/layers/sha256/bbb/fs"},
+			StoreLayers: []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"},
+			ExtraDirs:   []string{"/run/ate"},
+			ImageVolumes: []ImageVolumeOverlay{{
+				Name:        "models",
+				ImageRef:    "registry.example/models:1",
+				LowerDirs:   []string{"/cache/layers/sha256/ccc/fs"},
+				StoreLayers: []string{"/cache/layers/sha256/ccc"},
+			}},
+		},
+		"provider image, version 2": {
+			ImageRef:  "registry.example/app:1",
+			LeaseID:   "actor-1/app",
+			LowerDirs: []string{"/var/lib/ate/image-provider/nydus/app"},
+			ExtraDirs: []string{"/run/ate"},
+			ImageVolumes: []ImageVolumeOverlay{{
+				Name:        "models",
+				ImageRef:    "registry.example/models:1",
+				LowerDirs:   []string{"/cache/layers/sha256/ccc/fs"},
+				StoreLayers: []string{"/cache/layers/sha256/ccc"},
+			}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := t.TempDir()
+			if err := WriteSpec(bundle, in); err != nil {
+				t.Fatalf("WriteSpec: %v", err)
+			}
+			out, err := ReadSpec(bundle)
+			if err != nil {
+				t.Fatalf("ReadSpec: %v", err)
+			}
+			if diff := cmp.Diff(in, out); diff != "" {
+				t.Errorf("ReadSpec mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -60,20 +80,80 @@ func TestReadSpec_Absent(t *testing.T) {
 	}
 }
 
-func TestReadSpec_UnknownVersion(t *testing.T) {
-	bundle := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bundle, OverlaySpecFileName), []byte(`{"version":99}`), 0o600); err != nil {
-		t.Fatalf("writing spec: %v", err)
+func TestReadSpec_Version(t *testing.T) {
+	for _, tc := range []struct {
+		name, spec    string
+		wantLowerDirs []string
+		wantErr       bool
+	}{
+		{name: "v1 derives lowerdirs", spec: `{"version":1,"layers":["/l"]}`, wantLowerDirs: []string{"/l/fs"}},
+		{name: "v2 lowerdirs as they are", spec: `{"version":2,"lowerDirs":["/p"]}`, wantLowerDirs: []string{"/p"}},
+		{name: "v2 derives Store lowerdirs", spec: `{"version":2,"layers":["/l"],"imageVolumes":[{"name":"v","lowerDirs":["/p"]}]}`, wantLowerDirs: []string{"/l/fs"}},
+		{name: "both Store layers and lowerdirs", spec: `{"version":2,"lowerDirs":["/l/fs"],"layers":["/l"]}`, wantErr: true},
+		{name: "v1 with lowerdirs", spec: `{"version":1,"lowerDirs":["/p"]}`, wantErr: true},
+		{name: "unknown version", spec: `{"version":99}`, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bundle, OverlaySpecFileName), []byte(tc.spec), 0o600); err != nil {
+				t.Fatalf("writing spec: %v", err)
+			}
+			spec, err := ReadSpec(bundle)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ReadSpec error = %v, want error %t", err, tc.wantErr)
+			}
+			if err == nil && !slices.Equal(spec.LowerDirs, tc.wantLowerDirs) {
+				t.Errorf("LowerDirs = %q, want %q", spec.LowerDirs, tc.wantLowerDirs)
+			}
+		})
 	}
-	if _, err := ReadSpec(bundle); err == nil {
-		t.Errorf("ReadSpec accepted an unknown spec version")
+}
+
+// WriteSpec writes version 1, which workers that predate lowerDirs read,
+// unless an image has lowerdirs without Store layers.
+func TestWriteSpec_Version(t *testing.T) {
+	store := []string{"/l"}
+	storeLowers := []string{"/l/fs"}
+	for _, tc := range []struct {
+		name string
+		spec OverlaySpec
+		want int
+	}{
+		{name: "store images", spec: OverlaySpec{LowerDirs: storeLowers, StoreLayers: store}, want: 1},
+		{name: "zero-layer image", spec: OverlaySpec{}, want: 1},
+		{name: "provider rootfs", spec: OverlaySpec{LowerDirs: []string{"/p"}}, want: 2},
+		{name: "provider volume", spec: OverlaySpec{LowerDirs: storeLowers, StoreLayers: store, ImageVolumes: []ImageVolumeOverlay{{Name: "v", LowerDirs: []string{"/p"}}}}, want: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := t.TempDir()
+			if err := WriteSpec(bundle, &tc.spec); err != nil {
+				t.Fatalf("WriteSpec: %v", err)
+			}
+			b, err := os.ReadFile(filepath.Join(bundle, OverlaySpecFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Version   int      `json:"version"`
+				LowerDirs []string `json:"lowerDirs"`
+			}
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Version != tc.want {
+				t.Errorf("version = %d, want %d", got.Version, tc.want)
+			}
+			if got.Version == 1 && got.LowerDirs != nil {
+				t.Errorf("version 1 spec has lowerDirs %q", got.LowerDirs)
+			}
+		})
 	}
 }
 
 func TestOverlayLowerDirs(t *testing.T) {
 	t.Run("reverses to top-first", func(t *testing.T) {
 		got := overlayLowerDirs([]string{"/c/base", "/c/top"})
-		want := []string{"/c/top/fs", "/c/base/fs"}
+		want := []string{"/c/top", "/c/base"}
 		if !slices.Equal(got, want) {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -86,7 +166,7 @@ func TestOverlayLowerDirs(t *testing.T) {
 	// symbolic links" mount failure.
 	t.Run("deduplicates repeated layers keeping topmost", func(t *testing.T) {
 		got := overlayLowerDirs([]string{"/c/base", "/c/dup", "/c/dup", "/c/top"})
-		want := []string{"/c/top/fs", "/c/dup/fs", "/c/base/fs"}
+		want := []string{"/c/top", "/c/dup", "/c/base"}
 		if !slices.Equal(got, want) {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -138,7 +218,7 @@ func TestCreateExtraDirs(t *testing.T) {
 func TestSpecImageDigestCompat(t *testing.T) {
 	dir := t.TempDir()
 	// Round trip with the new field.
-	if err := WriteSpec(dir, &OverlaySpec{ImageDigest: "sha256:" + strings.Repeat("ef", 32), Layers: []string{"/pool/layers/sha256/aa"}}); err != nil {
+	if err := WriteSpec(dir, &OverlaySpec{ImageDigest: "sha256:" + strings.Repeat("ef", 32), StoreLayers: []string{"/pool/layers/sha256/aa"}}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
 	}
 	spec, err := ReadSpec(dir)
@@ -168,7 +248,7 @@ func TestSpecImageDigestCompat(t *testing.T) {
 
 func TestWriteSpecLeavesNoTempFiles(t *testing.T) {
 	dir := t.TempDir()
-	if err := WriteSpec(dir, &OverlaySpec{Layers: []string{"/pool/layers/sha256/aa"}}); err != nil {
+	if err := WriteSpec(dir, &OverlaySpec{StoreLayers: []string{"/pool/layers/sha256/aa"}}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -179,5 +259,39 @@ func TestWriteSpecLeavesNoTempFiles(t *testing.T) {
 		if e.Name() != OverlaySpecFileName {
 			t.Errorf("unexpected file left in bundle: %q", e.Name())
 		}
+	}
+}
+
+// WriteSpec stores a Store image's lowerdirs as its layers, so lowerdirs that
+// are not those of the layers fail instead of being dropped.
+func TestWriteSpecLowerDirsOfStoreLayers(t *testing.T) {
+	layers := []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"}
+	for _, tc := range []struct {
+		name    string
+		spec    *OverlaySpec
+		wantErr bool
+	}{{
+		name: "layers only",
+		spec: &OverlaySpec{StoreLayers: layers},
+	}, {
+		name: "lowerdirs of the layers",
+		spec: &OverlaySpec{StoreLayers: layers, LowerDirs: storeLowerDirs(layers)},
+	}, {
+		name:    "other lowerdirs",
+		spec:    &OverlaySpec{StoreLayers: layers, LowerDirs: []string{"/var/lib/ate/image-provider/nydus/app"}},
+		wantErr: true,
+	}, {
+		name: "volume with other lowerdirs",
+		spec: &OverlaySpec{StoreLayers: layers, ImageVolumes: []ImageVolumeOverlay{{
+			Name: "models", StoreLayers: layers, LowerDirs: layers,
+		}}},
+		wantErr: true,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := WriteSpec(t.TempDir(), tc.spec)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Errorf("WriteSpec error = %v, want error %v", err, tc.wantErr)
+			}
+		})
 	}
 }
