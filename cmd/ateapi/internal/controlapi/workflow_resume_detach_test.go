@@ -765,7 +765,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 // addAteletOnNode routes node's atelet to the same capturing fake as node-1's.
 func addAteletOnNode(t *testing.T, w *ActorWorkflow, node string) {
 	t.Helper()
-	cached, ok := w.dialer.ateletConns.Get("atelet-uid")
+	cached, ok := w.dialer.ateletConns.Get("node-1")
 	if !ok {
 		t.Fatal("no cached conn for the fake atelet")
 	}
@@ -777,7 +777,7 @@ func addAteletOnNode(t *testing.T, w *ActorWorkflow, node string) {
 	}); err != nil {
 		t.Fatalf("adding atelet pod on %s: %v", node, err)
 	}
-	w.dialer.ateletConns.Add(string(uid), &ateletConn{ip: "10.0.0.2", conn: cached.(*ateletConn).conn})
+	w.dialer.ateletConns.Add(node, &ateletConn{podUID: uid, ip: "10.0.0.2", conn: cached.(*ateletConn).conn})
 }
 
 // TestDetachFromFullNode_ReentryRecordsAfterConflict loses the record write

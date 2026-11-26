@@ -494,6 +494,144 @@ func TestDialForAteletOnNode(t *testing.T) {
 		}
 	})
 
+	// The cached conn is dropped and closed whenever the node's atelet changes
+	// or goes away, so a conn to a dead pod does not linger until the LRU
+	// evicts it.
+	for _, tc := range []struct {
+		name string
+		// change moves the indexer from uid-1 at 10.0.0.1 to the case's state.
+		change func(t *testing.T, idx cache.Indexer)
+		// wantTarget and wantUID are the redial the next call makes; empty
+		// wantTarget means the call fails.
+		wantTarget, wantUID string
+		wantNoAtelet        bool
+	}{
+		{
+			name: "pod replaced under a new UID and IP",
+			change: func(t *testing.T, idx cache.Indexer) {
+				if err := idx.Delete(ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1")); err != nil {
+					t.Fatal(err)
+				}
+				if err := idx.Add(ateletPod("atelet-2", "uid-2", "node1", "10.0.0.2")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantTarget: "10.0.0.2:" + ateletPort, wantUID: "uid-2",
+		},
+		{
+			name: "pod replaced at the same IP",
+			change: func(t *testing.T, idx cache.Indexer) {
+				if err := idx.Update(ateletPod("atelet-1", "uid-2", "node1", "10.0.0.1")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantTarget: "10.0.0.1:" + ateletPort, wantUID: "uid-2",
+		},
+		{
+			name: "node has no atelet",
+			change: func(t *testing.T, idx cache.Indexer) {
+				if err := idx.Delete(ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantNoAtelet: true,
+		},
+		{
+			name: "atelet has no IP",
+			change: func(t *testing.T, idx cache.Indexer) {
+				noIP := ateletPod("atelet-1", "uid-1", "node1", "")
+				noIP.Status.PodIPs = nil
+				if err := idx.Update(noIP); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run("closes the old conn when the "+tc.name, func(t *testing.T) {
+			idx := newTestAteletIndexer(t, ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"))
+			var uids []string
+			d := NewAteletDialer(idx, installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
+				WithDialCredentials(func(uid string) (credentials.TransportCredentials, error) {
+					uids = append(uids, uid)
+					return insecure.NewCredentials(), nil
+				}))
+			old, err := d.DialForAteletOnNode("node1")
+			if err != nil {
+				t.Fatalf("DialForAteletOnNode: %v", err)
+			}
+
+			tc.change(t, idx)
+			fresh, err := d.DialForAteletOnNode("node1")
+			if fresh != nil {
+				t.Cleanup(func() { fresh.Close() })
+			}
+
+			if got := old.GetState(); got != connectivity.Shutdown {
+				t.Errorf("old conn state = %v, want %v", got, connectivity.Shutdown)
+			}
+			switch {
+			case tc.wantTarget != "":
+				if err != nil {
+					t.Fatalf("DialForAteletOnNode after the change: %v", err)
+				}
+				if got := fresh.Target(); got != tc.wantTarget {
+					t.Errorf("dial target = %q, want %q", got, tc.wantTarget)
+				}
+				if got := uids[len(uids)-1]; got != tc.wantUID {
+					t.Errorf("pod UID the credentials pin = %q, want %q", got, tc.wantUID)
+				}
+			case tc.wantNoAtelet:
+				if !errors.Is(err, ErrNoAteletOnNode) {
+					t.Errorf("DialForAteletOnNode = %v, want ErrNoAteletOnNode", err)
+				}
+			default:
+				if err == nil || errors.Is(err, ErrNoAteletOnNode) {
+					t.Errorf("DialForAteletOnNode = %v, want a non-ErrNoAteletOnNode error", err)
+				}
+			}
+			if d.ateletConns.Len() > 1 {
+				t.Errorf("cache holds %d conns, want at most 1", d.ateletConns.Len())
+			}
+		})
+	}
+
+	t.Run("a change on one node keeps the other node's conn", func(t *testing.T) {
+		idx := newTestAteletIndexer(t,
+			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
+			ateletPod("atelet-2", "uid-2", "node2", "10.0.0.2"),
+		)
+		d := NewAteletDialer(idx, installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
+			WithDialCredentials(func(string) (credentials.TransportCredentials, error) {
+				return insecure.NewCredentials(), nil
+			}))
+		node1, err := d.DialForAteletOnNode("node1")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode(node1): %v", err)
+		}
+		node2, err := d.DialForAteletOnNode("node2")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode(node2): %v", err)
+		}
+		if err := idx.Update(ateletPod("atelet-1", "uid-3", "node1", "10.0.0.3")); err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := d.DialForAteletOnNode("node1")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode(node1) after the change: %v", err)
+		}
+		t.Cleanup(func() { fresh.Close(); node2.Close() })
+
+		if fresh == node1 {
+			t.Error("node1 returned the stale conn")
+		}
+		if again, err := d.DialForAteletOnNode("node2"); err != nil || again != node2 {
+			t.Errorf("DialForAteletOnNode(node2) = %v, %v, want the cached conn", again, err)
+		}
+		if got := node2.GetState(); got == connectivity.Shutdown {
+			t.Error("node2 conn was closed by a change on node1")
+		}
+	})
+
 	t.Run("closes conns evicted from the cache", func(t *testing.T) {
 		d := NewAteletDialer(newTestAteletIndexer(t,
 			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
