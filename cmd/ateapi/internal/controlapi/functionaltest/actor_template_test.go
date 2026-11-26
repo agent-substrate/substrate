@@ -147,7 +147,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlapi.NewActorTemplateReconciler(tc.impl, tc.service, 7*time.Second).Start(ctx)
+	controlapi.NewActorTemplateReconciler(tc.impl, tc.service, 7*time.Second, controlapi.DefaultTemplateReconcilerWorkers).Start(ctx)
 	var goldenRef *ateapi.ObjectRef
 	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		current, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()})
@@ -259,7 +259,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 		}
 		return nil
 	}
-	controlapi.NewActorTemplateReconciler(tc.impl, tc.service, 7*time.Second).Start(ctx)
+	controlapi.NewActorTemplateReconciler(tc.impl, tc.service, 7*time.Second, controlapi.DefaultTemplateReconcilerWorkers).Start(ctx)
 	// The enabled template proves the same reconciler is making progress.
 	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := assertNoGolden(ctx); err != nil {
@@ -370,7 +370,7 @@ func TestGoldenActorWaitsForLargerWorker(t *testing.T) {
 
 	control := &resumeFailureSignal{RPCService: tc.service, failed: make(chan struct{})}
 	// A short resync retries the golden actor soon after the larger worker registers.
-	controlapi.NewActorTemplateReconciler(tc.persistence, control, 100*time.Millisecond).Start(ctx)
+	controlapi.NewActorTemplateReconciler(tc.persistence, control, 100*time.Millisecond, controlapi.DefaultTemplateReconcilerWorkers).Start(ctx)
 	select {
 	case <-control.failed:
 	case <-time.After(30 * time.Second):
