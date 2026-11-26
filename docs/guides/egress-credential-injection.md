@@ -259,12 +259,29 @@ kubectl -n ate-system edit configmap k8s-credential-provider-namespace-policy
       - ns1
 ```
 
-The provider loads the policy **once at startup** and does not yet reload it,
-so after editing, restart the provider:
+The provider rereads the policy when the kubelet updates the mounted ConfigMap,
+which can take a minute or so; no restart is needed. If the edited policy fails
+to parse, the provider logs the error and keeps enforcing the previous one;
+`/statusz` on the provider shows the error and the grants in force.
+
+After an edit, check that the provider enforces the new policy. The `/statusz`
+page listens on the pod's loopback address, port 4040, so reach it through a
+port-forward:
 
 ```bash
-kubectl -n ate-system rollout restart deployment/k8s-credential-provider
+kubectl -n ate-system port-forward deployment/k8s-credential-provider 4040:4040
 ```
+
+Then, from another terminal, open `http://localhost:4040/statusz`, or read the
+JSON form:
+
+```bash
+curl -s 'http://localhost:4040/statusz?format=json' | jq '{policy_grant_details, policy_error}'
+```
+
+`policy_grant_details` lists the namespaces each atespace is granted, with any
+`secretSelector` labels. Once it shows your edit and `policy_error` is null,
+the new policy is in force.
 
 For a first smoke test, grant your actor's atespace `ns1` as above and apply a
 sample secret that the URI in the sample policy resolves to:

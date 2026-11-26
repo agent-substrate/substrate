@@ -159,6 +159,10 @@ func (s *Server) Grants() map[string][]string { return s.nsAuth.Grants() }
 // Nil when authorization is disabled.
 func (s *Server) GrantDetails() map[string][]NamespaceGrant { return s.nsAuth.GrantDetails() }
 
+// PolicyError reports why the policy file failed to load while an older
+// policy stays in force, for /statusz.
+func (s *Server) PolicyError() error { return s.nsAuth.LoadError() }
+
 // FetchSecret resolves one ate-secret:// URI to its Secret value.
 func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretRequest) (*credprovider.FetchSecretResponse, error) {
 	ref, err := ParseURI(req.GetUri())
