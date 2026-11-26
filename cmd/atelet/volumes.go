@@ -40,10 +40,12 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 		if ext == nil {
 			continue
 		}
+		// The CSI spec makes creating target_path the storage provider's
+		// responsibility, and drivers that follow the spec strictly fail
+		// NodePublishVolume if the target path already exists. The CO only
+		// guarantees the parent volumes/ dir, which Run and Restore create
+		// via actordirs.ResetActorDirsKeepingVolumes before publishing.
 		hostPath := ateletpath.ExternalVolumeHostPath(actorUID, vol.GetName())
-		if err := os.MkdirAll(hostPath, 0o750); err != nil {
-			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
-		}
 		slog.InfoContext(ctx, "Mounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
 		plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
 		if err != nil {
