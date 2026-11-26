@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -119,6 +120,7 @@ var (
 	imageCredentialProviderBinDir = pflag.String("image-credential-provider-bin-dir", "", "Directory holding the credential provider executables named by --image-credential-provider-config. Required when that flag is set.")
 
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+	imageProviderSocket          = pflag.String("image-provider-socket", providerclient.DefaultSocketPath, "Unix socket of the node's image provider plugin. While the socket exists, atelet asks the plugin to prepare each image, and pulls into the image cache when the plugin declines or fails. Empty disables the plugin.")
 	imageCacheDir                = pflag.String("image-cache-dir", ateletpath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the worker pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -292,6 +294,22 @@ func main() {
 	if *imageCacheGCPeriod > 0 {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
+	var imageProvider providerclient.Client
+	if *imageProviderSocket != "" {
+		if err := os.MkdirAll(ateletpath.ImageProviderMountRoot, 0o755); err != nil {
+			serverboot.Fatal(ctx, "Failed to create the image provider mount root", err)
+		}
+		c, err := providerclient.NewGRPCClient(*imageProviderSocket, ateletpath.ImageProviderMountRoot)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create the image provider client", err)
+		}
+		defer c.Close()
+		imageProvider = c
+		if !preview.IsEnabled(preview.GateImageProviderPlugin) {
+			slog.InfoContext(ctx, "The ImageProviderPlugin preview gate is off; atelet takes no new image provider leases",
+				slog.String("socket", *imageProviderSocket))
+		}
+	}
 
 	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
@@ -437,6 +455,8 @@ func main() {
 		objectstore.NewAssetProviderClient(objectStorePluginConn),
 		*objectStorePluginSocket,
 		imageCache,
+		imageProvider,
+		imageCredsKeychain,
 		sandboxAssetCache,
 		snapshotCache,
 		runtimes,
@@ -449,6 +469,9 @@ func main() {
 		bootID,
 	)
 	store.s = wmService
+	if imageProvider != nil {
+		go wmService.monitorImageProvider(ctx, *imageProviderSocket, nodepath.ActorsDir)
+	}
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
 
@@ -720,6 +743,17 @@ type Atelet struct {
 
 	workerDialer *WorkerDialer
 	imageCache   *imagecache.Store
+	// imageProvider is the node's image provider plugin, or nil when
+	// --image-provider-socket is empty.
+	imageProvider providerclient.Client
+	// imageKeychain resolves the registry credentials imageProvider gets.
+	imageKeychain authn.Keychain
+	// providerLeases orders the provider leases bundles take and return
+	// against reconciles of the plugin's leases.
+	providerLeases providerLeaseTracker
+	// providerAuth is what the plugin reported in auth_refresh for each
+	// auth key.
+	providerAuth providerAuthModes
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
@@ -796,6 +830,8 @@ func NewService(
 	assetPlugin objectstore.AssetProviderClient,
 	pluginSocket string,
 	imageCache *imagecache.Store,
+	imageProvider providerclient.Client,
+	imageKeychain authn.Keychain,
 	sandboxAssetCache *filecache.Store,
 	snapshotCache *filecache.Store,
 	runtimes *runtimeIndex,
@@ -810,6 +846,8 @@ func NewService(
 	wms := &Atelet{
 		workerDialer:          workerDialer,
 		imageCache:            imageCache,
+		imageProvider:         imageProvider,
+		imageKeychain:         imageKeychain,
 		sandboxAssetCache:     sandboxAssetCache,
 		snapshotCache:         snapshotCache,
 		runtimes:              runtimes,
@@ -885,6 +923,9 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	}()
 
 	s.systemInfoVolumes.Deregister(actorUID)
+	// The reset deletes the overlay specs of an earlier activation, so release
+	// the provider leases they record first.
+	s.releaseProviderLeases(ctx, actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
 		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
@@ -905,9 +946,17 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	}
 
 	var registration *registeredActor
+	// workerCalled is set before RunWorkload. A failed call may still have
+	// started the sandbox, so its leases wait for Terminate or the next reset.
+	var workerCalled bool
 	defer func() {
-		if err != nil && registration != nil {
-			s.systemInfoVolumes.DeregisterOwned(registration)
+		if err != nil {
+			if registration != nil {
+				s.systemInfoVolumes.DeregisterOwned(registration)
+			}
+			if !workerCalled {
+				s.releaseProviderLeases(ctx, actorUID)
+			}
 		}
 	}()
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
@@ -1248,6 +1297,8 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 		slog.WarnContext(ctx, "failed to prune superseded local checkpoints",
 			slog.Any("actor", resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}), slog.Any("err", err))
 	}
+
+	s.releaseProviderLeases(ctx, actorUID)
 
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return fmt.Errorf("while unmounting external volumes: %w", err)
@@ -1701,6 +1752,9 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// Canceled so ate-api-server retries instead of crashing the actor. A
 	// failure here points at atelet or the node's disk, not the actor.
 	s.systemInfoVolumes.Deregister(actorUID)
+	// The reset deletes the overlay specs of an earlier activation, so release
+	// the provider leases they record first.
+	s.releaseProviderLeases(ctx, actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
 		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
@@ -1782,11 +1836,21 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
 
 	var registration *registeredActor
-	// Undo the Register if the restore fails. The errgroup join below happens
-	// before this defer can read registration, so the handoff is synchronized.
+	// workerCalled is set before RestoreWorkload. A failed call may still have
+	// started the sandbox, so its leases wait for Terminate or the next reset.
+	var workerCalled bool
+	// Undo the Register, and return the image provider leases if the restore
+	// fails before the worker call. Every return below joins the errgroup
+	// before this defer can read registration or the bundles, so the handoff
+	// is synchronized.
 	defer func() {
-		if err != nil && registration != nil {
-			s.systemInfoVolumes.DeregisterOwned(registration)
+		if err != nil {
+			if registration != nil {
+				s.systemInfoVolumes.DeregisterOwned(registration)
+			}
+			if !workerCalled {
+				s.releaseProviderLeases(ctx, actorUID)
+			}
 		}
 	}()
 
@@ -2066,6 +2130,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 
 	// Deregister after teardown succeeds
 	s.systemInfoVolumes.Deregister(actorUID)
+	s.releaseProviderLeases(ctx, actorUID)
 
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
@@ -2258,6 +2323,7 @@ func (s *Atelet) prepareOCIBundles(
 		}
 	}
 
+	images := s.imageSource()
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Application containers.
@@ -2268,7 +2334,7 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			img, cwd, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			img, cwd, err := prepareOCIDirectory(gCtx, images, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
@@ -2295,6 +2361,67 @@ func (s *Atelet) prepareOCIBundles(
 		return nil, err
 	}
 	return containerSpecs, nil
+}
+
+// releaseProviderLeases returns the image provider leases that the overlay
+// specs of actorUID's bundles record. It removes each such spec before it
+// releases the spec's leases, so a second call releases nothing. Specs without
+// a lease stay, since they root the image cache. The actor's workload must no
+// longer use its rootfs.
+func (s *Atelet) releaseProviderLeases(ctx context.Context, actorUID string) {
+	if s.imageProvider == nil {
+		return
+	}
+	bundlesDir := ateletpath.OCIBundleDir(actorUID)
+	entries, err := os.ReadDir(bundlesDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "Failed to list bundles to release image provider leases",
+			slog.String("actor_uid", actorUID), slog.Any("err", err))
+		return
+	}
+	images := s.imageSource()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bundle := filepath.Join(bundlesDir, e.Name())
+		spec, err := imagecache.ReadSpec(bundle)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to read overlay spec to release image provider leases",
+				slog.String("bundle", bundle), slog.Any("err", err))
+			continue
+		}
+		if spec == nil {
+			continue
+		}
+		var leases []string
+		if spec.LeaseID != "" {
+			leases = append(leases, spec.LeaseID)
+		}
+		for _, v := range spec.ImageVolumes {
+			if v.LeaseID != "" {
+				leases = append(leases, v.LeaseID)
+			}
+		}
+		if len(leases) == 0 {
+			continue
+		}
+		if err := s.providerLeases.removeSpec(bundle); err != nil {
+			slog.WarnContext(ctx, "Failed to remove overlay spec; not releasing its image provider leases",
+				slog.String("bundle", bundle), slog.Any("err", err))
+			continue
+		}
+		for _, id := range leases {
+			images.release(ctx, id)
+		}
+	}
+}
+
+func (s *Atelet) imageSource() imageSource {
+	return imageSource{cache: s.imageCache, provider: s.imageProvider, keychain: s.imageKeychain, leases: &s.providerLeases, authModes: &s.providerAuth, instruments: s.instruments}
 }
 
 // dialWorker opens (or reuses) the gRPC connection to the target worker

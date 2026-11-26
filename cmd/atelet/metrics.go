@@ -27,8 +27,11 @@ import (
 )
 
 const (
-	restoreDurationMetric    = "ate.actor.restore.duration"
-	checkpointDurationMetric = "ate.actor.checkpoint.duration"
+	restoreDurationMetric                  = "ate.actor.restore.duration"
+	checkpointDurationMetric               = "ate.actor.checkpoint.duration"
+	imageProviderRequestsMetric            = "ate.imageprovider.requests"
+	imageProviderDurationMetric            = "ate.imageprovider.duration"
+	imageProviderAuthRefreshFailuresMetric = "ate.imageprovider.auth_refresh.failures"
 )
 
 // snapshotPhaseBuckets have to cover both ends of a phase breakdown: a warm OCI
@@ -36,11 +39,14 @@ const (
 // fetching a multi-GiB snapshot runs for tens of seconds.
 var snapshotPhaseBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
 
-// Instruments holds atelet's cold-start histograms. A nil *Instruments is a
+// Instruments holds atelet's cold-start instruments. A nil *Instruments is a
 // valid no-op, so call sites need no guard.
 type Instruments struct {
-	restoreDuration    metric.Float64Histogram
-	checkpointDuration metric.Float64Histogram
+	restoreDuration                  metric.Float64Histogram
+	checkpointDuration               metric.Float64Histogram
+	imageProviderRequests            metric.Int64Counter
+	imageProviderDuration            metric.Float64Histogram
+	imageProviderAuthRefreshFailures metric.Int64Counter
 }
 
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
@@ -64,10 +70,67 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("create %s histogram: %w", checkpointDurationMetric, err)
 	}
 
+	imageProviderRequests, err := meter.Int64Counter(
+		imageProviderRequestsMetric,
+		metric.WithUnit("{request}"),
+		metric.WithDescription("Number of requests to the image provider plugin on the node, by provider and outcome."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s counter: %w", imageProviderRequestsMetric, err)
+	}
+
+	imageProviderDuration, err := meter.Float64Histogram(
+		imageProviderDurationMetric,
+		metric.WithUnit("s"),
+		metric.WithDescription("Time the image provider plugin on the node takes to answer for one image: CanProvide and PrepareImage, without a pull into the image cache."),
+		metric.WithExplicitBucketBoundaries(snapshotPhaseBuckets...),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s histogram: %w", imageProviderDurationMetric, err)
+	}
+
+	imageProviderAuthRefreshFailures, err := meter.Int64Counter(
+		imageProviderAuthRefreshFailuresMetric,
+		metric.WithUnit("{failure}"),
+		metric.WithDescription("Number of failed refreshes of the registry credentials of image provider leases on the node."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s counter: %w", imageProviderAuthRefreshFailuresMetric, err)
+	}
+
 	return &Instruments{
-		restoreDuration:    restoreDuration,
-		checkpointDuration: checkpointDuration,
+		restoreDuration:                  restoreDuration,
+		checkpointDuration:               checkpointDuration,
+		imageProviderRequests:            imageProviderRequests,
+		imageProviderDuration:            imageProviderDuration,
+		imageProviderAuthRefreshFailures: imageProviderAuthRefreshFailures,
 	}, nil
+}
+
+// recordImageProvider records one request to the image provider plugin that
+// took d. errorType is set only for ImageProviderOutcomeError.
+func (i *Instruments) recordImageProvider(ctx context.Context, provider, outcome, errorType string, d time.Duration) {
+	if i == nil {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		ateattr.ImageProviderKey.String(provider),
+		ateattr.ImageProviderOutcomeKey.String(outcome),
+	}
+	if errorType != "" {
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(errorType))
+	}
+	opt := metric.WithAttributes(attrs...)
+	i.imageProviderRequests.Add(ctx, 1, opt)
+	i.imageProviderDuration.Record(ctx, d.Seconds(), opt)
+}
+
+// recordImageProviderAuthRefreshFailure records one failed RefreshAuth call.
+func (i *Instruments) recordImageProviderAuthRefreshFailure(ctx context.Context, provider string) {
+	if i == nil {
+		return
+	}
+	i.imageProviderAuthRefreshFailures.Add(ctx, 1, metric.WithAttributes(ateattr.ImageProviderKey.String(provider)))
 }
 
 // snapshotOp is the dimension set shared by every phase of one restore or

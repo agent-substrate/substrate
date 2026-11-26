@@ -50,7 +50,7 @@ func SetupBundleRootfs(bundlePath string) error {
 		return nil
 	}
 
-	for _, layerDir := range spec.Layers {
+	for _, layerDir := range spec.StoreLayers {
 		if err := FinalizeLayer(layerDir); err != nil {
 			return fmt.Errorf("while finalizing layer %q: %w", layerDir, err)
 		}
@@ -79,13 +79,13 @@ func SetupBundleRootfs(bundlePath string) error {
 		}
 	}
 
-	if len(spec.Layers) == 0 {
+	if len(spec.LowerDirs) == 0 {
 		// Degenerate zero-layer image: the empty rootfs dir plus ExtraDirs is
 		// all there is.
 		return createExtraDirs(rootfs, spec.ExtraDirs)
 	}
 
-	if err := mountOverlay(rootfs, overlayLowerDirs(spec.Layers), upper, work); err != nil {
+	if err := mountOverlay(rootfs, overlayLowerDirs(spec.LowerDirs), upper, work); err != nil {
 		return fmt.Errorf("while mounting overlay rootfs at %q: %w", rootfs, err)
 	}
 
@@ -96,7 +96,7 @@ func SetupBundleRootfs(bundlePath string) error {
 	// Repair merged directory metadata shadowed by implicitly-created parent
 	// dirs (see implicitdirs.go); the chmod/chowns copy up into this bundle's
 	// private upper, never into the shared pool.
-	fixups, err := resolveImplicitDirFixups(spec.Layers)
+	fixups, err := resolveImplicitDirFixups(spec.StoreLayers)
 	if err != nil {
 		return fmt.Errorf("while resolving implicit dir metadata: %w", err)
 	}
@@ -114,7 +114,7 @@ func SetupBundleRootfs(bundlePath string) error {
 // bundle-local mount point, for the OCI spec to bind into the container.
 func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 	for _, vol := range volumes {
-		for _, layerDir := range vol.Layers {
+		for _, layerDir := range vol.StoreLayers {
 			if err := FinalizeLayer(layerDir); err != nil {
 				return fmt.Errorf("while finalizing layer %q of image volume %q: %w", layerDir, vol.Name, err)
 			}
@@ -126,19 +126,19 @@ func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 		}
 		_ = unix.Unmount(mountpoint, unix.MNT_DETACH)
 
-		if err := mountImageVolume(mountpoint, vol.Layers); err != nil {
+		if err := mountImageVolume(mountpoint, vol.LowerDirs); err != nil {
 			return fmt.Errorf("while mounting image volume %q: %w", vol.Name, err)
 		}
 	}
 	return nil
 }
 
-// mountImageVolume attaches layers read-only at mountpoint.
-func mountImageVolume(mountpoint string, layers []string) error {
-	if len(layers) == 1 {
+// mountImageVolume attaches lowerDirs read-only at mountpoint.
+func mountImageVolume(mountpoint string, lowerDirs []string) error {
+	if len(lowerDirs) == 1 {
 		// The kernel rejects a single lowerdir without an upperdir, so bind
-		// the layer's fs/ tree directly for the single-layer case.
-		fsDir := filepath.Join(layers[0], layerFSDirName)
+		// it directly for the single-layer case.
+		fsDir := lowerDirs[0]
 		if err := unix.Mount(fsDir, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 			return fmt.Errorf("while binding %q: %w", fsDir, err)
 		}
@@ -151,7 +151,7 @@ func mountImageVolume(mountpoint string, layers []string) error {
 		}
 		return nil
 	}
-	return mountOverlay(mountpoint, overlayLowerDirs(layers), "", "")
+	return mountOverlay(mountpoint, overlayLowerDirs(lowerDirs), "", "")
 }
 
 // mountOverlay attaches an overlay of lowers (top-most first) with the given

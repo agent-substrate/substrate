@@ -47,6 +47,12 @@ const (
 	// GateGoldenEgressPolicy controls configuring a golden actor's egress policy on its template.
 	GateGoldenEgressPolicy Gate = "GoldenEgressPolicy"
 
+	// GateImageProviderPlugin controls whether atelet prepares images through
+	// the node's image provider plugin. When disabled, atelet pulls every
+	// image into its image cache and takes no new plugin leases, but still
+	// releases the leases its actors hold.
+	GateImageProviderPlugin Gate = "ImageProviderPlugin"
+
 	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate may
 	// set snapshotConfig.storage_location. When disabled, the API rejects the
 	// field and snapshots are stored under ate-api-server's
@@ -66,6 +72,7 @@ const All = "ALL"
 var realKnownGates = []Gate{
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
+	GateImageProviderPlugin,
 	GatePerTemplateSnapshotLocation,
 	GateIngressCache,
 }
