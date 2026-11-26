@@ -140,6 +140,48 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 	}
 }
 
+func TestSuspendActorRequestedByWorker_LeaseConflict(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, ref, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// Another suspend has released the worker but still holds the actor lease.
+	lease, err := st.AcquireLease(ctx, actorLeaseKey(ref))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+
+	s := &RPCService{actorWorkflow: &ActorWorkflow{store: st}}
+	_, err = s.SuspendActorRequestedByWorker(ctx, ref)
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Errorf("SuspendActorRequestedByWorker: got %v, want Aborted (err %v)", got, err)
+	}
+}
+
+func TestSuspendActor_SuspendedBeforeLease(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, ref, "ns", "missing-template", ateapi.ActorState_ACTOR_STATE_RUNNING)
+	running := mustReadActor(t, ctx, st, ref)
+	var suspended *ateapi.Actor
+	w := &ActorWorkflow{store: &hookedStore{Interface: st, beforeLease: func() {
+		suspended = mustUpdateActorStatus(t, ctx, st, running, func(status *ateapi.ActorStatus) {
+			status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		})
+	}}}
+
+	got, err := w.SuspendActor(ctx, ref, suspendAsync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(suspended, got, protocmp.Transform()); diff != "" {
+		t.Errorf("returned actor mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -290,9 +332,8 @@ func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 		for _, mode := range suspendModes {
 			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
 				ctx := context.Background()
-				st, cleanup := storetest.SetupTestStore(t)
-				defer cleanup()
-				w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+				st := &leaseCountingStore{Interface: newTestPersistence(t)}
+				w := &ActorWorkflow{store: st}
 				actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 				seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, tc.seedOpts...)
@@ -301,6 +342,9 @@ func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 				returned, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
 				if err != nil {
 					t.Fatalf("SuspendActor: %v", err)
+				}
+				if st.acquireCalls != 0 {
+					t.Errorf("AcquireLease calls = %d, want 0", st.acquireCalls)
 				}
 				if diff := cmp.Diff(seeded, returned, protocmp.Transform()); diff != "" {
 					t.Errorf("returned actor mismatch (-seeded +returned):\n%s", diff)

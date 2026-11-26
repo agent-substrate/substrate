@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -77,7 +78,7 @@ func TestRequestActorSuspend(t *testing.T) {
 		Metadata: actor.GetMetadata(),
 		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	}
-	control := &fakeControl{resp: &ateapi.SuspendActorResponse{Actor: suspended}}
+	control := &fakeControl{resp: suspended}
 	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
 	got, err := s.RequestActorSuspend(
@@ -86,10 +87,8 @@ func TestRequestActorSuspend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestActorSuspend() failed: %v", err)
 	}
-	want := []*ateapi.SuspendActorRequest{{
-		Actor: &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
-	}}
-	if diff := cmp.Diff(want, control.calls, protocmp.Transform()); diff != "" {
+	want := []resources.ActorRef{{Atespace: suspendAtespace, Name: suspendActor}}
+	if diff := cmp.Diff(want, control.calls); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
 	}
 	// The caller gets the actor as the workflow left it, so a worker can see
