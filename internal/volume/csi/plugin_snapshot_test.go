@@ -61,7 +61,7 @@ func newSnapshotTestPlugin(t *testing.T, driver *mockCSIDriver) *Plugin {
 	}
 	t.Cleanup(func() { client.Close() })
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	plugin.InitControllerCapabilities(context.Background())
 	return plugin
 }
@@ -115,7 +115,7 @@ func TestPlugin_ControllerCapabilities(t *testing.T) {
 }
 
 func TestPlugin_ControllerCapabilities_Uninitialized(t *testing.T) {
-	got, err := NewPlugin(nil).ControllerCapabilities(context.Background())
+	got, err := NewPlugin(nil, mockDriverName).ControllerCapabilities(context.Background())
 	if err != nil {
 		t.Fatalf("ControllerCapabilities: %v", err)
 	}
