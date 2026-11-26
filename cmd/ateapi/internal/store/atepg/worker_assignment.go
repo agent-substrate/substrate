@@ -20,18 +20,32 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/proto"
 )
 
-// getWorkerForUpdate reads a Worker and holds its row until the caller's
-// transaction commits, which is what serializes updates to its allocation. The
-// caller supplies the transaction; this only takes the lock.
-func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Worker, error) {
+const (
+	workerForUpdateSQL = `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`
+	// workerOfActorForUpdateSQL locks the Worker holding actorUID's assignment
+	// in one statement. The assignment row names the Worker and the Worker is
+	// locked before its assignment row is touched, matching BindActorToWorker's
+	// lock order.
+	workerOfActorForUpdateSQL = `
+		SELECT proto FROM workers
+		WHERE name = (SELECT worker_name FROM worker_assignments WHERE actor_uid = $1)
+		FOR UPDATE`
+	saveWorkerSQL = `UPDATE workers SET version = $1, proto = $2 WHERE name = $3 AND uid = $4 AND version = $5`
+)
+
+// scanWorkerForUpdate decodes a row of workerForUpdateSQL or
+// workerOfActorForUpdateSQL; the row stays locked until the caller's
+// transaction commits, which is what serializes updates to its allocation.
+func scanWorkerForUpdate(row pgx.Row, name string) (*ateapi.Worker, error) {
 	var protoBytes []byte
-	err := tx.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`, name).Scan(&protoBytes)
+	err := row.Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -45,9 +59,10 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 	return worker, nil
 }
 
-// saveWorker writes back a Worker whose allocation just moved, at the next
-// version. This assumes the caller holds the row lock getWorkerForUpdate took.
-func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
+// queueSaveWorker queues the write of a Worker whose allocation just moved, at
+// the next version. This assumes the caller's transaction holds the row lock
+// workerForUpdateSQL or workerOfActorForUpdateSQL took.
+func queueSaveWorker(w *writes, worker *ateapi.Worker) error {
 	currentUID := worker.GetMetadata().GetUid()
 	currentVersion := worker.GetMetadata().GetVersion()
 	worker.Metadata = setUpdateMetadata(worker.Metadata)
@@ -56,21 +71,22 @@ func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 	meta := worker.GetMetadata()
-	// Callers hold the row lock for this worker, so this matches the
-	// row they read. It is stated anyway so a caller that skipped the lock
-	// fails loudly instead of overwriting a newer Worker, and so a row that is
-	// gone is an error rather than an update of nothing.
-	tag, err := tx.Exec(ctx, `UPDATE workers SET version = $1, proto = $2 WHERE name = $3 AND uid = $4 AND version = $5`,
-		meta.GetVersion(), protoBytes, meta.GetName(), currentUID, currentVersion)
-	if err != nil {
-		return fmt.Errorf("updating worker %s: %w", meta.GetName(), err)
-	}
-	if tag.RowsAffected() != 1 {
-		return store.ErrVersionConflict
-	}
+	// Callers hold the row lock for this worker, so this matches the row they
+	// read. It is stated anyway so a caller that skipped the lock fails loudly
+	// instead of overwriting a newer Worker, and so a row that is gone is an
+	// error rather than an update of nothing.
+	w.exec(saveWorkerSQL, []any{meta.GetVersion(), protoBytes, meta.GetName(), currentUID, currentVersion}, func(tag pgconn.CommandTag) error {
+		if tag.RowsAffected() != 1 {
+			return store.ErrVersionConflict
+		}
+		return nil
+	})
 	return nil
 }
 
+// BindActorToWorker runs its transaction in three round trips: one batch that
+// locks the Worker and reads the Actor, one batch with every write, and the
+// commit. The Worker row is held for all three.
 func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	actorUID := assignment.GetActorUid()
 	if actorUID == "" {
@@ -92,10 +108,21 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	}
 
 	var updated *ateapi.Actor
-	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
-		worker, err := getWorkerForUpdate(ctx, tx, workerName)
+	_, err = p.writeAndAppendEventBatched(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx, w *writes) (*ateapi.Worker, error) {
+		reads := &pgx.Batch{}
+		reads.Queue(workerForUpdateSQL, workerName)
+		reads.Queue(actorForUpdateSQL, actorRef.Atespace, actorRef.Name)
+		results := tx.SendBatch(ctx, reads)
+		worker, err := scanWorkerForUpdate(results.QueryRow(), workerName)
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, store.ErrWorkerNotFound
+			err = store.ErrWorkerNotFound
+		}
+		var current readActor
+		if err == nil {
+			current, err = readActorForUpdate(results.QueryRow(), actorRef)
+		}
+		if closeErr := results.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("reading worker %s and actor %s: %w", workerName, actorRef, closeErr)
 		}
 		if err != nil {
 			return nil, err
@@ -112,43 +139,72 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		}
 		// The Actor's version check settles concurrent binds of it: every bind
 		// updates the Actor, so all but the first fail it.
-		if updated, err = updateActor(ctx, tx, actorRef, precondition, mutate, false); err != nil {
+		next, err := current.apply(actorRef, precondition, mutate, false)
+		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `
+		w.exec(updateActorSQL, next.args(actorRef), func(tag pgconn.CommandTag) error { return next.check(actorRef, tag) })
+		w.exec(`
 			INSERT INTO worker_assignments (actor_uid, worker_name, proto)
-			VALUES ($1, $2, $3)`,
-			actorUID, workerName, assignmentBytes); err != nil {
-			return nil, fmt.Errorf("binding actor %s to worker %s: %w", actorUID, workerName, err)
-		}
+			VALUES ($1, $2, $3)`, []any{actorUID, workerName, assignmentBytes}, nil)
 		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, +1)
-		if err := saveWorker(ctx, tx, worker); err != nil {
+		if err := queueSaveWorker(w, worker); err != nil {
 			return nil, err
 		}
+		updated = next.actor
 		return worker, nil
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, fmt.Errorf("binding actor %s to worker %s: %w", actorUID, workerName, err)
+		}
 		return nil, err
 	}
 	return updated, nil
 }
 
+// UpdateActorAndRelease runs its transaction in three round trips: one batch
+// that locks the Worker, drops the assignment and reads the Actor, one batch
+// with the writes, and the commit.
 func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	if err := precondition.ValidateRequired(); err != nil {
 		return nil, err
 	}
 	actorUID := precondition.UID
 	var updated *ateapi.Actor
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
-		released, err := releaseActor(ctx, tx, actorUID)
+	_, err := p.writeAndAppendEventBatched(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx, w *writes) (*ateapi.Worker, error) {
+		reads := &pgx.Batch{}
+		reads.Queue(workerOfActorForUpdateSQL, actorUID)
+		reads.Queue(`
+			DELETE FROM worker_assignments
+			WHERE actor_uid = $1
+			RETURNING worker_name, proto`, actorUID)
+		reads.Queue(actorForUpdateSQL, actorRef.Atespace, actorRef.Name)
+		results := tx.SendBatch(ctx, reads)
+		released, err := releaseActor(results, actorUID)
+		var current readActor
+		if err == nil {
+			current, err = readActorForUpdate(results.QueryRow(), actorRef)
+		}
+		if closeErr := results.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("releasing actor %s: %w", actorUID, closeErr)
+		}
 		if err != nil {
 			return nil, err
 		}
+		if released != nil {
+			if err := queueSaveWorker(w, released); err != nil {
+				return nil, err
+			}
+		}
 		// A row released since the caller read the Actor also moved the
 		// Actor on, so its version check fails here.
-		if updated, err = updateActor(ctx, tx, actorRef, precondition, mutate, false); err != nil {
+		next, err := current.apply(actorRef, precondition, mutate, false)
+		if err != nil {
 			return nil, err
 		}
+		w.exec(updateActorSQL, next.args(actorRef), func(tag pgconn.CommandTag) error { return next.check(actorRef, tag) })
+		updated = next.actor
 		return released, nil
 	})
 	if err != nil {
@@ -157,48 +213,47 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 	return updated, nil
 }
 
-// releaseActor deletes actorUID's assignment, wherever it is, and returns the
-// Worker that held it as saved with the assignment no longer booked, or nil if
-// no Worker held it. The Worker is locked before its assignment row, as
-// BindActorToWorker locks it, so the first read only finds which Worker to
-// lock.
-func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Worker, error) {
-	_, workerName, err := getAssignmentRow(ctx, tx, actorUID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
+// releaseActor reads the first two results of UpdateActorAndRelease's batch:
+// the locked Worker that held actorUID's assignment and the assignment row
+// just deleted. It returns the Worker with the assignment no longer booked,
+// or nil if no Worker held it. If an assignment appeared or moved to another
+// Worker between the two statements, ErrVersionConflict aborts the transaction.
+func releaseActor(results pgx.BatchResults, actorUID string) (*ateapi.Worker, error) {
+	worker, err := scanWorkerForUpdate(results.QueryRow(), "of actor "+actorUID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	worker, err := getWorkerForUpdate(ctx, tx, workerName)
-	if errors.Is(err, store.ErrNotFound) {
-		// A Worker is deleted only once it holds no assignments, so the row
-		// was released after the first read.
+	var (
+		deletedWorker string
+		protoBytes    []byte
+	)
+	deleteErr := results.QueryRow().Scan(&deletedWorker, &protoBytes)
+	if worker == nil {
+		if deleteErr == nil {
+			return nil, store.ErrVersionConflict
+		}
+		if !errors.Is(deleteErr, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("releasing actor %s: %w", actorUID, deleteErr)
+		}
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	var protoBytes []byte
-	err = tx.QueryRow(ctx, `
-		DELETE FROM worker_assignments
-		WHERE actor_uid = $1 AND worker_name = $2
-		RETURNING proto`, actorUID, workerName).Scan(&protoBytes)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Released after the first read.
+	if errors.Is(deleteErr, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
+	if deleteErr != nil {
+		return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, worker.GetMetadata().GetName(), deleteErr)
+	}
+	if deletedWorker != worker.GetMetadata().GetName() {
+		return nil, store.ErrVersionConflict
 	}
 	assignment := &ateapi.ActorAssignment{}
 	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, fmt.Errorf("unmarshaling released assignment: %w", err)
 	}
-	worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
-	if err := saveWorker(ctx, tx, worker); err != nil {
-		return nil, err
+	if worker.Status == nil {
+		worker.Status = &ateapi.WorkerStatus{}
 	}
+	worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
 	return worker, nil
 }
 
