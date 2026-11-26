@@ -195,7 +195,16 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 		return nil, err
 	}
 
-	watchPool, err := pgxpool.NewWithConfig(ctx, resizedPoolConfig(readWriteConfig, watchPoolMaxConns, watchPoolMinConns))
+	watchConfig := resizedPoolConfig(readWriteConfig, watchPoolMaxConns, watchPoolMinConns)
+	// Partitions on worker_outbox disable autovacuum and autoanalyze, so empty
+	// or freshly rotated partitions carry zero or stale stats that can make
+	// PostgreSQL pick a Sort + Seq/Bitmap scan across millions of rows instead
+	// of an index-ordered Merge Append on worker_outbox_*_xid_idx. Disabling
+	// seqscan and bitmapscan on the dedicated watch pool pins WatchWorkers and
+	// expired-lease cleanup onto their B-tree indexes regardless of table stats.
+	watchConfig.ConnConfig.RuntimeParams["enable_seqscan"] = "off"
+	watchConfig.ConnConfig.RuntimeParams["enable_bitmapscan"] = "off"
+	watchPool, err := pgxpool.NewWithConfig(ctx, watchConfig)
 	if err != nil {
 		ownerPool.Close()
 		pool.Close()
