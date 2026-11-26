@@ -23,8 +23,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,6 +35,7 @@ import (
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/testcert"
+	"k8s.io/client-go/rest"
 )
 
 func TestIssuerScopedURL(t *testing.T) {
@@ -177,22 +180,304 @@ func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenToArbitraryURL
 	}
 }
 
-func TestBuildJWTIssuerDiscoveryClientUsesDefaultTransportWithoutDiscoveryToken(t *testing.T) {
-	client, err := NewHTTPClient("https://accounts.google.com", "", "")
-	if err != nil {
-		t.Fatalf("NewHTTPClient() error = %v", err)
-	}
-	if client.Timeout == 0 {
-		t.Fatalf("client timeout = 0, want nonzero timeout")
-	}
-	if _, ok := client.Transport.(*issuerDiscoveryTransport); ok {
-		t.Fatalf("provider without discovery token should not use token transport")
+func TestNewHTTPClientWithClientConfigUsesDefaultTransportForGCP(t *testing.T) {
+	for _, issuer := range []string{
+		"https://accounts.google.com",
+		"https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			client, err := NewHTTPClientWithClientConfig(issuer, "", "", &rest.Config{
+				Host:            "https://kubernetes.example",
+				BearerToken:     "kube-token",
+				TLSClientConfig: rest.TLSClientConfig{Insecure: true},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.Timeout == 0 {
+				t.Fatal("client timeout = 0, want nonzero timeout")
+			}
+			transport, ok := client.Transport.(*http.Transport)
+			if !ok {
+				t.Fatalf("client transport = %T, want default HTTP transport", client.Transport)
+			}
+			if transport.TLSClientConfig != nil && transport.TLSClientConfig.InsecureSkipVerify {
+				t.Fatal("GCP transport inherited insecure Kubernetes TLS configuration")
+			}
+		})
 	}
 }
 
 func TestNewHTTPClientRequiresCAWithDiscoveryToken(t *testing.T) {
 	if _, err := NewHTTPClient("https://kubernetes.default.svc", "", "/token"); err == nil {
 		t.Fatal("NewHTTPClient() with a discovery token and no CA succeeded")
+	}
+	if _, err := NewHTTPClientWithClientConfig("https://kubernetes.default.svc", "", "/token", &rest.Config{
+		Host: "https://kubernetes.example",
+	}); err == nil {
+		t.Fatal("NewHTTPClientWithClientConfig() with a discovery token and no CA succeeded")
+	}
+}
+
+func TestNewHTTPClientWithClientConfigUsesAnonymousTransport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if auth := req.Header.Get("Authorization"); auth != "" {
+			t.Errorf("Authorization = %q, want empty", auth)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewHTTPClientWithClientConfig("https://kubernetes.default.svc", "", "", &rest.Config{
+		Host:        "https://kubernetes.example",
+		BearerToken: "kube-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*kubeconfigIssuerTransport)
+	if !ok {
+		t.Fatalf("client transport = %T, want kubeconfig transport", client.Transport)
+	}
+	if _, ok := transport.base.(*http.Transport); !ok {
+		t.Fatalf("base transport = %T, want default HTTP transport", transport.base)
+	}
+	if transport.base == http.DefaultTransport {
+		t.Fatal("base transport is not a clone of the default transport")
+	}
+	resp, err := client.Get(server.URL + "/custom-jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("response status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestNewHTTPClientWithClientConfigUsesKubeconfigCredentials(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		issuer  string
+		url     string
+		wantURL string
+	}{
+		{name: "discovery", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.default.svc/.well-known/openid-configuration", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration"},
+		{name: "path issuer discovery", issuer: "https://issuer.example/tenant", url: "https://issuer.example/tenant/.well-known/openid-configuration", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration"},
+		{name: "published proxy JWKS", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.example/proxy/openid/v1/jwks", wantURL: "https://kubernetes.example/proxy/openid/v1/jwks"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotAuth, gotURL string
+			client, err := NewHTTPClientWithClientConfig(tt.issuer, "", "", &rest.Config{
+				Host:        "https://kubernetes.example/proxy",
+				BearerToken: "kube-token",
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					gotAuth = req.Header.Get("Authorization")
+					gotURL = req.URL.String()
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(nil), Header: make(http.Header)}, nil
+				}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.Transport.(*kubeconfigIssuerTransport).base = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				t.Fatalf("request %q used anonymous transport", req.URL)
+				return nil, nil
+			})
+			req, err := http.NewRequest(http.MethodGet, tt.url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := resp.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if gotAuth != "Bearer kube-token" {
+				t.Fatalf("Authorization = %q, want kubeconfig bearer token", gotAuth)
+			}
+			if gotURL != tt.wantURL {
+				t.Fatalf("request URL = %q, want %q", gotURL, tt.wantURL)
+			}
+			if req.URL.String() != tt.url {
+				t.Fatalf("original request URL = %q, want %q", req.URL, tt.url)
+			}
+		})
+	}
+}
+
+func TestKubeconfigIssuerTransportRedirects(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		serverURL string
+		location  string
+		wantURL   string
+		wantAuth  string
+		wantErr   bool
+	}{
+		{name: "root relative", location: "/proxy/discovery.json", wantURL: "https://kubernetes.example/proxy/discovery.json", wantAuth: "Bearer kube-token"},
+		{name: "path relative", location: "../discovery.json", wantURL: "https://kubernetes.example/proxy/discovery.json", wantAuth: "Bearer kube-token"},
+		{name: "query only", location: "?version=2", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration?version=2", wantAuth: "Bearer kube-token"},
+		{name: "absolute server", location: "https://kubernetes.example/proxy/discovery.json", wantURL: "https://kubernetes.example/proxy/discovery.json", wantAuth: "Bearer kube-token"},
+		{name: "external host", location: "https://external.example/discovery.json", wantURL: "https://external.example/discovery.json"},
+		{name: "scheme relative external host", location: "//external.example/discovery.json", wantURL: "https://external.example/discovery.json"},
+		{name: "HTTP downgrade", location: "http://kubernetes.example/proxy/discovery.json", wantURL: "http://kubernetes.example/proxy/discovery.json"},
+		{name: "outside proxy prefix", location: "/proxy-other/discovery.json", wantURL: "https://kubernetes.example/proxy-other/discovery.json"},
+		{name: "encoded parent segment", location: "/proxy/%2e%2e/discovery.json", wantURL: "https://kubernetes.example/proxy/%2e%2e/discovery.json"},
+		{name: "escaped proxy relative", serverURL: "https://kubernetes.example/proxy%2F", location: "../discovery.json", wantURL: "https://kubernetes.example/proxy%2F/discovery.json", wantAuth: "Bearer kube-token"},
+		{name: "escaped proxy query", serverURL: "https://kubernetes.example/proxy%2F", location: "?version=2", wantURL: "https://kubernetes.example/proxy%2F/.well-known/openid-configuration?version=2", wantAuth: "Bearer kube-token"},
+		{name: "malformed location", location: ":invalid", wantErr: true},
+		{name: "no location"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var urls, auths []string
+			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				urls = append(urls, req.URL.String())
+				auths = append(auths, req.Header.Get("Authorization"))
+				status, header := http.StatusOK, make(http.Header)
+				if len(urls) == 1 {
+					status = http.StatusTemporaryRedirect
+					if tt.location != "" {
+						header.Set("Location", tt.location)
+					}
+				}
+				return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+			})
+			if tt.serverURL == "" {
+				tt.serverURL = "https://kubernetes.example/proxy"
+			}
+			client, err := NewHTTPClientWithClientConfig("https://issuer.example/tenant", "", "", &rest.Config{
+				Host:        tt.serverURL,
+				BearerToken: "kube-token",
+				Transport:   transport,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.Transport.(*kubeconfigIssuerTransport).base = transport
+			const originalURL = "https://issuer.example/tenant/.well-known/openid-configuration"
+			req, err := http.NewRequest(http.MethodGet, originalURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if resp != nil {
+				if err := resp.Body.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if req.URL.String() != originalURL || req.Header.Get("Authorization") != "" {
+				t.Fatal("original request was modified")
+			}
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "failed to parse Location") {
+					t.Fatalf("redirect error = %v, want invalid Location error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.location == "" {
+				if len(urls) != 1 || resp.StatusCode != http.StatusTemporaryRedirect || resp.Header.Get("Location") != "" {
+					t.Fatalf("response without Location was changed: status = %d, Location = %q, requests = %v", resp.StatusCode, resp.Header.Get("Location"), urls)
+				}
+				return
+			}
+			if len(urls) != 2 || urls[0] != strings.TrimRight(tt.serverURL, "/")+oidcDiscoveryPath || auths[0] != "Bearer kube-token" {
+				t.Fatalf("requests = %v, authorization = %v, want authenticated discovery and one redirect", urls, auths)
+			}
+			if urls[1] != tt.wantURL || auths[1] != tt.wantAuth {
+				t.Fatalf("redirect = %q, authorization = %q, want %q, %q", urls[1], auths[1], tt.wantURL, tt.wantAuth)
+			}
+		})
+	}
+}
+
+func TestKubeconfigIssuerTransportScopesCredentials(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		issuer    string
+		url       string
+		serverURL string
+		wantRoute string
+		wantURL   string
+	}{
+		{name: "issuer discovery", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.default.svc/.well-known/openid-configuration", wantRoute: "authenticated", wantURL: "https://kubernetes.example/.well-known/openid-configuration"},
+		{name: "path issuer discovery", issuer: "https://issuer.example/prefix", url: "https://issuer.example/prefix/.well-known/openid-configuration", wantRoute: "authenticated", wantURL: "https://kubernetes.example/.well-known/openid-configuration"},
+		{name: "Kubernetes JWKS", issuer: "https://kubernetes.default.svc", url: "https://internal.example/openid/v1/jwks", wantRoute: "authenticated", wantURL: "https://kubernetes.example/openid/v1/jwks"},
+		{name: "path issuer JWKS", issuer: "https://issuer.example/prefix/", url: "https://issuer.example/prefix/openid/v1/jwks", wantRoute: "authenticated", wantURL: "https://kubernetes.example/openid/v1/jwks"},
+		{name: "issuer sibling path", issuer: "https://issuer.example/prefix", url: "https://issuer.example/prefix-other/openid/v1/jwks", wantRoute: "anonymous", wantURL: "https://issuer.example/prefix-other/openid/v1/jwks"},
+		{name: "custom issuer JWKS", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.default.svc/custom-jwks", wantRoute: "authenticated", wantURL: "https://kubernetes.example/custom-jwks"},
+		{name: "arbitrary URL", issuer: "https://kubernetes.default.svc", url: "https://attacker.example/keys", wantRoute: "anonymous", wantURL: "https://attacker.example/keys"},
+		{name: "proxy discovery", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.default.svc/.well-known/openid-configuration", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration"},
+		{name: "proxy JWKS", issuer: "https://kubernetes.default.svc", url: "https://internal.example/openid/v1/jwks", serverURL: "https://kubernetes.example/proxy/", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/openid/v1/jwks"},
+		{name: "published proxy discovery", issuer: "https://kubernetes.example/proxy", url: "https://kubernetes.example/proxy/.well-known/openid-configuration", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration"},
+		{name: "published proxy JWKS", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.example/proxy/openid/v1/jwks", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/openid/v1/jwks"},
+		{name: "same host published proxy JWKS", issuer: "https://kubernetes.example", url: "https://kubernetes.example/proxy/openid/v1/jwks", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/openid/v1/jwks"},
+		{name: "proxy path issuer JWKS", issuer: "https://issuer.example/tenant", url: "https://issuer.example/tenant/openid/v1/jwks", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/openid/v1/jwks"},
+		{name: "other host proxy JWKS", issuer: "https://kubernetes.default.svc", url: "https://attacker.example/proxy/openid/v1/jwks", serverURL: "https://kubernetes.example/proxy", wantRoute: "anonymous", wantURL: "https://attacker.example/proxy/openid/v1/jwks"},
+		{name: "escaped proxy path", issuer: "https://kubernetes.default.svc", url: "https://kubernetes.default.svc/keys%2Fcurrent", serverURL: "https://kubernetes.example/proxy%2Fcluster", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy%2Fcluster/keys%2Fcurrent"},
+		{name: "escaped issuer path", issuer: "https://issuer.example/prefix%2Ftenant", url: "https://issuer.example/prefix%2Ftenant/keys%2Fcurrent", serverURL: "https://kubernetes.example/proxy%2Fcluster", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy%2Fcluster/keys%2Fcurrent"},
+		{name: "escaped trailing proxy slash", issuer: "https://issuer.example", url: "https://issuer.example/.well-known/openid-configuration", serverURL: "https://kubernetes.example/proxy%2F", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy%2F/.well-known/openid-configuration"},
+		{name: "escaped trailing issuer slash", issuer: "https://issuer.example/tenant%2F", url: "https://issuer.example/tenant%2F/.well-known/openid-configuration", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration"},
+		{name: "published escaped trailing proxy slash", issuer: "https://issuer.example", url: "https://kubernetes.example/proxy%2F/openid/v1/jwks", serverURL: "https://kubernetes.example/proxy%2F", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy%2F/openid/v1/jwks"},
+		{name: "published proxy redirect target", issuer: "https://issuer.example/tenant", url: "https://kubernetes.example/proxy/discovery.json", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/discovery.json"},
+		{name: "server sibling path", issuer: "https://issuer.example/tenant", url: "https://kubernetes.example/proxy-other/discovery.json", serverURL: "https://kubernetes.example/proxy", wantRoute: "anonymous", wantURL: "https://kubernetes.example/proxy-other/discovery.json"},
+		{name: "server encoded parent segment", issuer: "https://issuer.example/tenant", url: "https://kubernetes.example/proxy/%2e%2e/discovery.json", serverURL: "https://kubernetes.example/proxy", wantRoute: "anonymous", wantURL: "https://kubernetes.example/proxy/%2e%2e/discovery.json"},
+		{name: "server escaped traversal", issuer: "https://issuer.example/tenant", url: "https://kubernetes.example/proxy/keys%2F..%2F..%2Fdiscovery.json", serverURL: "https://kubernetes.example/proxy", wantRoute: "anonymous", wantURL: "https://kubernetes.example/proxy/keys%2F..%2F..%2Fdiscovery.json"},
+		{name: "issuer parent segment", issuer: "https://issuer.example/tenant", url: "https://issuer.example/tenant/../discovery.json", serverURL: "https://kubernetes.example/proxy", wantRoute: "anonymous", wantURL: "https://issuer.example/tenant/../discovery.json"},
+		{name: "discovery query", issuer: "https://issuer.example/prefix", url: "https://issuer.example/prefix/.well-known/openid-configuration?hint=a%2Fb", serverURL: "https://kubernetes.example/proxy", wantRoute: "authenticated", wantURL: "https://kubernetes.example/proxy/.well-known/openid-configuration?hint=a%2Fb"},
+		{name: "proxy anonymous URL", issuer: "https://kubernetes.default.svc", url: "https://attacker.example/keys", serverURL: "https://kubernetes.example/proxy", wantRoute: "anonymous", wantURL: "https://attacker.example/keys"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRoute, gotURL := "", ""
+			response := func(route string) roundTripFunc {
+				return func(req *http.Request) (*http.Response, error) {
+					gotRoute = route
+					gotURL = req.URL.String()
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(nil), Header: make(http.Header)}, nil
+				}
+			}
+			issuerURL, err := url.Parse(tt.issuer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.serverURL == "" {
+				tt.serverURL = "https://kubernetes.example"
+			}
+			serverURL, err := url.Parse(tt.serverURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			transport := &kubeconfigIssuerTransport{
+				base:       response("anonymous"),
+				kubernetes: response("authenticated"),
+				issuerURL:  issuerURL,
+				serverURL:  serverURL,
+			}
+			req, err := http.NewRequest(http.MethodGet, tt.url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := resp.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if gotRoute != tt.wantRoute {
+				t.Fatalf("route = %q, want %q", gotRoute, tt.wantRoute)
+			}
+			if gotURL != tt.wantURL {
+				t.Fatalf("request URL = %q, want %q", gotURL, tt.wantURL)
+			}
+		})
 	}
 }
 
