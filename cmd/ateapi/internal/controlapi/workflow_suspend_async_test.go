@@ -358,7 +358,7 @@ func TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity(t *testing.T) 
 		t.Run(tc.preferred.String(), func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{PreferredFidelity: tc.preferred})
+			template := seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{PreferredFidelity: tc.preferred})
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 			inst, reader := newTestInstruments(t)
 			w.instruments = inst
@@ -373,7 +373,7 @@ func TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity(t *testing.T) 
 					WorkerAssignment:       wireTestAssignment(),
 					LastAssignedGeneration: 1,
 					Snapshots: []*ateapi.Snapshot{
-						newInProgressSnapshot(t, 1, tc.preferred, "local-snap-1"),
+						newInProgressSnapshot(t, 1, template.GetSnapshotConfig().GetPreferredFidelity(), "local-snap-1"),
 					},
 				},
 			})

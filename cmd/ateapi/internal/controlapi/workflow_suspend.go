@@ -239,7 +239,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	inProgressSnap := snapshotAtLatestGeneration(actor.GetStatus())
-	fidelity := fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity())
+	fidelity := fidelityToAtelet(inProgressSnap.GetFidelity())
 	req := &ateletpb.CheckpointRequest{
 		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
