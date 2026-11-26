@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
@@ -32,6 +33,241 @@ func countLeases(t *testing.T, s *Persistence, key string) int {
 		t.Fatalf("counting leases for %q: %v", key, err)
 	}
 	return n
+}
+
+// waitForLeaseLock waits until PostgreSQL reports the blocked acquisition,
+// then keeps the lock held for age according to the database's clock.
+func waitForLeaseLock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, blocker uint32, age time.Duration) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var blockedAt time.Time
+	for {
+		var blocked bool
+		var now time.Time
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+			WHERE $1 = ANY(pg_blocking_pids(pid))), clock_timestamp()`, blocker).Scan(&blocked, &now); err != nil {
+			t.Fatalf("waiting for lease row lock: %v", err)
+		}
+		if blocked {
+			if blockedAt.IsZero() {
+				blockedAt = now
+			}
+			if now.Sub(blockedAt) >= age {
+				return
+			}
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatalf("waiting for lease row lock: %v", ctx.Err())
+		}
+	}
+}
+
+func TestAcquireLease_AfterLockWait(t *testing.T) {
+	for _, rollback := range []bool{false, true} {
+		name := "expired row"
+		if rollback {
+			name = "rolled back insert"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			s.leaseTTL = time.Second
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			const key = "blocked-lease"
+			if !rollback {
+				if _, err := s.pool.Exec(ctx, `INSERT INTO leases (key, token, expires_at)
+					VALUES ($1, 'old', clock_timestamp() - interval '1 minute')`, key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tx, err := s.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(context.Background()) //nolint:errcheck // no-op once finished
+			if rollback {
+				_, err = tx.Exec(ctx, `INSERT INTO leases (key, token, expires_at)
+					VALUES ($1, 'uncommitted', clock_timestamp() + interval '1 hour')`, key)
+			} else {
+				_, err = tx.Exec(ctx, `SELECT key FROM leases WHERE key = $1 FOR UPDATE`, key)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			type result struct {
+				lease *store.Lease
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() {
+				lease, err := s.AcquireLease(ctx, key)
+				done <- result{lease, err}
+			}()
+			var received bool
+			defer func() {
+				cancel()
+				if !received {
+					if r := <-done; r.lease != nil {
+						r.lease.Close()
+					}
+				}
+			}()
+			waitForLeaseLock(t, ctx, s.pool, tx.Conn().PgConn().PID(), s.leaseTTL)
+			if rollback {
+				err = tx.Rollback(ctx)
+			} else {
+				err = tx.Commit(ctx)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := <-done
+			received = true
+			if r.err != nil {
+				t.Fatalf("AcquireLease after row lock: %v", r.err)
+			}
+			defer r.lease.Close()
+			var valid bool
+			if err := s.pool.QueryRow(ctx, `SELECT expires_at > clock_timestamp() FROM leases WHERE key = $1`, key).Scan(&valid); err != nil {
+				t.Fatal(err)
+			}
+			if !valid {
+				t.Error("AcquireLease returned an expired lease")
+			}
+			other, err := s.AcquireLease(ctx, key)
+			if other != nil {
+				defer other.Close()
+			}
+			if !errors.Is(err, store.ErrLeaseConflict) {
+				t.Errorf("second AcquireLease = %v, want ErrLeaseConflict (first context: %v)", err, r.lease.Context().Err())
+			}
+		})
+	}
+}
+
+func TestAcquireLease_CancelledLockWait(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	const key = "cancelled-lease"
+	if _, err := s.pool.Exec(ctx, `INSERT INTO leases (key, token, expires_at)
+		VALUES ($1, 'old', clock_timestamp() - interval '1 minute')`, key); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op once finished
+	if _, err := tx.Exec(ctx, `SELECT key FROM leases WHERE key = $1 FOR UPDATE`, key); err != nil {
+		t.Fatal(err)
+	}
+	acquireCtx, cancelAcquire := context.WithCancel(ctx)
+	defer cancelAcquire()
+	done := make(chan error, 1)
+	go func() {
+		lease, err := s.AcquireLease(acquireCtx, key)
+		if lease != nil {
+			lease.Close()
+		}
+		done <- err
+	}()
+	waitForLeaseLock(t, ctx, s.pool, tx.Conn().PgConn().PID(), 0)
+	cancelAcquire()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled AcquireLease = %v, want context.Canceled", err)
+	}
+	// pgx can return before PostgreSQL receives the cancellation. Keep the
+	// row locked until the server has stopped waiting for it.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+			WHERE $1 = ANY(pg_blocking_pids(pid)))`, tx.Conn().PgConn().PID()).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if !blocked {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := s.AcquireLease(ctx, key)
+	if err != nil {
+		t.Fatalf("AcquireLease after cancellation: %v", err)
+	}
+	lease.Close()
+}
+
+func TestAcquireLease_SingleConnectionPool(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	cfg := s.pool.Config()
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	leaser := &Persistence{pool: pool, leaseTTL: defaultLeaseTTL}
+	for range 3 {
+		lease, err := leaser.AcquireLease(ctx, "single-connection")
+		if err != nil {
+			t.Fatal(err)
+		}
+		other, err := leaser.AcquireLease(ctx, "single-connection")
+		if other != nil {
+			other.Close()
+		}
+		lease.Close()
+		if !errors.Is(err, store.ErrLeaseConflict) {
+			t.Fatalf("competing AcquireLease = %v, want ErrLeaseConflict", err)
+		}
+	}
+	if pool.Stat().AcquiredConns() != 0 {
+		t.Errorf("connections remain acquired: %d", pool.Stat().AcquiredConns())
+	}
+}
+
+func TestAcquireLease_CommitFailure(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := s.pool.Exec(ctx, `
+		CREATE FUNCTION reject_lease_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'reject lease commit'; END $$;
+		CREATE CONSTRAINT TRIGGER reject_lease_commit AFTER INSERT ON leases
+		DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_lease_commit()`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := s.pool.Exec(context.Background(), `DROP TRIGGER reject_lease_commit ON leases; DROP FUNCTION reject_lease_commit()`); err != nil {
+			t.Errorf("removing commit failure trigger: %v", err)
+		}
+	})
+	lease, err := s.AcquireLease(ctx, "commit-failure")
+	if lease != nil {
+		lease.Close()
+		t.Error("AcquireLease returned a lease after its transaction failed")
+	}
+	if pgErrCode(err) != "P0001" {
+		t.Fatalf("AcquireLease = %v, want the deferred trigger's P0001 error", err)
+	}
+	if n := countLeases(t, s, "commit-failure"); n != 0 {
+		t.Errorf("failed transaction left %d lease rows", n)
+	}
 }
 
 // TestAcquireLease_LeavesOtherKeysExpiredRows pins the acquisition path down
