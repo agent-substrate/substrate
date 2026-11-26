@@ -225,7 +225,11 @@ var deleteActorCmd = &cobra.Command{
 var resumeActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Resume an actor",
-	Args:  exactlyOneArg("<actor-name>", "atespace"),
+	Long: `Resume a suspended actor.
+
+Blocks until the actor is assigned to a worker and reaches ACTOR_STATE_RUNNING.
+Resume is always synchronous and takes no --mode flag.`,
+	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)

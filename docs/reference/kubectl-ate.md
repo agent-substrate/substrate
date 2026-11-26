@@ -168,7 +168,8 @@ one (or create a new template and repoint suspended actors to it with
 ```bash
 # Create a template from a manifest (protojson-shaped ateapi.ActorTemplate,
 # a single YAML/JSON document; use -f - for stdin). The metadata's atespace
-# must already exist.
+# must already exist. ("template" is an alias for "actor-template";
+# "get" also accepts "templates".)
 kubectl ate create actor-template -f template.yaml
 
 # List templates, or get one (also: -o yaml prints the re-applyable manifest).
@@ -198,15 +199,15 @@ Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided name, which must be a valid DNS-1123 label)*
 
 ```bash
-# Create a new actor from an ActorTemplate.
+# Create a new actor from an ActorTemplate (-t is shorthand for --template).
 kubectl ate create actor my-actor --template=<template-name> -a <atespace>
 
-# Update an actor's template (requires the actor to be SUSPENDED) or worker selector.
+# Update an actor's template (-t/--template; requires the actor to be SUSPENDED) or worker selector.
 kubectl ate update actor my-actor --template=<new-template-name> -a <atespace>
 kubectl ate update actor my-actor --worker-selector=tier=paid,env=prod -a <atespace>
 kubectl ate update actor my-actor --worker-selector="" -a <atespace>
 
-# Resume an actor (assigns it to a free worker and restores its state)
+# Resume an actor (blocks until assigned to a worker and ACTOR_STATE_RUNNING)
 kubectl ate resume actor my-actor -a <atespace>
 
 # Suspend an actor (snapshots its state and frees the worker). By default the

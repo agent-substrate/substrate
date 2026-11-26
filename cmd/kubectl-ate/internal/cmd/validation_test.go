@@ -84,6 +84,11 @@ func TestHelpOutputGoesToStdout(t *testing.T) {
 			args:          []string{"help", "create", "actor"},
 			wantStdoutSub: "Usage:\n  kubectl-ate create actor <actor-name> [flags]",
 		},
+		{
+			name:          "resume actor --help",
+			args:          []string{"resume", "actor", "--help"},
+			wantStdoutSub: "ACTOR_STATE_RUNNING",
+		},
 	}
 
 	for _, tc := range tests {

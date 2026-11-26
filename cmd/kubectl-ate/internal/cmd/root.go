@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -44,7 +45,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:           "kubectl-ate",
 	Short:         "A kubectl plugin for managing Agent Substrate environments",
-	Long:          `kubectl ate is a CLI tool to manage Actor and Worker lifecycles in an Agent Substrate.`,
+	Long:          `Manage Actor and Worker lifecycles in Agent Substrate.`,
 	Version:       version.String(),
 	SilenceUsage:  true, // we will handle it ourselves
 	SilenceErrors: true, // we will handle it ourselves
@@ -112,6 +113,41 @@ func Execute() {
 	}
 }
 
+// compactFlagSummary formats visible flags as a wrapped comma-separated list
+// so root help stays within a 24-row, 80-column terminal.
+func compactFlagSummary(fs *pflag.FlagSet) string {
+	var names []string
+	fs.VisitAll(func(f *pflag.Flag) {
+		if !f.Hidden && f.Name != "help" {
+			names = append(names, formatFlagName(f))
+		}
+	})
+	if len(names) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Flags: ")
+	lineLen := len("Flags: ")
+	for i, name := range names {
+		if i > 0 {
+			trailing := 0
+			if i < len(names)-1 {
+				trailing = 1
+			}
+			if lineLen+len(", ")+len(name)+trailing > 80 {
+				b.WriteString(",\n  ")
+				lineLen = 2
+			} else {
+				b.WriteString(", ")
+				lineLen += 2
+			}
+		}
+		b.WriteString(name)
+		lineLen += len(name)
+	}
+	return b.String()
+}
+
 func init() {
 	requireSubcommand(rootCmd)
 	rootCmd.SetFlagErrorFunc(handleFlagError)
@@ -122,12 +158,26 @@ func init() {
 		}
 		defaultHelpFunc(c, a)
 	})
-	rootCmd.SetUsageTemplate(strings.Replace(
+	cobra.AddTemplateFunc("compactFlagSummary", compactFlagSummary)
+	usageTmpl := strings.Replace(
 		rootCmd.UsageTemplate(),
 		"{{if .Runnable}}",
 		"{{if and .Runnable (not .HasAvailableSubCommands)}}",
 		1,
-	))
+	)
+	usageTmpl = strings.Replace(
+		usageTmpl,
+		"Flags:\n{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}",
+		"{{if .HasParent}}Flags:\n{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{else}}{{compactFlagSummary .LocalFlags}}{{end}}",
+		1,
+	)
+	usageTmpl = strings.Replace(
+		usageTmpl,
+		"\n\nUse \"{{.CommandPath}} [command] --help\" for more information about a command.",
+		"{{if .HasParent}}\n\nUse \"{{.CommandPath}} [command] --help\" for more information about a command.{{else}}\nUse \"{{.CommandPath}} [command] --help\" for command and flag details.{{end}}",
+		1,
+	)
+	rootCmd.SetUsageTemplate(usageTmpl)
 
 	// Persistent flags are available to this command and all subcommands
 	rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "path to the kubeconfig file")

@@ -130,3 +130,36 @@ func TestPreviewFlag(t *testing.T) {
 		})
 	}
 }
+
+func TestRootHelpFitsStandardTerminal(t *testing.T) {
+	stdout, stderr, err := runRootCLI(t, "-h")
+	if err != nil {
+		t.Fatalf("runRootCLI(-h) error = %v (stderr: %s)", err, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+	if len(lines) > 24 {
+		t.Errorf("root -h has %d lines, want <= 24:\n%s", len(lines), stdout)
+	}
+	for i, line := range lines {
+		if len(line) > 80 {
+			t.Errorf("root -h line %d has length %d (> 80): %q", i+1, len(line), line)
+		}
+	}
+	for _, want := range []string{"create", "Flags:", "--kubeconfig", "--token-file", "--version", "for command and flag details."} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("root -h missing %q:\n%s", want, stdout)
+		}
+	}
+
+	// Subcommand help keeps full Global Flags descriptions.
+	subOut, subErr, err := runRootCLI(t, "get", "--help")
+	if err != nil {
+		t.Fatalf("runRootCLI(get --help) error = %v (stderr: %s)", err, subErr)
+	}
+	if subErr != "" || !strings.Contains(subOut, "Global Flags:") || !strings.Contains(subOut, "path to the kubeconfig file") {
+		t.Errorf("get --help missing Global Flags descriptions (stderr=%q):\n%s", subErr, subOut)
+	}
+}
