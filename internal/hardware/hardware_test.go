@@ -24,8 +24,8 @@ import (
 
 func TestProbeHost(t *testing.T) {
 	compat := ProbeHost()
-	if got := compat.GetSchemaVersion(); got != SchemaVersionV1 {
-		t.Errorf("ProbeHost() schema_version = %q, want %q", got, SchemaVersionV1)
+	if got := compat.GetSchemaVersion(); got != SchemaVersionV2 {
+		t.Errorf("ProbeHost() schema_version = %q, want %q", got, SchemaVersionV2)
 	}
 	attrs := compat.GetAttributes()
 	if len(attrs) != 1 || attrs[0].GetKey() != AttrArchitecture || attrs[0].GetValue() != runtime.GOARCH {
@@ -81,7 +81,7 @@ func TestMatches(t *testing.T) {
 		{"different attribute value fails", arm64GVisor, amd64GVisor, false},
 		{"different sandbox class fails", amd64MicroVM, amd64GVisor, false},
 		{"different schema version fails", amd64GVisorV2, amd64GVisor, false},
-		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
+		{"attribute only the worker has fails", amd64GVisorExtraAttr, amd64GVisor, false},
 		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
 		{"nil version fails", &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
@@ -126,7 +126,7 @@ func TestMatchesCompat(t *testing.T) {
 		want         bool
 	}{
 		{"equal", compat("v1", amd64), compat("v1", amd64), true},
-		{"key only the worker has is ignored", compat("v1", amd64, cpuBits("7")), compat("v1", amd64), true},
+		{"key only the worker has fails", compat("v1", amd64, cpuBits("7")), compat("v1", amd64), false},
 		{"key only the snapshot has fails", compat("v1", amd64), compat("v1", amd64, cpuBits("7")), false},
 		{"key only the snapshot has fails even at equal count", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, hash), false},
 		{"value differs", compat("v1", arm64), compat("v1", amd64), false},
@@ -165,7 +165,7 @@ func TestRequirement(t *testing.T) {
 		return &ateapi.ActorSandboxRuntime{
 			SandboxClass: "gvisor",
 			Version: &ateapi.VersionedSandboxCompat{
-				SchemaVersion: SchemaVersionV1,
+				SchemaVersion: SchemaVersionV2,
 				Attributes: []*ateapi.AttributeEntry{
 					{Key: AttrArchitecture, Value: "amd64"},
 					{Key: AttrCPUFeatures, Value: cpu},
@@ -221,7 +221,7 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 		if hash != "" {
 			attrs = append(attrs, &ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: hash})
 		}
-		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: attrs}
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV2, Attributes: attrs}
 	}
 	rt := func(class string, c *ateapi.VersionedSandboxCompat) *ateapi.ActorSandboxRuntime {
 		return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: c}
@@ -323,7 +323,7 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 
 func TestWorkerRuntimeFor(t *testing.T) {
 	compat := func(hash string) *ateapi.VersionedSandboxCompat {
-		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: []*ateapi.AttributeEntry{
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV2, Attributes: []*ateapi.AttributeEntry{
 			{Key: AttrArchitecture, Value: "amd64"},
 			{Key: AttrSandboxBundleHash, Value: hash},
 		}}
