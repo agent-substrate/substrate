@@ -202,6 +202,9 @@ func (t *Tracker) prunePreRebootLocalLocked(a *actorSnapshots) {
 	// does. Uploading is never newer than LatestLocal, and that detach made
 	// LatestLocal durable first, so Uploading's copy can go too. Otherwise
 	// delete every local snapshot except a LatestLocal from this boot.
+	// Runs once during Tracker.Start before the gRPC server listens; blocking
+	// on trash headroom here bounds uncollected disk after a reboot while
+	// staying faster than synchronous removal.
 	var pruneErr error
 	if localPreReboot && !a.Started {
 		pruneErr = t.actorDirs.RemoveActorFilesExceptState(t.ctx, a.actorUID)

@@ -1082,7 +1082,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	// unlinking before writing a new snapshot, bounding per-actor backlog to
 	// one checkpoint cycle when the disk falls behind.
 	if err := s.trash.WaitForActor(ctx, actorUID); err != nil {
-		return nil, err
+		return nil, status.FromContextError(err).Err()
 	}
 
 	// Detach from caller cancellation once the checkpoint is underway so a

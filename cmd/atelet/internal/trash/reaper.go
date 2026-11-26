@@ -90,15 +90,16 @@ type Reaper struct {
 	seq atomic.Uint64
 	wg  sync.WaitGroup
 
-	mu           sync.Mutex
-	started      bool
-	closing      bool
-	closeCh      chan struct{}
-	queue        []*item
-	byDev        map[uint64]*devAccounting
-	actorPending map[string]int
-	workCh       chan struct{}
-	notifyCh     chan struct{}
+	mu              sync.Mutex
+	started         bool
+	closing         bool
+	closeCh         chan struct{}
+	queue           []*item
+	byDev           map[uint64]*devAccounting
+	actorPending    map[string]int
+	headroomWaiters int
+	workCh          chan struct{}
+	notifyCh        chan struct{}
 }
 
 // New creates a Reaper bound to ctx. Call Start to launch its workers and
@@ -175,15 +176,24 @@ func (r *Reaper) Wait(ctx context.Context) error {
 }
 
 // Retire moves path into trashDir and enqueues it for background removal.
+// An empty directory is removed in place without entering trashDir.
 // A nil Reaper removes path synchronously.
 func (r *Reaper) Retire(ctx context.Context, trashDir, path string, opts RetireOptions) error {
 	if r == nil {
 		return removeAll(path)
 	}
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return err
+	}
+	if info.IsDir() {
+		// Remove empty directories in one syscall so ResetActorDirs cycles do
+		// not fill the pending-item ceiling with empty directories.
+		if err := os.Remove(path); err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 	}
 
 	if err := os.MkdirAll(trashDir, 0o700); err != nil {
@@ -249,9 +259,13 @@ func (r *Reaper) WaitForActor(ctx context.Context, actorUID string) error {
 	}
 	for {
 		r.mu.Lock()
-		if r.actorPending[actorUID] == 0 || r.closing {
+		if r.actorPending[actorUID] == 0 {
 			r.mu.Unlock()
 			return nil
+		}
+		if r.closing {
+			r.mu.Unlock()
+			return context.Canceled
 		}
 		if err := r.ctx.Err(); err != nil {
 			r.mu.Unlock()
@@ -279,20 +293,29 @@ func (r *Reaper) waitForHeadroom(ctx context.Context, dev uint64, incomingBytes 
 		}
 		acc := r.byDev[dev]
 		overItems := acc != nil && acc.pendingItems >= r.maxPendingItems
-		overBytes := acc != nil && acc.pendingItems > 0 && incomingBytes > 0 && acc.pendingBytes+incomingBytes > r.maxPendingBytes
+		overBytes := acc != nil && acc.pendingItems > 0 && (acc.pendingBytes >= r.maxPendingBytes || (incomingBytes > 0 && acc.pendingBytes+incomingBytes > r.maxPendingBytes))
 		if !overItems && !overBytes {
 			r.mu.Unlock()
 			return nil
 		}
+		r.headroomWaiters++
 		ch := r.notifyCh
 		r.mu.Unlock()
 
+		var waitErr error
 		select {
 		case <-ch:
 		case <-ctx.Done():
-			return ctx.Err()
+			waitErr = ctx.Err()
 		case <-r.ctx.Done():
-			return r.ctx.Err()
+			waitErr = r.ctx.Err()
+		}
+
+		r.mu.Lock()
+		r.headroomWaiters--
+		r.mu.Unlock()
+		if waitErr != nil {
+			return waitErr
 		}
 	}
 }

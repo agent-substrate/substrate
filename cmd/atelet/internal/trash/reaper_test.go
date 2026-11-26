@@ -122,6 +122,51 @@ func TestWaitForActorReturnsOnReaperCtxCancel(t *testing.T) {
 	}
 }
 
+func TestWaitForActorReturnsCanceledOnWait(t *testing.T) {
+	root := t.TempDir()
+	trashDir := filepath.Join(root, ".trash")
+	src := filepath.Join(root, "actor-wait", "durable-dir")
+	createFile(t, filepath.Join(src, "a.txt"), "hello")
+
+	r := New(t.Context())
+	if err := r.Retire(t.Context(), trashDir, src, RetireOptions{
+		ActorUID: "actor-wait",
+		Kind:     KindActorDir,
+	}); err != nil {
+		t.Fatalf("Retire: %v", err)
+	}
+
+	if err := r.Wait(t.Context()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if err := r.WaitForActor(t.Context(), "actor-wait"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitForActor after Wait = %v, want context.Canceled", err)
+	}
+}
+
+func TestRetireEmptyDirRemovesInPlace(t *testing.T) {
+	root := t.TempDir()
+	trashDir := filepath.Join(root, ".trash")
+	emptyDir := filepath.Join(root, "actor-empty", "durable-dir")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := New(t.Context())
+	if err := r.Retire(t.Context(), trashDir, emptyDir, RetireOptions{
+		ActorUID: "actor-empty",
+		Kind:     KindActorDir,
+	}); err != nil {
+		t.Fatalf("Retire(emptyDir): %v", err)
+	}
+	if _, err := os.Stat(emptyDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("emptyDir still exists: %v", err)
+	}
+	if _, err := os.Stat(trashDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("trashDir should not be created for empty dir: %v", err)
+	}
+}
+
 func TestRemoveAllReadOnlyFallback(t *testing.T) {
 	root := t.TempDir()
 	trashDir := filepath.Join(root, ".trash")
@@ -259,17 +304,32 @@ func TestBackpressureBlocksUnblocksAndNonBlockingBypasses(t *testing.T) {
 	}
 	<-started
 
-	// Live blocking Retire waits for headroom, then completes once release closes.
+	// Live blocking Retire with EstimatedBytes == 0 must also wait when
+	// pendingBytes already meets or exceeds maxPendingBytes.
 	retire2Done := make(chan error, 1)
 	go func() {
 		retire2Done <- r.Retire(t.Context(), trashDir, src2, RetireOptions{
-			ActorUID:       "a2",
-			Kind:           KindLocalSnapshot,
-			EstimatedBytes: 50,
+			ActorUID: "a2",
+			Kind:     KindActorDir,
 		})
 	}()
 
-	// NonBlocking bypasses backpressure immediately.
+	// Wait deterministically until src2 is blocked in waitForHeadroom.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.mu.Lock()
+		waiting := r.headroomWaiters
+		r.mu.Unlock()
+		if waiting == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for src2 to block in waitForHeadroom")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// NonBlocking bypasses backpressure immediately while src2 stays blocked.
 	if err := r.Retire(t.Context(), trashDir, src3, RetireOptions{
 		ActorUID:       "a3",
 		Kind:           KindLocalSnapshot,
@@ -277,6 +337,11 @@ func TestBackpressureBlocksUnblocksAndNonBlockingBypasses(t *testing.T) {
 		NonBlocking:    true,
 	}); err != nil {
 		t.Fatalf("Retire(src3, NonBlocking): %v", err)
+	}
+	select {
+	case err := <-retire2Done:
+		t.Fatalf("Retire(src2) returned early before release: %v", err)
+	default:
 	}
 
 	close(release)
@@ -337,9 +402,11 @@ func TestStartupSweepSkipsLiveInstanceEntries(t *testing.T) {
 
 	var liveRemoves atomic.Int32
 	removed := make(chan string, 4)
+	releaseWorker := make(chan struct{})
 	r := New(t.Context())
-	r.workers = 2
+	r.workers = 1
 	r.removeFunc = func(p string) error {
+		<-releaseWorker
 		if filepath.Dir(p) == trash1 && filepath.Base(p) != "old-actor-1" {
 			liveRemoves.Add(1)
 		}
@@ -356,6 +423,32 @@ func TestStartupSweepSkipsLiveInstanceEntries(t *testing.T) {
 	t.Cleanup(func() {
 		_ = r.Wait(context.Background())
 	})
+
+	// Hold the worker until sweepStartup has scanned both trash dirs while
+	// liveSrc's retired dir is still on disk in trash1, proving sweepStartup
+	// skips it by instancePrefix rather than racing past a deleted entry.
+	dev, err := pathDev(trash1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.mu.Lock()
+		acc := r.byDev[dev]
+		pending := 0
+		if acc != nil {
+			pending = acc.pendingItems
+		}
+		r.mu.Unlock()
+		if pending == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for sweepStartup; pendingItems=%d, want 3", pending)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseWorker)
 
 	seen := map[string]bool{}
 	for range 3 {
