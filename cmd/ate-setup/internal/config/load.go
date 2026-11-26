@@ -76,7 +76,16 @@ func LoadFlags(fs *pflag.FlagSet, o LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildConfig(root, env, res)
+	cfg, err := buildConfig(root, env, res)
+	if err != nil {
+		return nil, err
+	}
+	if file != nil {
+		cfg.HasInstallRecord = file.hasMetadata
+		cfg.FailedInstallRecord = file.failedInstall
+		cfg.RecordedSubstrateVersion = file.SubstrateVersion
+	}
+	return cfg, nil
 }
 
 // configPathFrom picks the configuration document, flag over environment.

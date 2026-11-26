@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strings"
 )
 
 // ModulePath is this repository's module path. A ko:// reference is it joined
@@ -136,6 +137,12 @@ type Source struct {
 
 // IsPrebuilt reports whether images should be pulled rather than built.
 func (s Source) IsPrebuilt() bool { return s.Repo != "" }
+
+// TagWithoutDigest returns Tag without its optional @sha256 digest.
+func (s Source) TagWithoutDigest() string {
+	tag, _, _ := strings.Cut(s.Tag, "@")
+	return tag
+}
 
 // Describe renders the source for the install log.
 func (s Source) Describe() string {

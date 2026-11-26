@@ -29,6 +29,9 @@ var notFromASetting = map[string]bool{
 	"CloudSQL":                 true, // assembled from the ateapi.postgres.cloudsql.* settings
 	"PostgresOwnerRoleSet":     true,
 	"PostgresReadWriteRoleSet": true,
+	"HasInstallRecord":         true, // derived from the --config document shape
+	"FailedInstallRecord":      true, // derived from cluster.outcome in --config
+	"RecordedSubstrateVersion": true, // read from --config record metadata
 
 	// kindCluster.enabled feeds Kind, but the fixture sets it false to reach
 	// the cloud path, so its zero value here says nothing.

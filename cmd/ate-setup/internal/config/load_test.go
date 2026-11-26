@@ -99,6 +99,43 @@ func TestLoadFlagsFileOutranksEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadFlagsCarriesInstallRecordMetadata(t *testing.T) {
+	loadEnv(t)
+	for _, test := range []struct {
+		name, metadata, version string
+		failed                  bool
+	}{
+		{name: "success", metadata: "outcome: succeeded\n  substrateVersion: v1.2.3\n", version: "v1.2.3"},
+		{name: "failure before environment", metadata: "outcome: failed\n", failed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "install.yaml")
+			body := "apiVersion: " + FileAPIVersion + "\nkind: " + FileKind + "\n" +
+				"cluster:\n  " + test.metadata
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fs, err := optionsFlagSet(Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFlags(fs, LoadOptions{ConfigPath: path})
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if !cfg.HasInstallRecord {
+				t.Error("HasInstallRecord = false, want true")
+			}
+			if cfg.FailedInstallRecord != test.failed {
+				t.Errorf("FailedInstallRecord = %v, want %v", cfg.FailedInstallRecord, test.failed)
+			}
+			if got := cfg.RecordedSubstrateVersion; got != test.version {
+				t.Errorf("RecordedSubstrateVersion = %q, want %q", got, test.version)
+			}
+		})
+	}
+}
+
 // A validation failure names the channel the offending value came from.
 func TestLoadFlagsErrorsNameTheSupplyingChannel(t *testing.T) {
 	loadEnv(t)
