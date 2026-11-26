@@ -213,10 +213,32 @@ class DeployWorkloadsFakeAteletTest(unittest.TestCase):
 
 class SubstrateArgsTest(unittest.TestCase):
     def test_cluster_overrides_belong_in_the_env_file(self):
-        for arg in ("--context=other", "--kubeconfig", "--kind", "--kind-cluster-name", "--config"):
+        for arg in ("--context=other", "--kubeconfig", "--kind", "--kind-cluster-name"):
             with self.subTest(arg=arg), self.assertRaisesRegex(ValueError, "target env file"):
                 orchestrator.validate_and_normalize_tests([
                     {"name": "bench", "targetCluster": "dev", "ateArgs": [arg]},
+                ])
+        for arg in ("--config", "--config=install.yaml"):
+            with self.subTest(arg=arg), self.assertRaisesRegex(ValueError, "not supported"):
+                orchestrator.validate_and_normalize_tests([
+                    {"name": "bench", "targetCluster": "dev", "ateArgs": [arg]},
+                ])
+
+    def test_ate_args_type_validation(self):
+        self.assertEqual(
+            orchestrator.substrate_args({"ateArgs": None}),
+            ["--sandbox-classes=gvisor"],
+        )
+        orchestrator.validate_and_normalize_tests([
+            {
+                "name": "bench", "targetCluster": "dev", "type": "locust",
+                "file": "f.py", "duration": "1m", "users": 1, "ateArgs": None,
+            },
+        ])
+        for bad in ("--cluster-size=size10", [1], ["--cluster-size=size10", True]):
+            with self.subTest(ateArgs=bad), self.assertRaisesRegex(ValueError, "list of strings"):
+                orchestrator.validate_and_normalize_tests([
+                    {"name": "bench", "targetCluster": "dev", "ateArgs": bad},
                 ])
 
     def test_ate_args_only(self):
@@ -689,6 +711,7 @@ class NighthawkEgressTest(unittest.TestCase):
                         build_tag=mock.DEFAULT,
                         check_env_files=mock.DEFAULT,
                         apply_env_file=mock.DEFAULT,
+                        parse_target_cluster_env=mock.DEFAULT,
                         clear_env_file=mock.DEFAULT,
                     ),
                     mock.patch.dict(os.environ),
@@ -871,6 +894,7 @@ class TargetClusterCredentialsTest(unittest.TestCase):
             ({"KUBECTL_CONTEXT": "explicit"}, "explicit", ["--context", "explicit"]),
             ({"ATE_INSTALL_KIND": "true", "KIND_CLUSTER_NAME": "local"},
              "kind-local", ["--context", "kind-local"]),
+            ({"ATE_INSTALL_KIND": "1"}, "kind-kind", ["--context", "kind-kind"]),
         ]
         for env, context, flags in cases:
             with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
@@ -917,8 +941,17 @@ class TargetClusterCredentialsTest(unittest.TestCase):
         cases = [
             ({}, "Set KUBECONFIG or KUBECTL_CONTEXT"),
             ({"PROJECT_ID": "p"}, "CLUSTER_NAME, CLUSTER_LOCATION missing"),
-            ({**CLUSTER_ENV, "KUBECTL_CONTEXT": "legacy"}, "remove KUBECTL_CONTEXT"),
-            ({**CLUSTER_ENV, "KUBECONFIG": "/config"}, "remove KUBECTL_CONTEXT and KUBECONFIG"),
+            ({"ATE_CONFIG": "/install.yaml", "KUBECTL_CONTEXT": "bench"}, "ATE_CONFIG is not supported"),
+            ({"ATE_INSTALL_KIND": "TRUE"}, "ATE_INSTALL_KIND must be true or false"),
+            ({"ATE_INSTALL_KIND": "t"}, "ATE_INSTALL_KIND must be true or false"),
+            ({"ATE_INSTALL_KIND": "false"}, "Set KUBECONFIG or KUBECTL_CONTEXT"),
+            ({**CLUSTER_ENV, "KUBECTL_CONTEXT": "legacy"}, "remove KUBECTL_CONTEXT from the env file"),
+            ({**CLUSTER_ENV, "KUBECONFIG": "/config"}, "remove KUBECONFIG from the env file"),
+            ({**CLUSTER_ENV, "ATE_INSTALL_KIND": "true"}, "remove ATE_INSTALL_KIND from the env file"),
+            (
+                {**CLUSTER_ENV, "KUBECTL_CONTEXT": "legacy", "KUBECONFIG": "/config"},
+                "remove KUBECTL_CONTEXT, KUBECONFIG from the env file",
+            ),
         ]
         for env, error in cases:
             with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True):
@@ -1043,6 +1076,47 @@ class TargetClusterCredentialsTest(unittest.TestCase):
         self.assertEqual([result[1] for result in results], ["complete", "config-error", "complete"])
         self.assertEqual(select.call_count, 3)
         self.assertEqual(cleanup.call_count, 4)
+
+    def test_reused_env_file_validates_on_each_test(self):
+        env_file = self.root / orchestrator.ENV_FILE_NAME
+        valid = "KO_DOCKER_REPO=r/x\nKUBECTL_CONTEXT=bench\n"
+        args = argparse.Namespace(
+            substrate_dir=str(self.root), env_file=str(env_file), dest="dest", manifests_dir="m",
+        )
+        tests = [{"name": c, "targetCluster": c, "type": "locust"} for c in ("first", "second")]
+        target = {"KUBECONFIG": str(self.snapshot), "KUBECTL_CONTEXT": "bench"}
+        cases = [
+            ("ATE_CONFIG=second.yaml\n", "ATE_CONFIG is not supported"),
+            ("ATE_INSTALL_KIND=TRUE\n", "ATE_INSTALL_KIND must be true or false"),
+        ]
+        for extra, error in cases:
+            with self.subTest(extra=extra.strip()):
+                env_file.write_text(valid)
+
+                def mutate_after_first(*_args, extra=extra):
+                    env_file.write_text(valid + extra)
+                    return "complete"
+
+                ttype = mock.Mock(USES_SHARED_WORKLOADS=True)
+                with (
+                    mock.patch.dict(orchestrator.TYPES, {"locust": ttype}, clear=True),
+                    mock.patch.dict(os.environ),
+                    mock.patch("orchestrator.prepare_target_cluster", return_value=target) as prepare,
+                    mock.patch("orchestrator.deploy_workloads") as deploy,
+                    mock.patch("orchestrator.teardown_test_workloads") as cleanup,
+                    mock.patch("orchestrator.deploy_substrate") as install,
+                    mock.patch("orchestrator.teardown_substrate") as uninstall,
+                    mock.patch("orchestrator.run_test", side_effect=mutate_after_first) as run_test,
+                ):
+                    results = orchestrator.run_tests(tests, args, "tag", 0, self.snapshot)
+                self.assertEqual([result[1] for result in results], ["complete", "config-error"])
+                self.assertIn(error, results[1][3])
+                prepare.assert_called_once_with(self.snapshot, configure_docker=False)
+                self.assertEqual(cleanup.call_count, 2)
+                self.assertEqual(uninstall.call_count, 2)
+                self.assertEqual(install.call_count, 1)
+                self.assertEqual(deploy.call_count, 1)
+                self.assertEqual(run_test.call_count, 1)
 
 
 class RunMetadataTest(unittest.TestCase):

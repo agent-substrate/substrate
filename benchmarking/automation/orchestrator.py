@@ -315,25 +315,51 @@ def prepare_kubeconfig_users(config: dict[str, Any]) -> None:
             raise ValueError("Could not resolve authentication paths in the target kubeconfig.")
 
 
-def prepare_target_cluster(kubeconfig: Path, *, configure_docker: bool) -> dict[str, str]:
-    """Select a target and pin it in the run's private kubeconfig."""
+def parse_target_cluster_env() -> tuple[str | None, bool]:
+    """Validate target cluster env vars and return (context, use_existing)."""
+    if os.environ.get("ATE_CONFIG"):
+        raise ValueError(
+            "ATE_CONFIG is not supported by the benchmark orchestrator. "
+            "Set target cluster variables in the env file instead."
+        )
+    kind_raw = os.environ.get("ATE_INSTALL_KIND", "")
+    if kind_raw in ("1", "true"):
+        kind = True
+    elif kind_raw in ("", "0", "false"):
+        kind = False
+    else:
+        raise ValueError(f"ATE_INSTALL_KIND must be true or false, got {kind_raw!r}")
     context = os.environ.get("KUBECTL_CONTEXT")
-    if not context and os.environ.get("ATE_INSTALL_KIND", "").lower() in ("1", "t", "true"):
+    if not context and kind:
         context = "kind-" + (os.environ.get("KIND_CLUSTER_NAME") or "kind")
-    use_existing = bool(context or os.environ.get("KUBECONFIG"))
+    existing_vars = [
+        var for var, present in (
+            ("KUBECTL_CONTEXT", bool(os.environ.get("KUBECTL_CONTEXT"))),
+            ("KUBECONFIG", bool(os.environ.get("KUBECONFIG"))),
+            ("ATE_INSTALL_KIND", kind),
+        )
+        if present
+    ]
+    use_existing = bool(existing_vars)
     missing = [var for var in GKE_COORDINATES if not os.environ.get(var)]
     if use_existing and not missing:
         raise ValueError(
             "GKE coordinates and existing credentials both select a target. "
-            "For GKE discovery, remove KUBECTL_CONTEXT and KUBECONFIG from the env file. "
+            f"For GKE discovery, remove {', '.join(existing_vars)} from the env file. "
             "For existing credentials, remove the GKE coordinates."
         )
+    if not use_existing and missing:
+        raise ValueError(
+            f"Set KUBECONFIG or KUBECTL_CONTEXT in the env file, "
+            f"or complete the GKE coordinates ({', '.join(missing)} missing)."
+        )
+    return context, use_existing
+
+
+def prepare_target_cluster(kubeconfig: Path, *, configure_docker: bool) -> dict[str, str]:
+    """Select a target and pin it in the run's private kubeconfig."""
+    context, use_existing = parse_target_cluster_env()
     if not use_existing:
-        if missing:
-            raise ValueError(
-                f"Set KUBECONFIG or KUBECTL_CONTEXT in the env file, "
-                f"or complete the GKE coordinates ({', '.join(missing)} missing)."
-            )
         if not shutil.which("gcloud"):
             raise RuntimeError("Install gcloud for GKE discovery or supply existing credentials.")
         # A previous target may have populated the file. Start discovery with an
@@ -569,9 +595,16 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         name = t.get("name")
         if not t.get("targetCluster"):
             raise ValueError(f"test {name!r} missing required 'targetCluster' field")
-        for arg in t.get("ateArgs", []):
-            flag = str(arg).partition("=")[0]
-            if flag in ("--kubeconfig", "--context", "--kind", "--kind-cluster-name", "--config"):
+        ate_args = t.get("ateArgs")
+        if ate_args is not None and (
+            not isinstance(ate_args, list) or not all(isinstance(arg, str) for arg in ate_args)
+        ):
+            raise ValueError(f"test {name!r}: 'ateArgs' must be a list of strings")
+        for arg in ate_args or ():
+            flag = arg.partition("=")[0]
+            if flag == "--config":
+                raise ValueError(f"test {name!r}: --config in ateArgs is not supported")
+            if flag in ("--kubeconfig", "--context", "--kind", "--kind-cluster-name"):
                 raise ValueError(f"test {name!r}: {flag} in ateArgs belongs in the target env file")
         sandbox_class = t.get("sandboxClass", "gvisor")
         if sandbox_class not in SANDBOX_CLASSES:
@@ -607,7 +640,7 @@ def substrate_args(test: dict[str, Any]) -> list[str]:
     write access to <BUCKET_NAME>-assets. The teardown needs no matching flag:
     delete ate-system removes the fake data plane and any SandboxConfigs
     whether or not they were installed."""
-    args = [*test.get("ateArgs", []), *isolate_install_args(test)]
+    args = [*(test.get("ateArgs") or ()), *isolate_install_args(test)]
     if not any(a == "--sandbox-classes" or a.startswith("--sandbox-classes=") for a in args):
         args.append(f"--sandbox-classes={test.get('sandboxClass', 'gvisor')}")
     return args
@@ -861,6 +894,7 @@ def run_tests(
         try:
             try:
                 apply_env_file(env_file, substrate_dir)
+                parse_target_cluster_env()
                 if env_file != last_env_file:
                     # Invalidate the previous selection before prepare can
                     # replace the private kubeconfig, even if prepare fails.
