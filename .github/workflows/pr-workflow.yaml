@@ -98,6 +98,15 @@ jobs:
           --jsonfile "${ARTIFACTS}/junittool.json" \
           --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
+    # tools/mdlinks has its own module too
+    - name: mdlinks tests
+      working-directory: tools/mdlinks
+      run: |
+        go -C ../junittool run . register "${ARTIFACTS}/mdlinks.xml"
+        ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/mdlinks.xml" \
+          --jsonfile "${ARTIFACTS}/mdlinks.json" \
+          --format pkgname-and-test-fails --format-hide-empty-pkg \
+          -- -race ./...
     - name: Restore cargo cache
       id: cargo-cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

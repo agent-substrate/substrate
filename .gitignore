@@ -65,6 +65,7 @@ Thumbs.db
 /validate-image-cache
 /tools/apitool/apitool
 /tools/junittool/junittool
+/tools/mdlinks/mdlinks
 
 # Substrate agent workspace scratchpads
 .agents/scratch/
