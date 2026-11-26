@@ -84,6 +84,10 @@ spec:
     spec:
       # TODO: Add topologySpreadConstraints to spread replicas across nodes and zones.
       serviceAccountName: ate-api-server
+      # Only ate-api-server calls the Kubernetes API, so only it mounts the
+      # token (kube-api-access below). The objectstore-plugin sidecar serves
+      # the credential exchange to every node and must not hold it.
+      automountServiceAccountToken: false
       # Budget for the full shutdown sequence: --drain-delay (sized to cover
       # the readinessProbe below reaching NotReady, plus propagation) +
       # --drain-timeout.
@@ -280,6 +284,9 @@ spec:
         - name: "postgres-server-ca"
           mountPath: "/run/postgres-server-ca"
           readOnly: true
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
         ports:
         - containerPort: 443
         - name: prometheus
@@ -389,6 +396,23 @@ spec:
         secret:
           secretName: "postgres-server-ca"
           optional: true
+      # What automount would add, mounted only into ate-api-server, since
+      # automount can't target one container.
+      - name: kube-api-access
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - downwardAPI:
+              items:
+              - path: namespace
+                fieldRef:
+                  fieldPath: metadata.namespace
 ---
 # Allow voluntary disruptions (node drains, cluster upgrades) to take
 # at most one API server pod at a time, at any replica count.

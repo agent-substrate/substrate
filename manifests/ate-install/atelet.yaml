@@ -143,6 +143,10 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      # Only atelet calls the Kubernetes API, so only it mounts the token
+      # (kube-api-access below). The objectstore-plugin sidecar must not hold
+      # it.
+      automountServiceAccountToken: false
       priorityClassName: system-cluster-critical
       # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
       # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
@@ -383,6 +387,9 @@ spec:
         - name: image-credential-provider-config
           mountPath: /run/image-credential-provider/config.yaml
           readOnly: true
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
       volumes:
       - name: objectstore-plugin
         emptyDir: {}
@@ -454,3 +461,20 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
+      # What automount would add, mounted only into atelet, since automount
+      # can't target one container.
+      - name: kube-api-access
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - downwardAPI:
+              items:
+              - path: namespace
+                fieldRef:
+                  fieldPath: metadata.namespace
