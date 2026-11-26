@@ -54,7 +54,7 @@ func failedRestoreRootfs(t *testing.T, actorUID string, overlays bool) *ateworke
 		if err := os.MkdirAll(filepath.Join(layer, "fs", "etc"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := imagecache.WriteSpec(bundle, &imagecache.OverlaySpec{Layers: []string{layer}}); err != nil {
+		if err := imagecache.WriteSpec(bundle, &imagecache.OverlaySpec{StoreLayers: []string{layer}}); err != nil {
 			t.Fatalf("WriteSpec: %v", err)
 		}
 		// Detach the overlays even if the cleanup under test leaves them, so

@@ -20,8 +20,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 )
@@ -36,6 +34,10 @@ const maxImageFileSize = 1 << 20
 // missing file wraps fs.ErrNotExist. Symlinks resolve within their own layer;
 // one whose target lives only in a lower layer reads as absent there, and the
 // lookup falls through to the layer below.
+//
+// Store layers record their whiteouts and opaque dirs beside the tree. An
+// image provider's rootfs is the image's only lowerdir, with all layers
+// already applied, so ReadFile reads it once as a plain directory.
 func (img *Image) ReadFile(name string) ([]byte, error) {
 	rel, skip, err := validateTarName(name)
 	if err != nil {
@@ -44,8 +46,19 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 	if skip {
 		return nil, fmt.Errorf("image file %q: %w", name, fs.ErrInvalid)
 	}
-	for _, layerDir := range slices.Backward(img.LayerDirs) {
-		b, err := readLayerFile(layerDir, rel)
+	if img.ProviderRootfs != "" {
+		b, err := readLayerFile(img.ProviderRootfs, rel)
+		switch {
+		case err == nil:
+			return b, nil
+		case errors.Is(err, syscall.ENOTDIR), errors.Is(err, fs.ErrNotExist):
+			return nil, fmt.Errorf("image file %q: %w", name, fs.ErrNotExist)
+		}
+		return nil, fmt.Errorf("image file %q: %w", name, err)
+	}
+	lowerDirs := storeLowerDirs(img.LayerDirs)
+	for i := len(lowerDirs) - 1; i >= 0; i-- {
+		b, err := readLayerFile(lowerDirs[i], rel)
 		switch {
 		case err == nil:
 			return b, nil
@@ -55,7 +68,7 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 		case !errors.Is(err, fs.ErrNotExist):
 			return nil, fmt.Errorf("image file %q: %w", name, err)
 		}
-		hidden, err := layerHides(layerDir, rel)
+		hidden, err := layerHides(img.LayerDirs[i], rel)
 		if err != nil {
 			return nil, fmt.Errorf("image file %q: %w", name, err)
 		}
@@ -66,9 +79,9 @@ func (img *Image) ReadFile(name string) ([]byte, error) {
 	return nil, fmt.Errorf("image file %q: %w", name, fs.ErrNotExist)
 }
 
-// readLayerFile reads rel from one layer's tree, confined to it.
-func readLayerFile(layerDir, rel string) ([]byte, error) {
-	root, err := os.OpenRoot(filepath.Join(layerDir, layerFSDirName))
+// readLayerFile reads rel from one layer's lowerdir, confined to it.
+func readLayerFile(lower, rel string) ([]byte, error) {
+	root, err := os.OpenRoot(lower)
 	if err != nil {
 		return nil, err
 	}

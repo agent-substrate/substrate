@@ -586,6 +586,37 @@ groups:
               value: timeout
               brief: The time limit of the caller ended.
 
+  - id: registry.ate.imageprovider
+    type: attribute_group
+    brief: The labels of the image provider plugin on the node.
+    attributes:
+      - id: ate.imageprovider.outcome
+        stability: development
+        brief: >
+          The plugin's answer to one request to prepare an image. atelet pulls
+          into the image cache after declined or error.
+        type:
+          members:
+            - id: success
+              stability: development
+              value: success
+              brief: The image provider plugin prepared the image.
+            - id: declined
+              stability: development
+              value: declined
+              brief: The plugin does not serve the image.
+            - id: error
+              stability: development
+              value: error
+              brief: The plugin failed, or atelet rejected its answer.
+      - id: ate.imageprovider.provider
+        stability: development
+        brief: >
+          The name the image provider plugin reports. It is unknown until the
+          plugin first answers.
+        type: string
+        examples: [nydus, riptide, unknown]
+
   - id: registry.ate.filecache
     type: attribute_group
     brief: >
@@ -804,7 +835,7 @@ groups:
           for the failures. At an RPC boundary this key holds the gRPC status
           code. On ate.imagecache.requests it holds the HTTP status of the
           registry.
-        examples: ["ResourceExhausted", "404", "_OTHER"]
+        examples: ["ResourceExhausted", "404", "invalid_result", "_OTHER"]
       - id: file.name
         stability: stable
         type: string
@@ -1411,6 +1442,8 @@ groups:
       A miss causes a pull and an unpack. Thus the hit ratio of a node is an
       early sign of the resume time. Calculate the ratio as hit / (hit + miss).
       Do not put the failures or the stopped lookups in the denominator.
+      A CachedImage miss is not counted, because the caller then either pulls
+      through EnsureImage, which counts it, or gets the image elsewhere.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1426,6 +1459,85 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.imageprovider.requests
+    type: metric
+    metric_name: ate.imageprovider.requests
+    instrument: counter
+    unit: "{request}"
+    stability: development
+    brief: The number of requests to the image provider plugin on the node, by provider and outcome.
+    note: >
+      A high declined count means the images have no artifacts the plugin can
+      serve. Errors mean the plugin is unavailable or misbehaving, and
+      error.type says how. atelet pulls into the image cache after either, which
+      ate.imagecache.requests counts. An image the plugin serves is not counted
+      in ate.imagecache.requests. A node without a plugin socket records
+      nothing.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [traffic, errors]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: Does the image provider plugin serve the container images?
+    attributes:
+      - ref: ate.imageprovider.provider
+        requirement_level: required
+      - ref: ate.imageprovider.outcome
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: &imageprovider_error_type >
+            The outcome is error. The key holds the gRPC status code of the
+            failed call, or invalid_result when atelet rejects the plugin's
+            answer.
+
+  - id: metric.ate.imageprovider.duration
+    type: metric
+    metric_name: ate.imageprovider.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: >
+      The time the image provider plugin on the node takes to answer for one
+      image, CanProvide and PrepareImage, without a pull into the image cache.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: How long does the image provider plugin take to prepare an image?
+    attributes:
+      - ref: ate.imageprovider.provider
+        requirement_level: required
+      - ref: ate.imageprovider.outcome
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: *imageprovider_error_type
+
+  - id: metric.ate.imageprovider.auth_refresh.failures
+    type: metric
+    metric_name: ate.imageprovider.auth_refresh.failures
+    instrument: counter
+    unit: "{failure}"
+    stability: development
+    brief: >
+      The number of failed refreshes of the registry credentials of image
+      provider leases on the node.
+    note: >
+      atelet refreshes the leases of a lazily loading plugin every minute. A
+      rising count means the plugin will read the registry with expired
+      credentials once the old ones run out.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [errors]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: Does the image provider plugin keep valid registry credentials?
+    attributes:
+      - ref: ate.imageprovider.provider
+        requirement_level: required
 
   - id: metric.ate.filecache.size
     type: metric

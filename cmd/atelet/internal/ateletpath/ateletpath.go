@@ -30,6 +30,12 @@ var (
 	// and in every worker pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
 
+	// ImageProviderMountRoot is the mount root atelet sends the image provider
+	// plugin, which mounts each image's rootfs under it. It lives under
+	// BasePath, so atelet and the worker pods see the plugin's mounts through
+	// their HostToContainer mounts of BasePath.
+	ImageProviderMountRoot = filepath.Join(nodepath.BasePath, "image-provider")
+
 	// SnapshotScratchDir holds short-lived directories for snapshot manifests
 	// moved through the object-store plugin. It lives under BasePath, which the
 	// node plugin shares with atelet.

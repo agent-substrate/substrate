@@ -1,0 +1,391 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package imageprovider.v1alpha1;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1;imageprovider";
+
+// ImageProviderPlugin is a node-local gRPC service that an image provider
+// plugin serves on a Unix domain socket, for example to stream images with
+// Riptide or Nydus.
+//
+// Given an OCI image reference and resolved registry credentials, the plugin
+// prepares the image on the host in the requested ImageForm.
+//
+// Several clients, for example Substrate and Ray, can share one plugin on a
+// node. Each client passes its own mount_root in every request. The plugin
+// mounts images for a client only under that client's mount_root, and keys
+// leases by mount_root and lease_id, so clients never see each other's
+// leases. Two clients must not use the same mount_root. The plugin serves
+// only the mount roots it was configured with.
+//
+// The plugin trusts every client that can connect to its socket. The
+// socket's file permissions are the only access control, so a deployment
+// makes the socket reachable only by trusted node agents, for example
+// owned by root with mode 0600. mount_root keeps clients' leases apart. It
+// does not authenticate clients, so any client can name any mount_root.
+//
+// The extensions fields exist only for customized forks of Substrate and
+// their plugins, which define their own message types. Upstream Substrate,
+// its client and its plugin library never set, read, store or forward them,
+// and promise nothing about them beyond wire compatibility. An upstream
+// receiver ignores them, so a fork must check that a response carries the
+// extensions it asked for. Every request and response has an extensions
+// field, and so does every list item that a fork may annotate.
+//
+// The extensions fields are alpha-only. v1beta1 may remove them, for example
+// once the API supports block devices.
+service ImageProviderPlugin {
+  // GetPluginInfo returns the plugin's provider name and lifecycle state.
+  // The caller polls it as a heartbeat, for example to learn when the plugin
+  // starts draining. The plugin answers it in every state, including while
+  // draining, until it exits. It reports only plugin-wide state that the
+  // caller acts on. Whether to prepare an image now is CanProvide's answer.
+  rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
+
+  // CanProvide reports whether the plugin and its provider are healthy and
+  // able to serve the given OCI image in the requested form under
+  // mount_root. A draining plugin returns can_provide = false.
+  rpc CanProvide(CanProvideRequest) returns (CanProvideResponse);
+
+  // PrepareImage prepares the image in the requested form under mount_root,
+  // takes the lease that lease_id names, and returns the image in that form.
+  // PrepareImageRequest.lease_id describes leases.
+  //
+  // If the plugin cannot serve the image, or does not serve mount_root,
+  // PrepareImage returns codes.FailedPrecondition so the caller can fall back
+  // to pulling the whole image itself.
+  rpc PrepareImage(PrepareImageRequest) returns (PrepareImageResponse);
+
+  // ReleaseImage releases a lease when a workload checkpoints, suspends or
+  // terminates. Releasing a lease the plugin does not hold succeeds, so the
+  // caller can retry it. The plugin may unmount the image from mount_root
+  // once no lease under mount_root uses it, and may remove the image's data
+  // once no lease uses it.
+  rpc ReleaseImage(ReleaseImageRequest) returns (ReleaseImageResponse);
+
+  // ReconcileImages replaces the plugin's leases under mount_root with the
+  // leases that the caller's surviving workloads still hold. It does not
+  // change leases under other mount roots. The caller sends it after it
+  // restarts or finds the plugin socket. The plugin releases the leases not
+  // in active_leases, and removes images that no lease uses.
+  //
+  // A starting plugin restores the leases it recorded before it stopped, so
+  // it serves requests that arrive before ReconcileImages with the same
+  // leases and images. It drops none of them, since only the caller knows
+  // which leases are still in use.
+  //
+  // The caller may call PrepareImage and ReleaseImage while ReconcileImages
+  // runs. It includes in active_leases the leases that its in-flight
+  // PrepareImage calls are taking, and the plugin keeps every lease in
+  // active_leases that it holds or is taking. A lease whose PrepareImage has
+  // not reached the plugin yet may come back in lost_leases, so the caller
+  // ignores the lost leases it is still taking. A lease that a concurrent
+  // ReleaseImage releases is not in active_leases, so the plugin drops it
+  // either way.
+  //
+  // The caller then calls RefreshAuth on each auth_key in
+  // auth_refresh_required. Until then, the plugin has no credentials for
+  // the leases with those auth_keys.
+  rpc ReconcileImages(ReconcileImagesRequest) returns (ReconcileImagesResponse);
+
+  // RefreshAuth replaces the registry credentials that auth_key names under
+  // mount_root, for every lease with that auth_key. The plugin uses the
+  // latest credentials it got for an auth_key. It returns codes.NotFound if
+  // no lease under mount_root has auth_key, and never takes a lease.
+  rpc RefreshAuth(RefreshAuthRequest) returns (RefreshAuthResponse);
+}
+
+// ImageForm is the form in which the plugin returns an image.
+//
+// New forms extend the API. Each new form adds an ImageForm value and a
+// matching arm in PrepareImageResponse.image, for example IMAGE_FORM_BLK
+// for a block device that a microVM attaches. A plugin that does not
+// support a form returns can_provide = false from CanProvide, and
+// codes.FailedPrecondition from PrepareImage.
+enum ImageForm {
+  // IMAGE_FORM_UNSPECIFIED is invalid. Requests that carry it fail with
+  // codes.InvalidArgument.
+  IMAGE_FORM_UNSPECIFIED = 0;
+
+  // IMAGE_FORM_ROOTFS returns the image as one read-only root filesystem
+  // directory on the host, with all layers applied.
+  IMAGE_FORM_ROOTFS = 1;
+}
+
+// RegistryAuth carries resolved registry credentials, for example from a
+// kubelet credential provider or imagePullSecrets, for one image request.
+message RegistryAuth {
+  string username = 1;
+  string password = 2 [ debug_redact = true ];
+  string auth = 3 [ debug_redact = true ];
+  string server_address = 4;
+  string identity_token = 5 [ debug_redact = true ];
+  string registry_token = 6 [ debug_redact = true ];
+}
+
+message GetPluginInfoRequest {
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 1;
+}
+
+// PluginState is the plugin's lifecycle state on the node. A caller treats
+// PLUGIN_STATE_UNSPECIFIED and values it does not know as "do not use the
+// plugin, and do not evict workloads".
+enum PluginState {
+  PLUGIN_STATE_UNSPECIFIED = 0;
+
+  // PLUGIN_STATE_SERVING means the plugin serves PrepareImage normally.
+  PLUGIN_STATE_SERVING = 1;
+
+  // PLUGIN_STATE_DRAINING means the plugin is shutting down, for example
+  // after SIGTERM during a RollingUpdate. It declines CanProvide and
+  // PrepareImage, and workloads holding its leases should cycle so it can
+  // unmount.
+  PLUGIN_STATE_DRAINING = 2;
+}
+
+message GetPluginInfoResponse {
+  // provider_name identifies the image provider, for example "riptide" or
+  // "nydus".
+  string provider_name = 1;
+
+  // state is the plugin's lifecycle state.
+  PluginState state = 2;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 3;
+}
+
+// CanProvideRequest carries no registry credentials. The caller sends them
+// only with PrepareImage, for an image the plugin agreed to serve.
+message CanProvideRequest {
+  string image_ref = 1;
+
+  // form is the image form the caller needs. A plugin that cannot
+  // produce it returns can_provide = false.
+  ImageForm form = 2;
+
+  // mount_root is the caller's mount root. See PrepareImageRequest. A plugin
+  // that does not serve it returns can_provide = false. It must not be
+  // empty.
+  string mount_root = 3;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 4;
+}
+
+// AuthRefresh says whether the caller must refresh a lease's registry
+// credentials while it holds the lease.
+enum AuthRefresh {
+  // AUTH_REFRESH_UNSPECIFIED is treated as AUTH_REFRESH_REQUIRED.
+  AUTH_REFRESH_UNSPECIFIED = 0;
+
+  // AUTH_REFRESH_NOT_NEEDED means the plugin no longer needs the caller's
+  // credentials for the lease, because it read the whole image or renews
+  // credentials itself.
+  AUTH_REFRESH_NOT_NEEDED = 1;
+
+  // AUTH_REFRESH_REQUIRED means the plugin keeps reading the registry with
+  // the caller's credentials. The caller calls RefreshAuth with fresh
+  // credentials before the old ones expire.
+  AUTH_REFRESH_REQUIRED = 2;
+}
+
+message CanProvideResponse {
+  // can_provide reports whether the plugin can serve this image.
+  bool can_provide = 1;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 2;
+}
+
+message PrepareImageRequest {
+  string image_ref = 1;
+  RegistryAuth auth = 2;
+
+  // form is the image form to return.
+  ImageForm form = 3;
+
+  // lease_id names the lease this call takes, for example from the workload
+  // UID and container name. It is unique within mount_root. It must not be
+  // empty.
+  //
+  // A lease is one user's hold on the image. An image can have many leases.
+  // All leases on an image under one mount_root share one read-only copy,
+  // such as one Rootfs.dir. The plugin keeps the image while any lease holds
+  // it.
+  //
+  // If the plugin already holds the lease for this image_ref, form and
+  // auth_key, PrepareImage returns the image again and takes no new lease,
+  // so the caller can retry it. If the lease holds a different image_ref,
+  // form or auth_key, PrepareImage returns codes.AlreadyExists.
+  string lease_id = 4;
+
+  // mount_root is a host directory that the plugin owns and the caller does
+  // not write to. The plugin returns the image under it. Each client uses
+  // one fixed mount_root, which also scopes its leases. It must not be
+  // empty.
+  string mount_root = 5;
+
+  // auth_key names the credentials in auth. Leases with the same auth_key
+  // under mount_root share one set of credentials, and auth replaces the
+  // set the plugin holds for auth_key. One RefreshAuth refreshes them all.
+  // The caller gives two leases the same auth_key only if either may use the
+  // other's credentials, for example for the same registry repository. It
+  // must not be empty.
+  string auth_key = 6;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 7;
+}
+
+// Rootfs is the image's read-only root filesystem on the host, with all
+// layers applied and no whiteouts left. It stays mounted and unchanged while
+// the image is leased. The caller must not write to it.
+message Rootfs {
+  // dir is the host path of the root filesystem directory, under the
+  // request's mount_root. The caller may stack an overlayfs on dir, so dir
+  // must be at most one stacking filesystem, such as overlayfs, deep.
+  //
+  // dir depends only on mount_root, image_digest and form, so it stays the
+  // same across plugin restarts. A lease that a restarted plugin restores
+  // has its image at the same dir.
+  string dir = 1;
+}
+
+message PrepareImageResponse {
+  // image_digest is the resolved OCI manifest digest ("sha256:<hex>").
+  string image_digest = 1;
+
+  // config_json is the JSON-encoded OCI v1.Config (entrypoint, cmd, env, user,
+  // working_dir) for the resolved image.
+  bytes config_json = 2;
+
+  // provider_name identifies the image provider, for example "riptide" or
+  // "nydus".
+  string provider_name = 3;
+
+  // image holds the image in the requested form. A caller rejects a
+  // response whose image does not match the form it asked for.
+  //
+  // Each ImageForm has one arm here. A new form adds a new arm, for example
+  // a block device for IMAGE_FORM_BLK.
+  oneof image {
+    // rootfs is set for IMAGE_FORM_ROOTFS.
+    Rootfs rootfs = 4;
+  }
+
+  // auth_refresh says whether the caller must call RefreshAuth on the
+  // lease's auth_key.
+  AuthRefresh auth_refresh = 5;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 6;
+}
+
+message ReleaseImageRequest {
+  // lease_id is the lease_id the caller passed to PrepareImage.
+  string lease_id = 1;
+
+  // mount_root is the mount_root the caller passed to PrepareImage.
+  string mount_root = 2;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 3;
+}
+
+message ReleaseImageResponse {
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 1;
+}
+
+// ActiveLease is a lease that a surviving workload still holds. The plugin
+// keeps a record of each lease's image, form and auth_key that survives
+// plugin restarts, so the caller sends only the lease_id.
+message ActiveLease {
+  // lease_id is the lease_id the caller passed to PrepareImage.
+  string lease_id = 1;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 2;
+}
+
+message ReconcileImagesRequest {
+  // active_leases are all the leases under mount_root that the caller still
+  // holds.
+  repeated ActiveLease active_leases = 1;
+
+  // mount_root is the caller's mount root. Only leases under it change.
+  string mount_root = 2;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 3;
+}
+
+// LostLease is an active lease that ReconcileImages could not restore.
+message LostLease {
+  // lease_id is the lease's lease_id in active_leases.
+  string lease_id = 1;
+
+  // message says why the plugin could not restore the lease, for example
+  // because it has no record of the lease or the image is gone from disk.
+  string message = 2;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 3;
+}
+
+message ReconcileImagesResponse {
+  // lost_leases are the active_leases that the plugin could not restore.
+  // The plugin does not hold them, and their images may be gone. The caller
+  // stops the workloads that hold them.
+  repeated LostLease lost_leases = 1;
+
+  // auth_refresh_required are the auth_keys of the restored leases that need
+  // fresh credentials now, for example because the plugin restarted and lost
+  // them. The caller calls RefreshAuth on each.
+  repeated string auth_refresh_required = 2;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 3;
+}
+
+message RefreshAuthRequest {
+  // auth_key is an auth_key the caller passed to PrepareImage.
+  string auth_key = 1;
+
+  // auth replaces the credentials of every lease with auth_key.
+  RegistryAuth auth = 2;
+
+  // mount_root is the mount_root the caller passed to PrepareImage.
+  string mount_root = 3;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 4;
+}
+
+message RefreshAuthResponse {
+  // auth_refresh says whether the caller must keep calling RefreshAuth on
+  // auth_key. It is AUTH_REFRESH_REQUIRED while any lease with auth_key
+  // needs the credentials.
+  AuthRefresh auth_refresh = 1;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 2;
+}
