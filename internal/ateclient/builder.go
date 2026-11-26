@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -182,6 +183,11 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
+	tokenOpt, err := explicitTokenDialOption(tokenFile)
+	if err != nil {
+		return nil, err
+	}
+
 	// Verify the server before attaching the bearer token below: the token
 	// must never be sent over an unauthenticated channel.
 	tlsCfg, err := serverTLSConfig(ctx, clientset, apiServerName())
@@ -189,14 +195,17 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 		return nil, err
 	}
 
+	if tokenOpt == nil {
+		tokenOpt, err = serviceAccountTokenDialOption(ctx, clientset)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	opts = append(opts, grpc.WithDefaultServiceConfig(roundRobinServiceConfig))
-	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
-	if err != nil {
-		return nil, err
-	}
 	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
@@ -220,7 +229,11 @@ func LoadKubeConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	loadingRules.ExplicitPath = kubeconfigPath
 	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: k8sContext}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
+	if clientcmd.IsEmptyConfig(err) {
+		return nil, clientcmd.NewEmptyConfigError(`no Kubernetes cluster context configured; check "kubectl config get-contexts" and "kubectl config use-context", or pass --kubeconfig / --context`)
+	}
+	return cfg, err
 }
 
 func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
@@ -238,6 +251,11 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
+	tokenOpt, err := explicitTokenDialOption(tokenFile)
+	if err != nil {
+		return nil, err
+	}
+
 	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
 	// address directly instead of port-forwarding?
 	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, systemNamespace(), apiServiceName(), 443)
@@ -252,14 +270,17 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 		return nil, err
 	}
 
+	if tokenOpt == nil {
+		tokenOpt, err = serviceAccountTokenDialOption(ctx, clientset)
+		if err != nil {
+			stopForward()
+			return nil, err
+		}
+	}
+
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
-	if err != nil {
-		stopForward()
-		return nil, err
-	}
 	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
@@ -316,13 +337,13 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface, server
 	}, nil
 }
 
-// bearerTokenDialOption attaches the configured token, or mints an ate-client
-// ServiceAccount token when tokenFile is empty.
-//
-// The minted token authenticates as FallbackPrincipal, not as whoever runs
-// the client: anyone Kubernetes RBAC lets create a token for that
-// ServiceAccount gets the same identity, and whatever it is granted.
-func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
+// explicitTokenDialOption returns per-RPC credentials for an explicit
+// --token-file flag ("-" for stdin, or a file path), or (nil, nil) when
+// tokenFile is empty.
+func explicitTokenDialOption(tokenFile string) (grpc.DialOption, error) {
+	if tokenFile == "" {
+		return nil, nil
+	}
 	if tokenFile == "-" {
 		creds, err := readBearerToken(os.Stdin)
 		if err != nil {
@@ -330,9 +351,20 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 		}
 		return grpc.WithPerRPCCredentials(creds), nil
 	}
-	if tokenFile != "" {
-		return grpc.WithPerRPCCredentials(fileBearerTokenCreds(tokenFile)), nil
+	creds, err := fileBearerTokenCredentials(tokenFile)
+	if err != nil {
+		return nil, err
 	}
+	return grpc.WithPerRPCCredentials(creds), nil
+}
+
+// serviceAccountTokenDialOption mints an ate-client ServiceAccount token when
+// no token file is configured.
+//
+// The minted token authenticates as FallbackPrincipal, not as whoever runs
+// the client: anyone Kubernetes RBAC lets create a token for that
+// ServiceAccount gets the same identity, and whatever it is granted.
+func serviceAccountTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset) (grpc.DialOption, error) {
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
@@ -350,14 +382,58 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
 }
 
+// fileBearerTokenCredentials opens and validates path upfront so missing or
+// malformed token files fail before dialing. Regular files (including symlinks
+// to projected tokens) are re-read per RPC for rotation; non-regular files such
+// as pipes or process substitutions are read once.
+func fileBearerTokenCredentials(path string) (credentials.PerRPCCredentials, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read bearer token file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("read bearer token file %q: %w", path, err)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("read bearer token file %q: %w", path, err)
+	}
+	token, err := parseBearerToken(b)
+	if err != nil {
+		return nil, fmt.Errorf("bearer token file %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return bearerTokenCreds(token), nil
+	}
+	return fileBearerTokenCreds(path), nil
+}
+
+// parseBearerToken trims surrounding whitespace and rejects empty tokens or
+// bytes outside printable ASCII (0x21..0x7E).
+func parseBearerToken(raw []byte) (string, error) {
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", errors.New("token is empty")
+	}
+	for i := range len(token) {
+		if token[i] < 0x21 || token[i] > 0x7E {
+			return "", errors.New("must be a single printable ASCII token without whitespace")
+		}
+	}
+	return token, nil
+}
+
 func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return "", err
 	}
-	token := strings.TrimSpace(string(b))
-	if token == "" {
-		return "", fmt.Errorf("bearer token is empty")
+	token, err := parseBearerToken(b)
+	if err != nil {
+		return "", err
 	}
 	return bearerTokenCreds(token), nil
 }
@@ -380,9 +456,9 @@ func (c fileBearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string)
 	if err != nil {
 		return nil, fmt.Errorf("read bearer token file %q: %w", c, err)
 	}
-	token := strings.TrimSpace(string(b))
-	if token == "" {
-		return nil, fmt.Errorf("bearer token file %q is empty", c)
+	token, err := parseBearerToken(b)
+	if err != nil {
+		return nil, fmt.Errorf("bearer token file %q: %w", c, err)
 	}
 	return map[string]string{"authorization": "Bearer " + token}, nil
 }
