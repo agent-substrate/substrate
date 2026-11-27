@@ -193,6 +193,14 @@ const (
 // left. Logs only: it is only ever recorded beside actor identity.
 const SandboxOOMKillsKey = attribute.Key("ate.sandbox.oom_kills")
 
+// Keys of the record a worker writes when a container of an actor exits. Logs
+// only: they are only ever recorded beside actor identity. The name has its own
+// key because ActorContainerNameKey marks a line that the container wrote.
+const (
+	ActorExitedContainerNameKey     = attribute.Key("ate.actor.exited_container.name")
+	ActorExitedContainerExitCodeKey = attribute.Key("ate.actor.exited_container.exit_code")
+)
+
 // Values for StatsKindKey. An initial or final sample brackets an activation; a
 // periodic one is the timer's.
 const (

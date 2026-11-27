@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -301,6 +302,47 @@ func (r *runsc) runWait(ctx context.Context, containerName string, extraArgs ...
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 	return r.runWait(ctx, containerName)
+}
+
+// cmdState returns the container's status, as `runsc state` prints it:
+// running while the first process lives, stopped after it exits or when the
+// sandbox is gone.
+func (r *runsc) cmdState(ctx context.Context, containerName string) (string, error) {
+	cmd := r.command(ctx, r.buildArgs("state", containerName))
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("while running `runsc state`: %w", err)
+	}
+	var state struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out, &state); err != nil {
+		return "", fmt.Errorf("while parsing `runsc state` output: %w", err)
+	}
+	return state.Status, nil
+}
+
+// cmdExitCode returns the exit code `runsc wait` prints for the container. A
+// signal reads as 128 plus the signal number. It blocks while the container
+// runs.
+func (r *runsc) cmdExitCode(ctx context.Context, containerName string) (int32, error) {
+	cmd := r.command(ctx, r.buildArgs("wait", containerName))
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("while running `runsc wait`: %w", err)
+	}
+	var result struct {
+		ExitStatus *int32 `json:"exitStatus"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return 0, fmt.Errorf("while parsing `runsc wait` output: %w", err)
+	}
+	if result.ExitStatus == nil {
+		return 0, fmt.Errorf("`runsc wait` printed no exit status: %q", out)
+	}
+	return *result.ExitStatus, nil
 }
 
 // cmdWaitRestore blocks until background page loading from `runsc restore -background` completes.

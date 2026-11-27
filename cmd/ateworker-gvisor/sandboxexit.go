@@ -77,6 +77,12 @@ func (p *sandboxProcess) exited() (<-chan struct{}, error) {
 	return pidfd.ExitedFD(p.pidfd)
 }
 
+// hasExited reports if the sandbox has exited, and does not block.
+func (p *sandboxProcess) hasExited() bool {
+	n, _ := unix.Poll([]unix.PollFd{{Fd: int32(p.pidfd), Events: unix.POLLIN}}, 0)
+	return n > 0
+}
+
 func (p *sandboxProcess) Close() {
 	_ = unix.Close(p.pidfd)
 }
