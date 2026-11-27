@@ -123,7 +123,7 @@ func TestGracefulShutdownStopsAnActorRestoredDuringTheWait(t *testing.T) {
 		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, "", 0); err != nil {
 			t.Fatal(err)
 		}
-		f := newFakeRunsc("app")
+		f := &fakeRunsc{}
 		s.setSession("actor-a", &workloadSession{rcmd: f, containers: []string{"app"}})
 		release()
 		<-returned
@@ -148,7 +148,7 @@ func TestGracefulShutdownLetsASuspendFinish(t *testing.T) {
 		if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, "", 0); err != nil {
 			t.Fatal(err)
 		}
-		f := newFakeRunsc("app")
+		f := &fakeRunsc{}
 		s.setSession("actor-a", &workloadSession{rcmd: f, containers: []string{"app"}})
 		release := s.inFlight.Add("actor-a", rpcCheckpointWorkload)
 

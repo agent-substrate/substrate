@@ -37,8 +37,7 @@ const sandboxExitTimeout = 10 * time.Second
 
 // sandboxProcess is the runsc sandbox across a checkpoint, which stops it.
 // Since gvisor/gvisor@f80859d424 (release-20260921.0) runsc treats an exited
-// sandbox as stopped, zombie included, so once it exits cleanup can skip
-// stopping its containers.
+// sandbox as stopped, zombie included, so cleanup can delete it once it exits.
 type sandboxProcess struct {
 	pid   int
 	pidfd int

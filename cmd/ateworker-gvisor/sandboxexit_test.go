@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -56,24 +55,6 @@ func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 	}
 	t.Cleanup(p.Close)
 	return cmd, p
-}
-
-func TestWaitSandboxExitedReturnsFalseWhenExitUnconfirmed(t *testing.T) {
-	tests := []struct {
-		name    string
-		sandbox *sandboxProcess
-	}{
-		{name: "missing sandbox"},
-		// no process can have this descriptor open
-		{name: "invalid pidfd", sandbox: &sandboxProcess{pidfd: math.MaxInt32}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if waitSandboxExited(t.Context(), tc.sandbox) {
-				t.Fatal("waitSandboxExited = true, want false")
-			}
-		})
-	}
 }
 
 func TestSandboxWaitExited(t *testing.T) {

@@ -77,7 +77,7 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 				terminate = s.terminateDead
 			}
 			if err := s.endActivation(ctx, hosted, s.readDeadFinal, func() error {
-				return terminate(ctx, attribution.Ref, attribution.UID, runscPath, actorDirs, containers, false)
+				return terminate(ctx, attribution.Ref, attribution.UID, runscPath, actorDirs, containers)
 			}); err != nil {
 				slog.WarnContext(ctx, "Failed to tear down the dead sandbox", slog.String("actorUID", attribution.UID), slog.Any("err", err))
 			}
