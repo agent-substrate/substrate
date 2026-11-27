@@ -767,9 +767,8 @@ Activates a suspended actor by restoring it onto a physical worker.
 The API server assigns a new UUID to each Run or Restore call and stores it in
 `status.worker_assignment.actor_execution_uid` when the Actor becomes RUNNING.
 Workers bind that UUID to the runtime they start. Executions started by an older
-API server can have an empty UID. Crash reports accept the execution UID field
-for protocol compatibility. Crash handling uses the Actor and Worker identities
-and will check the Actor execution UID in a future release.
+API server can have an empty UID. Crash reports must match the current execution
+UID, so a delayed report preserves an Actor that has resumed on the same Worker.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
