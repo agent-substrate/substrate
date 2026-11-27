@@ -460,9 +460,9 @@ func TestWorkerSecurityContextByClass(t *testing.T) {
 		// virtiofsd's sandbox pivot_root(), which the default profile denies.
 		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK"}, true},
-		{"gvisor explicit", atev1.SandboxClassGvisor, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK"}, true},
-		{"microvm", atev1.SandboxClassMicroVM, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "SETPCAP"}, true},
+		{"gvisor default", "", []corev1.Capability{"NET_BIND_SERVICE", "NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK"}, true},
+		{"gvisor explicit", atev1.SandboxClassGvisor, []corev1.Capability{"NET_BIND_SERVICE", "NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK"}, true},
+		{"microvm", atev1.SandboxClassMicroVM, []corev1.Capability{"NET_BIND_SERVICE", "NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "SETPCAP"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -374,7 +374,7 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // gofer fails with "cannot create gofer process: fork/exec /proc/self/exe:
 // operation not permitted"), worker mounts need SYS_ADMIN, actor networking
 // needs NET_ADMIN/NET_RAW, and rootfs ownership and modes need
-// DAC_OVERRIDE/FOWNER/CHOWN.
+// DAC_OVERRIDE/FOWNER/CHOWN. NET_BIND_SERVICE lets atunnel bind port 443.
 //
 // IPC_LOCK lets runsc create each sandbox's pin ring, a *disabled* io_uring
 // used to parallelize kernel FD release operations with gVisor's own teardown
@@ -392,12 +392,13 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // missing capabilities. Since Linux 5.8, creating the 0:0 overlay whiteouts
 // does not require MKNOD.
 var workerGvisorCapabilities = []corev1.Capability{
-	"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE",
+	"NET_BIND_SERVICE", "NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE",
 	"FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK",
 }
 
 // workerMicroVMCapabilities retains virtiofsd's eight default child
 // capabilities, plus NET_ADMIN and SYS_ADMIN for worker networking and mounts.
+// NET_BIND_SERVICE lets atunnel bind port 443.
 // MKNOD and FSETID preserve guest device-node creation and setgid files.
 // DAC_READ_SEARCH is not granted: virtiofsd only adds it to its child set to
 // open file handles, and virtiofsdArgs in cmd/ateworker-microvm/internal/kata
@@ -413,7 +414,7 @@ var workerGvisorCapabilities = []corev1.Capability{
 // The hypervisor devices are not capabilities: they come from atelet's device
 // plugin (see maybeApplyMicroVMPodShape).
 var workerMicroVMCapabilities = []corev1.Capability{
-	"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE",
+	"NET_BIND_SERVICE", "NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE",
 	"FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "SETPCAP",
 }
 
