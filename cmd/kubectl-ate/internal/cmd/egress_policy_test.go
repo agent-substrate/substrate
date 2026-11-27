@@ -395,7 +395,7 @@ func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 func TestEgressPolicyCommandArgs(t *testing.T) {
 	resetFlagsRecursive(rootCmd)
 	t.Cleanup(func() { resetFlagsRecursive(rootCmd) })
-	for _, c := range []*cobra.Command{getEgressPolicyCmd, createEgressPolicyCmd, updateEgressPolicyCmd, deleteEgressPolicyCmd} {
+	for _, c := range []*cobra.Command{getEgressPolicyCmd, createEgressPolicyCmd, updateEgressPolicyCmd, applyEgressPolicyCmd, deleteEgressPolicyCmd} {
 		_ = c.Flags().Set("atespace", "team-a")
 		if c.Flags().Lookup("filename") != nil {
 			_ = c.Flags().Set("filename", "policy.yaml")
@@ -412,6 +412,9 @@ func TestEgressPolicyCommandArgs(t *testing.T) {
 		{name: "update", command: updateEgressPolicyCmd, args: []string{"c1"}},
 		{name: "update requires actor", command: updateEgressPolicyCmd, wantErr: true},
 		{name: "update rejects multiple", command: updateEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
+		{name: "apply", command: applyEgressPolicyCmd, args: []string{"c1"}},
+		{name: "apply requires actor", command: applyEgressPolicyCmd, wantErr: true},
+		{name: "apply rejects multiple", command: applyEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
 		{name: "delete", command: deleteEgressPolicyCmd, args: []string{"c1"}},
 		{name: "delete requires actor", command: deleteEgressPolicyCmd, wantErr: true},
 		{name: "delete rejects multiple", command: deleteEgressPolicyCmd, args: []string{"c1", "c2"}, wantErr: true},
@@ -1134,5 +1137,287 @@ func TestEgressPolicyFromManifest_NighthawkEgress(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("egressPolicyFromManifest mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// fakeEgressPolicyApplier records every RPC made by applyEgressPolicyRunner and
+// answers each verb independently.
+type fakeEgressPolicyApplier struct {
+	fakeActorReader
+	getPolicy    *ateapi.EgressPolicy
+	getErr       error
+	createPolicy *ateapi.EgressPolicy
+	createErr    error
+	updatePolicy *ateapi.EgressPolicy
+	updateErr    error
+
+	calls     []string
+	getReq    *ateapi.GetActorEgressPolicyRequest
+	createReq *ateapi.CreateActorEgressPolicyRequest
+	updateReq *ateapi.UpdateActorEgressPolicyRequest
+}
+
+func (f *fakeEgressPolicyApplier) GetActorEgressPolicy(_ context.Context, req *ateapi.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
+	f.calls = append(f.calls, "GetActorEgressPolicy")
+	f.getReq = req
+	return f.getPolicy, f.getErr
+}
+
+func (f *fakeEgressPolicyApplier) CreateActorEgressPolicy(_ context.Context, req *ateapi.CreateActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
+	f.calls = append(f.calls, "CreateActorEgressPolicy")
+	f.createReq = req
+	return f.createPolicy, f.createErr
+}
+
+func (f *fakeEgressPolicyApplier) UpdateActorEgressPolicy(_ context.Context, req *ateapi.UpdateActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
+	f.calls = append(f.calls, "UpdateActorEgressPolicy")
+	f.updateReq = req
+	return f.updatePolicy, f.updateErr
+}
+
+func (f *fakeEgressPolicyApplier) GetActor(ctx context.Context, req *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+	f.calls = append(f.calls, "GetActor")
+	return f.fakeActorReader.GetActor(ctx, req, opts...)
+}
+
+func testEgressPolicy(mods ...func(*ateapi.EgressPolicy)) *ateapi.EgressPolicy {
+	p := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default"},
+		Rules: []*ateapi.EgressRule{
+			{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapi.HttpsRule{Hostnames: []string{"www.example.com"}}},
+		},
+	}
+	for _, mod := range mods {
+		mod(p)
+	}
+	return p
+}
+
+func TestApplyEgressPolicyRunner_Run(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinTime(t, now)
+
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
+	const uid = "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d"
+	wantGetReq := &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}
+	wantActorReq := &ateapi.GetActorRequest{Actor: actor}
+	policyNotFound := status.Error(codes.NotFound, "EgressPolicy not found")
+
+	withDefaultedRules := func(p *ateapi.EgressPolicy) {
+		p.Rules = []*ateapi.EgressRule{
+			{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{80}}}},
+			{Https: &ateapi.HttpsRule{Hostnames: []string{"www.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}},
+		}
+	}
+	withNewRules := func(p *ateapi.EgressPolicy) {
+		p.Rules = []*ateapi.EgressRule{
+			{Https: &ateapi.HttpsRule{Hostnames: []string{"api.openai.com"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}},
+		}
+	}
+	withStoredMeta := func(version int64, createdAt time.Time) func(*ateapi.EgressPolicy) {
+		return func(p *ateapi.EgressPolicy) {
+			p.Metadata.Uid = uid
+			p.Metadata.Version = version
+			p.Metadata.CreateTime = timestamppb.New(createdAt)
+		}
+	}
+
+	tests := []struct {
+		name          string
+		outputFmt     string
+		policy        *ateapi.EgressPolicy
+		applier       *fakeEgressPolicyApplier
+		wantCalls     []string
+		wantGetReq    *ateapi.GetActorEgressPolicyRequest
+		wantActorReq  *ateapi.GetActorRequest
+		wantCreateReq *ateapi.CreateActorEgressPolicyRequest
+		wantUpdateReq *ateapi.UpdateActorEgressPolicyRequest
+		wantOut       string
+		wantErrOut    string
+		wantErr       string
+		wantErrCode   codes.Code
+	}{
+		{
+			name:          "create when missing (table)",
+			outputFmt:     "table",
+			policy:        testEgressPolicy(),
+			applier:       &fakeEgressPolicyApplier{getErr: policyNotFound, createPolicy: testEgressPolicy(withStoredMeta(1, now), withDefaultedRules)},
+			wantCalls:     []string{"GetActorEgressPolicy", "GetActor", "CreateActorEgressPolicy"},
+			wantGetReq:    wantGetReq,
+			wantActorReq:  wantActorReq,
+			wantCreateReq: &ateapi.CreateActorEgressPolicyRequest{Actor: actor, EgressPolicy: testEgressPolicy()},
+			wantOut: `ATESPACE   ACTOR   RULES   VERSION   AGE
+team-a     c1      2       1         0s
+`,
+			wantErrOut: "egress policy for actor \"c1\" in atespace \"team-a\" created\n",
+		},
+		{
+			name:          "create when missing (yaml keeps stderr empty)",
+			outputFmt:     "yaml",
+			policy:        testEgressPolicy(),
+			applier:       &fakeEgressPolicyApplier{getErr: policyNotFound, createPolicy: testEgressPolicy(withStoredMeta(1, now), withDefaultedRules)},
+			wantCalls:     []string{"GetActorEgressPolicy", "GetActor", "CreateActorEgressPolicy"},
+			wantGetReq:    wantGetReq,
+			wantActorReq:  wantActorReq,
+			wantCreateReq: &ateapi.CreateActorEgressPolicyRequest{Actor: actor, EgressPolicy: testEgressPolicy()},
+			wantOut: `metadata:
+  atespace: team-a
+  createTime: "2026-01-01T12:00:00Z"
+  name: default
+  uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
+  version: "1"
+rules:
+- http:
+    hostnames:
+    - api.example.com
+    ports:
+      numbers:
+      - 80
+- https:
+    hostnames:
+    - www.example.com
+    ports:
+      numbers:
+      - 443
+`,
+		},
+		{
+			name:       "unchanged after normalizing omitted HTTP/HTTPS default ports (table)",
+			outputFmt:  "table",
+			policy:     testEgressPolicy(),
+			applier:    &fakeEgressPolicyApplier{getPolicy: testEgressPolicy(withStoredMeta(1, now.Add(-5*time.Minute)), withDefaultedRules)},
+			wantCalls:  []string{"GetActorEgressPolicy"},
+			wantGetReq: wantGetReq,
+			wantOut: `ATESPACE   ACTOR   RULES   VERSION   AGE
+team-a     c1      2       1         5m
+`,
+			wantErrOut: "egress policy for actor \"c1\" in atespace \"team-a\" unchanged\n",
+		},
+		{
+			name:      "unchanged empty rules (empty slice vs nil) skips update",
+			outputFmt: "table",
+			policy:    testEgressPolicy(func(p *ateapi.EgressPolicy) { p.Rules = []*ateapi.EgressRule{} }),
+			applier: &fakeEgressPolicyApplier{
+				getPolicy: testEgressPolicy(withStoredMeta(1, now.Add(-5*time.Minute)), func(p *ateapi.EgressPolicy) { p.Rules = nil }),
+			},
+			wantCalls:  []string{"GetActorEgressPolicy"},
+			wantGetReq: wantGetReq,
+			wantOut: `ATESPACE   ACTOR   RULES   VERSION   AGE
+team-a     c1      0       1         5m
+`,
+			wantErrOut: "egress policy for actor \"c1\" in atespace \"team-a\" unchanged\n",
+		},
+		{
+			name:      "update copies stored uid and version (table)",
+			outputFmt: "table",
+			policy:    testEgressPolicy(withNewRules),
+			applier: &fakeEgressPolicyApplier{
+				getPolicy: testEgressPolicy(withStoredMeta(1, now.Add(-5*time.Minute)), withDefaultedRules),
+				updatePolicy: testEgressPolicy(withStoredMeta(2, now.Add(-5*time.Minute)), withNewRules, func(p *ateapi.EgressPolicy) {
+					p.Metadata.UpdateTime = timestamppb.New(now)
+				}),
+			},
+			wantCalls:  []string{"GetActorEgressPolicy", "UpdateActorEgressPolicy"},
+			wantGetReq: wantGetReq,
+			wantUpdateReq: &ateapi.UpdateActorEgressPolicyRequest{
+				Actor: actor,
+				EgressPolicy: testEgressPolicy(withNewRules, func(p *ateapi.EgressPolicy) {
+					p.Metadata.Uid = uid
+					p.Metadata.Version = 1
+				}),
+			},
+			wantOut: `ATESPACE   ACTOR   RULES   VERSION   AGE
+team-a     c1      1       2         5m
+`,
+			wantErrOut: "egress policy for actor \"c1\" in atespace \"team-a\" updated\n",
+		},
+		{
+			name:         "missing actor fails before create",
+			outputFmt:    "table",
+			policy:       testEgressPolicy(),
+			applier:      &fakeEgressPolicyApplier{getErr: policyNotFound, fakeActorReader: fakeActorReader{actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")}},
+			wantCalls:    []string{"GetActorEgressPolicy", "GetActor"},
+			wantGetReq:   wantGetReq,
+			wantActorReq: wantActorReq,
+			wantErr:      `actor "c1" in atespace "team-a" not found`,
+		},
+		{
+			name:      "unknown nested HTTP rule field fails loudly",
+			outputFmt: "table",
+			policy:    testEgressPolicy(),
+			applier: &fakeEgressPolicyApplier{
+				getPolicy: testEgressPolicy(withStoredMeta(1, now.Add(-5*time.Minute)), withDefaultedRules, func(p *ateapi.EgressPolicy) {
+					p.Rules[0].Http.ProtoReflect().SetUnknown(unknownFieldBytes())
+				}),
+			},
+			wantCalls:  []string{"GetActorEgressPolicy"},
+			wantGetReq: wantGetReq,
+			wantErr:    "unknown to this kubectl-ate version",
+		},
+		{
+			name:        "get error wraps gRPC status",
+			outputFmt:   "table",
+			policy:      testEgressPolicy(),
+			applier:     &fakeEgressPolicyApplier{getErr: status.Error(codes.Unavailable, "api-server down")},
+			wantCalls:   []string{"GetActorEgressPolicy"},
+			wantGetReq:  wantGetReq,
+			wantErr:     "failed to get",
+			wantErrCode: codes.Unavailable,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			origPolicy := proto.CloneOf(tc.policy)
+			var stdout, stderr bytes.Buffer
+			runner := &applyEgressPolicyRunner{
+				applier:   tc.applier,
+				actor:     actor,
+				policy:    tc.policy,
+				outputFmt: tc.outputFmt,
+				stdout:    &stdout,
+				stderr:    &stderr,
+			}
+			err := runner.Run(t.Context())
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Run() error = %v, want substring %q", err, tc.wantErr)
+				}
+				if tc.wantErrCode != codes.OK && status.Code(err) != tc.wantErrCode {
+					t.Errorf("status.Code(err) = %v, want %v", status.Code(err), tc.wantErrCode)
+				}
+			} else if err != nil {
+				t.Fatalf("Run() unexpected error = %v", err)
+			}
+			if diff := cmp.Diff(origPolicy, tc.policy, protocmp.Transform()); diff != "" {
+				t.Errorf("input policy was mutated (-before +after):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantCalls, tc.applier.calls); diff != "" {
+				t.Errorf("calls (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantGetReq, tc.applier.getReq, protocmp.Transform()); diff != "" {
+				t.Errorf("get request (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantActorReq, tc.applier.actorReq, protocmp.Transform()); diff != "" {
+				t.Errorf("actor request (-want +got):\n%s", diff)
+			}
+			if tc.wantCreateReq != nil {
+				if diff := cmp.Diff(tc.wantCreateReq, tc.applier.createReq, protocmp.Transform()); diff != "" {
+					t.Errorf("create request (-want +got):\n%s", diff)
+				}
+			}
+			if tc.wantUpdateReq != nil {
+				if diff := cmp.Diff(tc.wantUpdateReq, tc.applier.updateReq, protocmp.Transform()); diff != "" {
+					t.Errorf("update request (-want +got):\n%s", diff)
+				}
+			}
+			if diff := cmp.Diff(tc.wantOut, stdout.String()); diff != "" {
+				t.Errorf("stdout (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantErrOut, stderr.String()); diff != "" {
+				t.Errorf("stderr (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

@@ -75,6 +75,11 @@ func TestHelpOutputGoesToStdout(t *testing.T) {
 			wantStdoutSub: "Usage:\n  kubectl-ate get [command]",
 		},
 		{
+			name:          "apply --help",
+			args:          []string{"apply", "--help"},
+			wantStdoutSub: "Usage:\n  kubectl-ate apply [command]",
+		},
+		{
 			name:          "leaf -h",
 			args:          []string{"create", "actor", "-h"},
 			wantStdoutSub: "Usage:\n  kubectl-ate create actor <actor-name> [flags]",
@@ -317,6 +322,66 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			wantUsageLine: "kubectl-ate update egress-policy <actor-name> -f <manifest> [flags]",
 		},
 		{
+			name:          "apply egress-policy missing all",
+			args:          []string{"apply", "egress-policy"},
+			wantErrorLine: "Error: missing required argument <actor-name> and required flags -a/--atespace, -f/--filename",
+			wantUsageLine: "kubectl-ate apply egress-policy <actor-name> -f <manifest> [flags]",
+		},
+		{
+			name:          "apply egress-policy rejects multiple args",
+			args:          []string{"apply", "egress-policy", "c1", "c2", "-a", "team-a", "-f", "policy.yaml"},
+			wantErrorLine: `Error: expected 1 <actor-name> argument, received 2 ("c1", "c2")`,
+			wantUsageLine: "kubectl-ate apply egress-policy <actor-name> -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy missing -f",
+			args:          []string{"apply", "access-policy", "-a", "team-a"},
+			wantErrorLine: "Error: missing required flag -f/--filename",
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy with no flags",
+			args:          []string{"apply", "access-policy"},
+			wantErrorLine: "Error: one of -a/--atespace or --global is required; missing required flag -f/--filename",
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy swallowed flag after -a",
+			args:          []string{"apply", "access-policy", "-a", "-f", "policy.yaml"},
+			wantErrorLine: `Error: flag "-a/--atespace" requires a value, got flag "-f"`,
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy unexpected positional arg",
+			args:          []string{"apply", "access-policy", "extra", "-a", "team-a", "-f", "policy.yaml"},
+			wantErrorLine: `Error: "kubectl-ate apply access-policy" takes no positional arguments (received "extra")`,
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy without -a or --global",
+			args:          []string{"apply", "access-policy", "-f", "policy.yaml"},
+			wantErrorLine: "Error: one of -a/--atespace or --global is required",
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy with whitespace-only -a",
+			args:          []string{"apply", "access-policy", "-a", "   ", "-f", "policy.yaml"},
+			wantErrorLine: "Error: one of -a/--atespace or --global is required",
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy with both -a and --global",
+			args:          []string{"apply", "access-policy", "-a", "team-a", "--global", "-f", "policy.yaml"},
+			wantErrorLine: "Error: -a/--atespace and --global are mutually exclusive",
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
+			name:          "apply access-policy with both -a and --global and missing -f",
+			args:          []string{"apply", "access-policy", "-a", "team-a", "--global"},
+			wantErrorLine: "Error: -a/--atespace and --global are mutually exclusive; missing required flag -f/--filename",
+			wantUsageLine: "kubectl-ate apply access-policy (-a <atespace> | --global) -f <manifest> [flags]",
+		},
+		{
 			name:          "delete egress-policy missing all",
 			args:          []string{"delete", "egress-policy"},
 			wantErrorLine: "Error: missing required argument <actor-name> and required flag -a/--atespace",
@@ -493,6 +558,24 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			args:          []string{"create"},
 			wantErrorLine: "Error: missing required subcommand",
 			wantUsageLine: "kubectl-ate create [command]",
+		},
+		{
+			name:          "bare apply command",
+			args:          []string{"apply"},
+			wantErrorLine: "Error: missing required subcommand",
+			wantUsageLine: "kubectl-ate apply [command]",
+		},
+		{
+			name:          "apply plural access-policies rejected",
+			args:          []string{"apply", "access-policies", "-a", "team-a", "-f", "policy.yaml"},
+			wantErrorLine: `Error: unknown subcommand "access-policies"`,
+			wantUsageLine: "kubectl-ate apply [command]",
+		},
+		{
+			name:          "apply plural egress-policies rejected",
+			args:          []string{"apply", "egress-policies", "c1", "-a", "team-a", "-f", "policy.yaml"},
+			wantErrorLine: `Error: unknown subcommand "egress-policies"`,
+			wantUsageLine: "kubectl-ate apply [command]",
 		},
 		{
 			name:          "create plural actors suggests singular actor",

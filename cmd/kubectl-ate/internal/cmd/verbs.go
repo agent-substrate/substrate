@@ -24,6 +24,7 @@ var (
 	getCmd     = &cobra.Command{Use: "get", Short: "Display one or many resources"}
 	createCmd  = &cobra.Command{Use: "create", Short: "Create a resource"}
 	updateCmd  = &cobra.Command{Use: "update", Short: "Update a resource"}
+	applyCmd   = &cobra.Command{Use: "apply", Short: "Create or update a resource from a manifest"}
 	deleteCmd  = &cobra.Command{Use: "delete", Short: "Delete a resource"}
 	resumeCmd  = &cobra.Command{Use: "resume", Short: "Resume a resource"}
 	suspendCmd = &cobra.Command{Use: "suspend", Short: "Suspend a resource"}
@@ -32,7 +33,7 @@ var (
 )
 
 func init() {
-	for _, c := range []*cobra.Command{getCmd, createCmd, updateCmd, deleteCmd, resumeCmd, suspendCmd, logsCmd, topCmd, proxyCmd} {
+	for _, c := range []*cobra.Command{getCmd, createCmd, updateCmd, applyCmd, deleteCmd, resumeCmd, suspendCmd, logsCmd, topCmd, proxyCmd} {
 		requireSubcommand(c)
 		rootCmd.AddCommand(c)
 	}

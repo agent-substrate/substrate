@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package defaults applies each resource's field defaults in place. It is
-// its own package, separate from validation, so that both the RPC handlers
-// and the store layer (which needs to backfill defaults on read, without
-// depending on the RPC handlers) can call it.
+// Package defaults applies each resource's field defaults in place.
 package defaults
 
 import (

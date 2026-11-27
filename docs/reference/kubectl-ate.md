@@ -294,6 +294,9 @@ kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml > policy.yaml
 $EDITOR policy.yaml
 kubectl ate update egress-policy <actor-name> -a <atespace> -f policy.yaml
 
+# Create or update an actor's egress policy from a manifest.
+kubectl ate apply egress-policy <actor-name> -a <atespace> -f policy.yaml
+
 # Delete an actor's egress policy; the actor keeps running with all egress denied.
 kubectl ate delete egress-policy <actor-name> -a <atespace>
 
@@ -306,6 +309,10 @@ kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --versio
 * `create` can take a manifest with no `metadata`, taking `name` and `atespace` from the command line.
 * `update` replaces the entire policy and the manifest metadata must match `uid`
   and `version` for the `EgressPolicy` being updated.
+* `apply` creates the policy if missing, leaves it unchanged when it already
+  matches the stored policy, or replaces it using the stored `uid` and
+  `version`. If the manifest specifies `metadata.uid` and `metadata.version`,
+  both are enforced as update preconditions.
 * `delete` with the optional `--uid` and `--version` flags removes the policy only if
   the given values still match what `get -o yaml` reported; the server answers `Aborted` otherwise.
 

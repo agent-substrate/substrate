@@ -265,6 +265,7 @@ bindings:
 kubectl ate --token-file me.token create access-policy -a team-a -f policy.yaml
 kubectl ate --token-file me.token get access-policy -a team-a -o yaml > current.yaml
 kubectl ate --token-file me.token update access-policy -a team-a -f current.yaml
+kubectl ate --token-file me.token apply access-policy -a team-a -f policy.yaml
 kubectl ate --token-file me.token delete access-policy -a team-a
 ```
 
@@ -273,6 +274,10 @@ kubectl ate --token-file me.token delete access-policy -a team-a
 - `update` replaces the whole policy and needs the `uid` and `version` from
   `get -o yaml`. It fails if the policy changed, or was deleted and recreated,
   since.
+- `apply` creates the policy if missing, leaves it unchanged when it already
+  matches, or replaces it using the stored `uid` and `version`. If the manifest
+  sets `metadata.uid` and `metadata.version`, both are enforced as update
+  preconditions.
 - The global policy can't be deleted; update it with no bindings instead.
 - Deleting an atespace deletes its policy, so a recreated atespace starts
   with none. A request authorized against the old atespace and still in

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -325,6 +326,250 @@ func TestAccessPolicyRunner(t *testing.T) {
 			}
 			if !strings.Contains(stderr.String(), tc.wantStderr) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.wantStderr)
+			}
+		})
+	}
+}
+
+// fakeAccessPolicyApplier records every RPC made by accessPolicyRunner.apply
+// and answers each verb independently.
+type fakeAccessPolicyApplier struct {
+	getPolicy    *ateapi.AccessPolicy
+	getErr       error
+	createPolicy *ateapi.AccessPolicy
+	createErr    error
+	updatePolicy *ateapi.AccessPolicy
+	updateErr    error
+	atespaceErr  error
+
+	calls       []string
+	getReq      any
+	createReq   any
+	updateReq   any
+	atespaceReq *ateapi.GetAtespaceRequest
+}
+
+func (f *fakeAccessPolicyApplier) GetGlobalAccessPolicy(_ context.Context, req *ateapi.GetGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "GetGlobalAccessPolicy")
+	f.getReq = req
+	return f.getPolicy, f.getErr
+}
+
+func (f *fakeAccessPolicyApplier) CreateGlobalAccessPolicy(_ context.Context, req *ateapi.CreateGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "CreateGlobalAccessPolicy")
+	f.createReq = req
+	return f.createPolicy, f.createErr
+}
+
+func (f *fakeAccessPolicyApplier) UpdateGlobalAccessPolicy(_ context.Context, req *ateapi.UpdateGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "UpdateGlobalAccessPolicy")
+	f.updateReq = req
+	return f.updatePolicy, f.updateErr
+}
+
+func (f *fakeAccessPolicyApplier) GetAtespaceAccessPolicy(_ context.Context, req *ateapi.GetAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "GetAtespaceAccessPolicy")
+	f.getReq = req
+	return f.getPolicy, f.getErr
+}
+
+func (f *fakeAccessPolicyApplier) CreateAtespaceAccessPolicy(_ context.Context, req *ateapi.CreateAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "CreateAtespaceAccessPolicy")
+	f.createReq = req
+	return f.createPolicy, f.createErr
+}
+
+func (f *fakeAccessPolicyApplier) UpdateAtespaceAccessPolicy(_ context.Context, req *ateapi.UpdateAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "UpdateAtespaceAccessPolicy")
+	f.updateReq = req
+	return f.updatePolicy, f.updateErr
+}
+
+func (f *fakeAccessPolicyApplier) DeleteAtespaceAccessPolicy(_ context.Context, _ *ateapi.DeleteAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.calls = append(f.calls, "DeleteAtespaceAccessPolicy")
+	return nil, status.Error(codes.Unimplemented, "unexpected delete")
+}
+
+func (f *fakeAccessPolicyApplier) GetAtespace(_ context.Context, req *ateapi.GetAtespaceRequest, _ ...grpc.CallOption) (*ateapi.Atespace, error) {
+	f.calls = append(f.calls, "GetAtespace")
+	f.atespaceReq = req
+	if f.atespaceErr != nil {
+		return nil, f.atespaceErr
+	}
+	return &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: req.GetAtespace().GetName()}}, nil
+}
+
+func TestAccessPolicyRunner_Apply(t *testing.T) {
+	t.Parallel()
+
+	teamA := accessPolicyScope{atespace: "team-a"}
+	global := accessPolicyScope{}
+	teamAGetReq := &ateapi.GetAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, Name: resources.SingletonName}
+	globalGetReq := &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName}
+	teamAAtespaceReq := &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}}
+	notFound := status.Error(codes.NotFound, "not found")
+
+	tests := []struct {
+		name            string
+		scope           accessPolicyScope
+		outputFmt       string
+		policy          *ateapi.AccessPolicy
+		client          *fakeAccessPolicyApplier
+		wantCalls       []string
+		wantGetReq      any
+		wantCreateReq   any
+		wantUpdateReq   any
+		wantAtespaceReq *ateapi.GetAtespaceRequest
+		wantStdout      string
+		wantStderr      string
+		wantErr         string
+		wantErrCode     codes.Code
+	}{
+		{
+			name:            "atespace create when missing (table)",
+			scope:           teamA,
+			outputFmt:       "table",
+			policy:          testAccessPolicy(),
+			client:          &fakeAccessPolicyApplier{getErr: notFound, createPolicy: testAccessPolicy(withMeta("u-1", 1))},
+			wantCalls:       []string{"GetAtespaceAccessPolicy", "GetAtespace", "CreateAtespaceAccessPolicy"},
+			wantGetReq:      teamAGetReq,
+			wantAtespaceReq: teamAAtespaceReq,
+			wantCreateReq:   &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, AccessPolicy: testAccessPolicy()},
+			wantStdout:      "team-a   owner   user:alice",
+			wantStderr:      "access policy for atespace \"team-a\" created\n",
+		},
+		{
+			name:          "global create when missing (yaml keeps stderr empty)",
+			scope:         global,
+			outputFmt:     "yaml",
+			policy:        testAccessPolicy(),
+			client:        &fakeAccessPolicyApplier{getErr: notFound, createPolicy: testAccessPolicy(withMeta("u-1", 1))},
+			wantCalls:     []string{"GetGlobalAccessPolicy", "CreateGlobalAccessPolicy"},
+			wantGetReq:    globalGetReq,
+			wantCreateReq: &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: testAccessPolicy()},
+			wantStdout:    "uid: u-1",
+		},
+		{
+			name:       "global unchanged uses natural global status label (table)",
+			scope:      global,
+			outputFmt:  "table",
+			policy:     testAccessPolicy(),
+			client:     &fakeAccessPolicyApplier{getPolicy: testAccessPolicy(withMeta("u-1", 2))},
+			wantCalls:  []string{"GetGlobalAccessPolicy"},
+			wantGetReq: globalGetReq,
+			wantStdout: "<global>   owner   user:alice",
+			wantStderr: "global access policy unchanged\n",
+		},
+		{
+			name:       "atespace unchanged (json keeps stderr empty)",
+			scope:      teamA,
+			outputFmt:  "json",
+			policy:     testAccessPolicy(),
+			client:     &fakeAccessPolicyApplier{getPolicy: testAccessPolicy(withMeta("u-1", 2))},
+			wantCalls:  []string{"GetAtespaceAccessPolicy"},
+			wantGetReq: teamAGetReq,
+			wantStdout: `"uid": "u-1"`,
+		},
+		{
+			name:          "atespace update copies stored uid and version (table)",
+			scope:         teamA,
+			outputFmt:     "table",
+			policy:        testAccessPolicy(withMember("user:bob")),
+			client:        &fakeAccessPolicyApplier{getPolicy: testAccessPolicy(withMeta("u-1", 2)), updatePolicy: testAccessPolicy(withMeta("u-1", 3), withMember("user:bob"))},
+			wantCalls:     []string{"GetAtespaceAccessPolicy", "UpdateAtespaceAccessPolicy"},
+			wantGetReq:    teamAGetReq,
+			wantUpdateReq: &ateapi.UpdateAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, AccessPolicy: testAccessPolicy(withMeta("u-1", 2), withMember("user:bob"))},
+			wantStdout:    "team-a   owner   user:bob",
+			wantStderr:    "access policy for atespace \"team-a\" updated\n",
+		},
+		{
+			name:      "global update clears bindings (table)",
+			scope:     global,
+			outputFmt: "table",
+			policy:    testAccessPolicy(func(p *ateapi.AccessPolicy) { p.Bindings = []*ateapi.Binding{} }),
+			client: &fakeAccessPolicyApplier{
+				getPolicy:    testAccessPolicy(withMeta("u-1", 2)),
+				updatePolicy: testAccessPolicy(withMeta("u-1", 3), func(p *ateapi.AccessPolicy) { p.Bindings = nil }),
+			},
+			wantCalls:     []string{"GetGlobalAccessPolicy", "UpdateGlobalAccessPolicy"},
+			wantGetReq:    globalGetReq,
+			wantUpdateReq: &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2}}},
+			wantStdout:    "<global>   <none>   <none>",
+			wantStderr:    "global access policy updated\n",
+		},
+		{
+			name:            "missing atespace fails before create",
+			scope:           teamA,
+			outputFmt:       "table",
+			policy:          testAccessPolicy(),
+			client:          &fakeAccessPolicyApplier{getErr: notFound, atespaceErr: notFound},
+			wantCalls:       []string{"GetAtespaceAccessPolicy", "GetAtespace"},
+			wantGetReq:      teamAGetReq,
+			wantAtespaceReq: teamAAtespaceReq,
+			wantErr:         `atespace "team-a" not found`,
+		},
+		{
+			name:        "get error wraps gRPC status",
+			scope:       teamA,
+			outputFmt:   "table",
+			policy:      testAccessPolicy(),
+			client:      &fakeAccessPolicyApplier{getErr: status.Error(codes.PermissionDenied, "denied")},
+			wantCalls:   []string{"GetAtespaceAccessPolicy"},
+			wantGetReq:  teamAGetReq,
+			wantErr:     "failed to get",
+			wantErrCode: codes.PermissionDenied,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			origPolicy := proto.CloneOf(tc.policy)
+			var stdout, stderr bytes.Buffer
+			r := &accessPolicyRunner{client: tc.client, scope: tc.scope, outputFmt: tc.outputFmt, stdout: &stdout, stderr: &stderr}
+			err := r.apply(t.Context(), tc.policy)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("apply() error = %v, want it to contain %q", err, tc.wantErr)
+				}
+				if tc.wantErrCode != codes.OK && status.Code(err) != tc.wantErrCode {
+					t.Errorf("status.Code(err) = %v, want %v", status.Code(err), tc.wantErrCode)
+				}
+			} else if err != nil {
+				t.Fatalf("apply() unexpected error = %v", err)
+			}
+			if diff := cmp.Diff(origPolicy, tc.policy, protocmp.Transform()); diff != "" {
+				t.Errorf("input policy was mutated (-before +after):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantCalls, tc.client.calls); diff != "" {
+				t.Errorf("calls (-want +got):\n%s", diff)
+			}
+			if tc.wantGetReq != nil {
+				if diff := cmp.Diff(tc.wantGetReq, tc.client.getReq, protocmp.Transform()); diff != "" {
+					t.Errorf("get request (-want +got):\n%s", diff)
+				}
+			}
+			if tc.wantCreateReq != nil {
+				if diff := cmp.Diff(tc.wantCreateReq, tc.client.createReq, protocmp.Transform()); diff != "" {
+					t.Errorf("create request (-want +got):\n%s", diff)
+				}
+			}
+			if tc.wantUpdateReq != nil {
+				if diff := cmp.Diff(tc.wantUpdateReq, tc.client.updateReq, protocmp.Transform()); diff != "" {
+					t.Errorf("update request (-want +got):\n%s", diff)
+				}
+			}
+			if diff := cmp.Diff(tc.wantAtespaceReq, tc.client.atespaceReq, protocmp.Transform()); diff != "" {
+				t.Errorf("atespace request (-want +got):\n%s", diff)
+			}
+			if tc.wantStdout != "" && !strings.Contains(stdout.String(), tc.wantStdout) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tc.wantStdout)
+			}
+			if tc.wantStdout == "" && tc.wantErr != "" && stdout.String() != "" {
+				t.Errorf("stdout = %q, want empty on error", stdout.String())
+			}
+			if diff := cmp.Diff(tc.wantStderr, stderr.String()); diff != "" {
+				t.Errorf("stderr (-want +got):\n%s", diff)
 			}
 		})
 	}
