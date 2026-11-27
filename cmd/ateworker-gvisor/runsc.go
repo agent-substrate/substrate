@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -190,6 +191,10 @@ func (r *runsc) checkpointArgs(containerName, checkpointPath string, fsCheckpoin
 	return r.buildArgs("checkpoint", containerName, extra...)
 }
 
+// errSandboxSaving marks a checkpoint error that may have left the sentry
+// saving. The sandbox exits when its save ends.
+var errSandboxSaving = errors.New("the sandbox may have kept saving")
+
 func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
 	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
 
@@ -197,6 +202,10 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && !exit.Exited() {
+		return fmt.Errorf("while running `runsc checkpoint`: %w: %w", err, errSandboxSaving)
+	}
 	if err != nil {
 		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
 	}

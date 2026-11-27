@@ -44,6 +44,8 @@ type hostedActor struct {
 	session *workloadSession
 	// usage is this activation's epoch, CPU baseline, and latest sample.
 	usage *workerstats.Activation
+	// leaf is used to read the stats of the leaf cgroup.
+	leaf leafUsage
 	// deadReported keeps the usage sweep to one warning per activation.
 	deadReported atomic.Bool
 	// ctx is canceled when the actor is replaced or unhosted.
@@ -60,6 +62,10 @@ type hostedActor struct {
 	memoryBytes int64
 	// memory kills the sandbox once it is stuck at its memory.high.
 	memory cgroup.MemoryGuard
+	// memoryHigh is the sandbox leaf's memory.high (or "max" for none), once
+	// throttleSandboxMemory left the leaf without memory.max.
+	// Set under the actor's lock.
+	memoryHigh string
 }
 
 // admitActor reserves capacity before network setup. An actor that is already

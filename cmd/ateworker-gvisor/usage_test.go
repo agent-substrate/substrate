@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -237,5 +238,51 @@ func TestGetWorkloadStatsStoresItsSample(t *testing.T) {
 	}
 	if h.usage.Latest() != got.GetSample() {
 		t.Error("the keyed read's sample is not the one the cache serves")
+	}
+}
+
+// TestFrozenLeafReadsAsBefore verifies that readings taken while the
+// leaf's reading is frozen repeats the last one.
+func TestFrozenLeafReadsAsBefore(t *testing.T) {
+	ctx := context.Background()
+	s := newStatsService(t, healthyCgroup)
+	h := hostWithEpoch(s, time.Now(), true)
+	leaf := filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer))
+
+	s.readFinal(ctx, h)
+	before := h.usage.Latest()
+	h.leaf.freezeReading()
+	// The snapshot's page cache.
+	for _, name := range []string{"memory.current", "memory.peak"} {
+		if err := os.WriteFile(filepath.Join(leaf, name), []byte("4309647360\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s.sweepUsage(ctx)
+	frozen := h.usage.Latest()
+	if frozen == before {
+		t.Fatal("no sample stored while frozen")
+	}
+	if frozen.GetMemoryCurrentBytes() != before.GetMemoryCurrentBytes() || frozen.GetMemoryPeakBytes() != before.GetMemoryPeakBytes() {
+		t.Errorf("sample while frozen: current %d peak %d, want current %d peak %d from before",
+			frozen.GetMemoryCurrentBytes(), frozen.GetMemoryPeakBytes(), before.GetMemoryCurrentBytes(), before.GetMemoryPeakBytes())
+	}
+}
+
+// TestLeafUsageWithoutReading verifies that a frozen leaf with no prior
+// reading still reads the real value from the kernel.
+func TestLeafUsageWithoutReading(t *testing.T) {
+	dir := t.TempDir()
+	for name, v := range map[string]string{"memory.current": "950", "memory.peak": "4110"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var u leafUsage
+	u.freezeReading()
+	if got, err := u.read(dir, cgroupstats.Read); err != nil || got.MemoryCurrentBytes != 950 || got.MemoryPeakBytes != 4110 {
+		t.Errorf("read of a leaf frozen before any reading = current %d peak %d, err %v, want current 950 peak 4110",
+			got.MemoryCurrentBytes, got.MemoryPeakBytes, err)
 	}
 }

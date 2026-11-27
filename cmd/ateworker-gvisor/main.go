@@ -971,13 +971,15 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			return nil, fmt.Errorf("while waiting to checkpoint: %w", ctx.Err())
 		}
 	}
-	// the sentry leaves its sandbox leaf for the checkpoint cgroup
+	// the checkpoint lifts the sandbox leaf's memory.high, or moves the sentry
+	// out of the leaf
 	var memoryLimit uint64
 	if hosted != nil {
 		memoryLimit = hosted.memory.Pause()
 	}
 	cacheHigh, borrowed := s.checkpointCacheLimit(hosted, req.GetActorUid())
-	err = checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), cacheHigh, req.GetActorDirs(), checkpointFn, terminate)
+	waitExit := func() bool { return waitSandboxExited(context.WithoutCancel(ctx), sandbox) }
+	err = checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), cacheHigh, req.GetActorDirs(), hosted, waitExit, checkpointFn, terminate)
 	if s.checkpointWrites != nil {
 		<-s.checkpointWrites
 	}
