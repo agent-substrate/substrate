@@ -97,7 +97,9 @@ ${K} -n "${TARGET_NS}" create deployment whoami --image=traefik/whoami >/dev/nul
 ${K} -n "${TARGET_NS}" expose deployment whoami --port="${TARGET_PORT}" --target-port=80 >/dev/null 2>&1 || true
 ${K} -n "${TARGET_NS}" rollout status deployment/whoami --timeout=120s
 TARGET_IP=$(${K} -n "${TARGET_NS}" get svc whoami -o jsonpath='{.spec.clusterIP}')
-info "target = ${TARGET_IP}:${TARGET_PORT}"
+TARGET_AUTHORITY="${TARGET_IP}:${TARGET_PORT}"
+if [[ "${TARGET_IP}" == *:* ]]; then TARGET_AUTHORITY="[${TARGET_IP}]:${TARGET_PORT}"; fi
+info "target = ${TARGET_AUTHORITY}"
 
 log "create + resume Actor ${ATESPACE}/${ACTOR}, allow all its egress"
 ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
@@ -128,7 +130,7 @@ ${KATE} proxy actor "${ACTOR}" 18099:80 -a "${ATESPACE}" >/tmp/egress-pf.log 2>&
 PF=$!; sleep 4
 CODE=$(curl -s -o /tmp/egress-body.txt -w '%{http_code}' -X POST http://localhost:18099/ \
   -H 'Content-Type: application/json' \
-  -d "{\"url\":\"http://${TARGET_IP}:${TARGET_PORT}/\"}" || true)
+  -d "{\"url\":\"http://${TARGET_AUTHORITY}/\"}" || true)
 kill "${PF}" >/dev/null 2>&1 || true
 sleep 1
 info "actor round-trip HTTP ${CODE}"
@@ -146,7 +148,7 @@ if [[ "${DATAPLANE}" == "envoy" ]]; then
 else
   # agentgateway's structured access log records the CONNECT authority. Actor
   # authentication is also covered by the successful request and negative test.
-  ALLOWED_LOG_PATTERN="substrate.connect.authority.*${TARGET_IP}:${TARGET_PORT}"
+  ALLOWED_LOG_PATTERN="substrate.connect.authority.*${TARGET_AUTHORITY//\[/\\[}"
 fi
 if LINE=$(wait_egress_log "${BEFORE}" "${ALLOWED_LOG_PATTERN}"); then
   pass "gateway logged the CONNECT: ${LINE}"
@@ -197,7 +199,7 @@ PROBE=$(${K} -n ate-system exec ${PROBE_POD} -- sh -c "curl -s -o /dev/null -w '
   --proxy-cacert /run/servicedns.podcert.ate.dev/trust-bundle.pem \
   --proxy-cert /run/podidentity.podcert.ate.dev/credential-bundle.pem \
   --proxy-key /run/podidentity.podcert.ate.dev/credential-bundle.pem \
-  --proxytunnel -x https://atenet-egress.ate-system.svc:443 http://${TARGET_IP}:${TARGET_PORT}/; echo \" exit=\$?\"" || true)
+  --proxytunnel -x https://atenet-egress.ate-system.svc:443 http://${TARGET_AUTHORITY}/; echo \" exit=\$?\"" || true)
 CODE=${PROBE%% *}
 info "pod-identity CONNECT attempt: http_connect=${CODE:-000}${PROBE#"${CODE}"}"
 if [[ "${CODE}" != "200" ]]; then

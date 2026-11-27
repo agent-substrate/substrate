@@ -150,7 +150,7 @@ data:
         mode: tunnel
       accessLog:
         add:
-          substrate.connect.authority: 'destination.address + ":" + string(destination.port)'
+          substrate.connect.authority: '(destination.address.contains(":") ? "[" + destination.address + "]" : destination.address) + ":" + string(destination.port)'
       substrateEgressActorResolution:
         host: api.ate-system.svc:443
         policies:
@@ -180,7 +180,7 @@ data:
         tcpRoutes:
         - backends:
           - dynamic:
-              target: 'destination.address + ":" + string(destination.port)'
+              target: '(destination.address.contains(":") ? "[" + destination.address + "]" : destination.address) + ":" + string(destination.port)'
       - protocol: HTTP
         routes:
         - name: reject-websocket-upgrade
@@ -198,7 +198,7 @@ data:
               body: WebSocket egress is not supported
         - backends:
           - dynamic:
-              target: 'destination.address + ":" + string(destination.port)'
+              target: '(destination.address.contains(":") ? "[" + destination.address + "]" : destination.address) + ":" + string(destination.port)'
           policies:
             substrateEgress:
               host: api.ate-system.svc:443
