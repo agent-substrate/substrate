@@ -21,7 +21,7 @@ data:
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
-      statsAddr: 0.0.0.0:15020
+      statsAddr: "[::]:15020"
       backend:
         # See the ingress-only loopback rationale in ../agentgateway/configmap.yaml.
         allowDynamicLoopback: true
