@@ -335,7 +335,7 @@ func TestFetchAsset(t *testing.T) {
 			{"upper-case sha256", "gs://" + testBucket + "/kata-assets/vmlinux", strings.ToUpper(sum), 1 << 20},
 			{"short sha256", "gs://" + testBucket + "/kata-assets/vmlinux", sum[:63], 1 << 20},
 			{"zero max_bytes", "gs://" + testBucket + "/kata-assets/vmlinux", sum, 0},
-			{"over-long URI", "gs://" + testBucket + "/" + strings.Repeat("x/", assetfetch.MaxURIBytes/2) + "vmlinux", sum, 1 << 20},
+			{"over-long URI", "gs://" + testBucket + "/" + strings.Repeat("x/", assetfetch.MaxURICharacters/2) + "vmlinux", sum, 1 << 20},
 		} {
 			_, err := f.client.FetchAsset(t.Context(), &objectstore.FetchAssetRequest{
 				AssetUri: tc.uri, Sha256: tc.sum, WritePath: dst, MaxBytes: tc.max,
@@ -420,20 +420,20 @@ func testFetchAssetRefusesSnapshots(t *testing.T, scheme string) {
 	}
 }
 
-// TestFetchAssetManySegmentURIs sends URIs of up to assetfetch.MaxURIBytes made of
+// TestFetchAssetManySegmentURIs sends URIs of up to assetfetch.MaxURICharacters made of
 // as many path segments as fit, which the snapshot check reads in one pass.
 func TestFetchAssetManySegmentURIs(t *testing.T) {
 	f := newAssetFixture(t, "s3")
 	dst := f.writeFile(t, untouched)
 	// pad returns "s3://<bucket>/" + repeated unit + a non-empty filler
-	// segment + suffix, exactly assetfetch.MaxURIBytes long.
+	// segment + suffix, exactly assetfetch.MaxURICharacters long.
 	pad := func(unit, suffix string) string {
 		head := "s3://" + testBucket + "/"
-		avail := assetfetch.MaxURIBytes - len(head) - len(suffix)
+		avail := assetfetch.MaxURICharacters - len(head) - len(suffix)
 		n := (avail - 1) / len(unit)
 		uri := head + strings.Repeat(unit, n) + strings.Repeat("y", avail-n*len(unit)) + suffix
-		if len(uri) != assetfetch.MaxURIBytes {
-			t.Fatalf("pad built a %d byte URI, want %d", len(uri), assetfetch.MaxURIBytes)
+		if len(uri) != assetfetch.MaxURICharacters {
+			t.Fatalf("pad built a %d byte URI, want %d", len(uri), assetfetch.MaxURICharacters)
 		}
 		return uri
 	}

@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"go.ate.dev/substrate/api/objectstore/v1"
 	"golang.org/x/sync/semaphore"
@@ -49,20 +50,24 @@ import (
 	"k8s.io/apimachinery/pkg/api/validate/content"
 )
 
-// MaxURIBytes bounds asset_uri, as the SandboxConfig CRD bounds
+// MaxURICharacters bounds asset_uri, as the SandboxConfig CRD bounds
 // AssetFile.url, so the checks below stay cheap whatever a SandboxConfig names.
-const MaxURIBytes = 2048
+// The CRD's MaxLength counts characters (code points), not bytes, so this
+// limit must too: a URI of non-ASCII object names that the API server admitted
+// is at most MaxURICharacters characters, which may be several times as many
+// bytes, and measuring bytes would refuse it.
+const MaxURICharacters = 2048
 
 // sha256Pattern matches the SandboxConfig's sha256 format.
 var sha256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-// ParseURI parses an asset URI of at most MaxURIBytes that carries no user
+// ParseURI parses an asset URI of at most MaxURICharacters that carries no user
 // info, query or fragment and is not opaque. Its errors do not quote the URI,
 // since user info or a query may carry credentials; once it succeeds, the URI
 // may be named in messages.
 func ParseURI(uri string) (*url.URL, error) {
-	if len(uri) > MaxURIBytes {
-		return nil, status.Errorf(codes.InvalidArgument, "asset URI is %d bytes long, more than the limit of %d", len(uri), MaxURIBytes)
+	if length := utf8.RuneCountInString(uri); length > MaxURICharacters {
+		return nil, status.Errorf(codes.InvalidArgument, "asset URI is %d characters long, more than the limit of %d", length, MaxURICharacters)
 	}
 	u, err := url.Parse(uri)
 	if err != nil {
