@@ -144,7 +144,7 @@ func loadAccessPolicyManifest(in io.Reader, filename string) (*ateapi.AccessPoli
 	}
 	policy, err := accessPolicyFromManifest(data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse access policy manifest %q: %w", filename, err)
+		return nil, formatManifestParseError("access policy", filename, err)
 	}
 	if policy.Metadata == nil {
 		policy.Metadata = &ateapi.ResourceMetadata{}

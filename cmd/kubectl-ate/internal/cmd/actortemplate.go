@@ -35,7 +35,7 @@ var (
 
 var getActorTemplatesCmd = &cobra.Command{
 	Use:     "actor-template [template-name ...]",
-	Aliases: []string{"actor-templates"},
+	Aliases: []string{"actor-templates", "template", "templates"},
 	Short:   "List all actor templates or get one or more actor templates",
 	Long:    "List or get actor templates.",
 	Args:    cobra.ArbitraryArgs,
@@ -91,8 +91,9 @@ var getActorTemplatesCmd = &cobra.Command{
 }
 
 var createActorTemplateCmd = &cobra.Command{
-	Use:   "actor-template -f <manifest>",
-	Short: "Create an actor template from a manifest",
+	Use:     "actor-template -f <manifest>",
+	Aliases: []string{"template"},
+	Short:   "Create an actor template from a manifest",
 	Long: `Create an actor template from a manifest file.
 
 The manifest is a single YAML (or JSON) document holding one ateapi.ActorTemplate
@@ -110,7 +111,7 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		}
 		template, err := actorTemplateFromManifest(data)
 		if err != nil {
-			return fmt.Errorf("failed to parse actor template manifest %q: %w", createActorTemplateFilenameFlag, err)
+			return formatManifestParseError("actor template", createActorTemplateFilenameFlag, err)
 		}
 
 		ctx := cmd.Context()
@@ -129,8 +130,9 @@ Actor templates are immutable: there is no update; delete and recreate to change
 }
 
 var deleteActorTemplateCmd = &cobra.Command{
-	Use:   "actor-template <template-name>",
-	Short: "Delete an actor template",
+	Use:     "actor-template <template-name>",
+	Aliases: []string{"template"},
+	Short:   "Delete an actor template",
 	Long: `Delete an actor template.
 
 The server also deletes the template's golden actor and golden snapshot.`,
@@ -179,6 +181,15 @@ func readFileOrStdin(in io.Reader, path string) ([]byte, error) {
 		return io.ReadAll(in)
 	}
 	return os.ReadFile(path)
+}
+
+// formatManifestParseError formats a manifest parse failure, naming stdin
+// instead of quoting "-" when the caller passed -f -.
+func formatManifestParseError(kind, filename string, err error) error {
+	if filename == "-" {
+		return fmt.Errorf("failed to parse %s manifest from stdin: %w", kind, err)
+	}
+	return fmt.Errorf("failed to parse %s manifest %q: %w", kind, filename, err)
 }
 
 func init() {

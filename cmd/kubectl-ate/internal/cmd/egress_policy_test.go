@@ -115,7 +115,18 @@ rules:
 			want:     &ateapi.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
 		{name: "empty", manifest: "", wantErr: true, wantErrContains: "manifest is empty"},
-		{name: "unknown field", manifest: "rulez: []", wantErr: true, wantErrContains: "invalid EgressPolicy"},
+		{
+			name:            "unknown top-level field hints valid fields",
+			manifest:        "rulez: []",
+			wantErr:         true,
+			wantErrContains: "top-level fields: metadata, rules; rule fields: http, https, tlsPassthrough",
+		},
+		{
+			name:            "unknown rule field hints valid fields",
+			manifest:        "rules:\n- host: api.example.com\n",
+			wantErr:         true,
+			wantErrContains: "top-level fields: metadata, rules; rule fields: http, https, tlsPassthrough",
+		},
 		{name: "rules not a list", manifest: "rules: {http: {}}", wantErr: true},
 		{
 			name: "crd shape",
@@ -278,6 +289,35 @@ rules:
 				t.Errorf("policy mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestEgressPolicyHelpExampleParses(t *testing.T) {
+	t.Parallel()
+
+	_, example, ok := strings.Cut(egressPolicyManifestHelp, "\n\n")
+	if !ok {
+		t.Fatalf("egressPolicyManifestHelp has no YAML example block:\n%s", egressPolicyManifestHelp)
+	}
+	var lines []string
+	for _, line := range strings.Split(example, "\n") {
+		lines = append(lines, strings.TrimPrefix(line, "  "))
+	}
+	policy, err := egressPolicyFromManifest([]byte(strings.Join(lines, "\n")))
+	if err != nil {
+		t.Fatalf("egressPolicyFromManifest(help example) error = %v", err)
+	}
+	if len(policy.GetRules()) != 2 {
+		t.Fatalf("help example parsed %d rules, want 2", len(policy.GetRules()))
+	}
+}
+
+func TestLoadEgressPolicyManifest_StdinErrorLabel(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadEgressPolicyManifest(strings.NewReader("allow: []\n"), "-")
+	if err == nil || !strings.Contains(err.Error(), "manifest from stdin:") {
+		t.Fatalf("loadEgressPolicyManifest(stdin) error = %v, want %q", err, "manifest from stdin:")
 	}
 }
 

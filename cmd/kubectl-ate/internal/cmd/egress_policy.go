@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	yamlv3 "gopkg.in/yaml.v3"
 	"sigs.k8s.io/yaml"
 )
@@ -39,6 +41,19 @@ var egressPolicyFlags struct {
 	uid      string
 	version  int64
 }
+
+const egressPolicyManifestHelp = `The manifest is a YAML or JSON EgressPolicy, as printed by
+"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+
+  rules:
+  - https:
+      hostnames:
+      - api.example.com
+      ports:
+        numbers: [443]
+  - http:
+      hostnames:
+      - "*.example.com"`
 
 var getEgressPolicyCmd = &cobra.Command{
 	Use:     "egress-policy <actor-name>",
@@ -52,10 +67,8 @@ var getEgressPolicyCmd = &cobra.Command{
 var createEgressPolicyCmd = &cobra.Command{
 	Use:   "egress-policy <actor-name> -f <manifest>",
 	Short: "Create an actor's egress policy from a manifest",
-	Long: `Create the egress policy of an actor from a manifest file.
+	Long: "Create the egress policy of an actor from a manifest file.\n\n" + egressPolicyManifestHelp + `
 
-The manifest is a YAML or JSON EgressPolicy, as printed by
-"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
 Its metadata may be omitted.`,
 	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
 	RunE: runCreateEgressPolicy,
@@ -64,10 +77,8 @@ Its metadata may be omitted.`,
 var updateEgressPolicyCmd = &cobra.Command{
 	Use:   "egress-policy <actor-name> -f <manifest>",
 	Short: "Replace an actor's egress policy from a manifest",
-	Long: `Replace the egress policy of an actor from a manifest file.
+	Long: "Replace the egress policy of an actor from a manifest file.\n\n" + egressPolicyManifestHelp + `
 
-The manifest is a YAML or JSON EgressPolicy, as printed by
-"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
 Its metadata.uid and metadata.version are required preconditions; the server
 rejects the update when they no longer match those of the stored egress policy.`,
 	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
@@ -91,9 +102,23 @@ func egressPolicyFromManifest(data []byte) (*ateapi.EgressPolicy, error) {
 	}
 	policy := &ateapi.EgressPolicy{}
 	if err := protojson.Unmarshal(jsonData, policy); err != nil {
+		if strings.Contains(err.Error(), `unknown field "`) {
+			return nil, fmt.Errorf("invalid EgressPolicy: %w (top-level fields: %s; rule fields: %s)",
+				err, protoJSONFieldNames(policy), protoJSONFieldNames(&ateapi.EgressRule{}))
+		}
 		return nil, fmt.Errorf("invalid EgressPolicy: %w", err)
 	}
 	return policy, nil
+}
+
+// protoJSONFieldNames returns the comma-separated protojson field names of m.
+func protoJSONFieldNames(m proto.Message) string {
+	fields := m.ProtoReflect().Descriptor().Fields()
+	names := make([]string, 0, fields.Len())
+	for i := range fields.Len() {
+		names = append(names, fields.Get(i).JSONName())
+	}
+	return strings.Join(names, ", ")
 }
 
 // manifestToJSON converts a YAML or JSON manifest to JSON. YAML is a superset
@@ -153,7 +178,7 @@ func loadEgressPolicyManifest(in io.Reader, filename string) (*ateapi.EgressPoli
 	}
 	policy, err := egressPolicyFromManifest(data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse egress policy manifest %q: %w", filename, err)
+		return nil, formatManifestParseError("egress policy", filename, err)
 	}
 	return policy, nil
 }

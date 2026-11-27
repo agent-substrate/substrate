@@ -152,7 +152,7 @@ var updateActorCmd = &cobra.Command{
 		templateSet := cmd.Flags().Changed("template")
 		workerSelectorSet := cmd.Flags().Changed("worker-selector")
 		if !templateSet && !workerSelectorSet {
-			return usageErrorf("at least one of --template or --worker-selector is required")
+			return usageErrorf("at least one of -t/--template or --worker-selector is required")
 		}
 
 		var templateRef *ateapi.ObjectRef
@@ -225,7 +225,11 @@ var deleteActorCmd = &cobra.Command{
 var resumeActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Resume an actor",
-	Args:  exactlyOneArg("<actor-name>", "atespace"),
+	Long: `Resume a suspended actor.
+
+Blocks until the actor is assigned to a worker and reaches ACTOR_STATE_RUNNING.
+Resume is always synchronous and takes no --mode flag.`,
+	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -873,13 +877,13 @@ func init() {
 	getActorsCmd.Flags().BoolVarP(&getActorAllAtespacesFlag, "all-atespaces", "A", false, "get actors across all atespaces (mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorsCmd)
 
-	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
+	createActorCmd.Flags().StringVarP(&createActorTemplateFlag, "template", "t", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
 	createCmd.AddCommand(createActorCmd)
 
 	updateActorCmd.Flags().StringVarP(&updateActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	updateActorCmd.Flags().StringVar(&updateActorTemplateFlag, "template", "", "actor-template to repoint the actor to, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
+	updateActorCmd.Flags().StringVarP(&updateActorTemplateFlag, "template", "t", "", "actor-template to repoint the actor to, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
 	updateActorCmd.Flags().StringVar(&updateActorWorkerSelectorFlag, "worker-selector", "", "comma-separated key=value label selector for worker pools, or empty string to clear")
 	updateCmd.AddCommand(updateActorCmd)
 
