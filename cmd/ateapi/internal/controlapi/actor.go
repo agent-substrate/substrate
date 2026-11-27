@@ -24,11 +24,11 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
-	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/defaults"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/attribute"
