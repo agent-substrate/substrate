@@ -37,6 +37,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/lru"
 )
@@ -46,10 +47,12 @@ import (
 // Retryable.
 var ErrNoAteletOnNode = errors.New("no atelet pod found on node")
 
-// ateletConn is a cached connection and the pod IP it was dialed on.
+// ateletConn is a cached connection and the atelet pod UID and IP it was
+// dialed for.
 type ateletConn struct {
-	ip   string
-	conn *grpc.ClientConn
+	podUID types.UID
+	ip     string
+	conn   *grpc.ClientConn
 }
 
 // AteletDialer handles gRPC connections to Atelet pods.
@@ -61,7 +64,7 @@ type AteletDialer struct {
 	// mu makes the lookup, stale eviction and insert in DialForAteletOnNode
 	// atomic, so concurrent callers cannot evict each other's fresh conn.
 	mu sync.Mutex
-	// ateletConns holds one *ateletConn per atelet pod UID.
+	// ateletConns holds one *ateletConn per node name.
 	ateletConns *lru.Cache
 	// dialCredentials builds the transport credentials used to dial a given
 	// atelet, keyed on the atelet's expected pod UID. Production wires this to
@@ -144,9 +147,10 @@ func newAteletConnCache(size int) *lru.Cache {
 }
 
 // DialForAteletOnNode resolves the single atelet pod on nodeName and dials it
-// with per-atelet pod-UID-pinned credentials, caching the connection by the
-// atelet's pod UID. A pod that keeps its UID but gets a new IP, such as after a
-// node restart, is redialed.
+// with per-atelet pod-UID-pinned credentials, caching the connection by node.
+// A new pod UID or IP, such as after a node restart, is redialed, and the old
+// connection is closed. So is the connection of a node left with no atelet or
+// an atelet with no IP.
 func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, error) {
 	matchingAtelets, err := d.ateletIndexer.ByIndex(byNode, nodeName)
 	if err != nil {
@@ -154,6 +158,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	}
 
 	if len(matchingAtelets) == 0 {
+		d.evict(nodeName)
 		return nil, fmt.Errorf("%w: %q", ErrNoAteletOnNode, nodeName)
 	}
 	if len(matchingAtelets) > 1 {
@@ -162,23 +167,24 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 
 	selectedAtelet := matchingAtelets[0].(*corev1.Pod)
 	if len(selectedAtelet.Status.PodIPs) == 0 {
+		d.evict(nodeName)
 		return nil, fmt.Errorf("selected atelet %q has no assigned IPs", selectedAtelet.ObjectMeta.Namespace+"/"+selectedAtelet.ObjectMeta.Name)
 	}
-	ateletKey := string(selectedAtelet.ObjectMeta.UID)
+	podUID := selectedAtelet.ObjectMeta.UID
 	ateletIP := selectedAtelet.Status.PodIPs[0].IP
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if cached, ok := d.ateletConns.Get(ateletKey); ok {
-		if c := cached.(*ateletConn); c.ip == ateletIP {
+	if cached, ok := d.ateletConns.Get(nodeName); ok {
+		if c := cached.(*ateletConn); c.podUID == podUID && c.ip == ateletIP {
 			return c.conn, nil
 		}
 		// Remove closes the stale connection.
-		d.ateletConns.Remove(ateletKey)
+		d.ateletConns.Remove(nodeName)
 	}
 
-	creds, err := d.dialCredentials(string(selectedAtelet.ObjectMeta.UID))
+	creds, err := d.dialCredentials(string(podUID))
 	if err != nil {
 		return nil, fmt.Errorf("while building atelet credentials: %w", err)
 	}
@@ -192,9 +198,16 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 		return nil, fmt.Errorf("while creating atelet gRPC client connection: %w", err)
 	}
 
-	d.ateletConns.Add(ateletKey, &ateletConn{ip: ateletIP, conn: conn})
+	d.ateletConns.Add(nodeName, &ateletConn{podUID: podUID, ip: ateletIP, conn: conn})
 
 	return conn, nil
+}
+
+// evict closes and forgets nodeName's cached connection, if any.
+func (d *AteletDialer) evict(nodeName string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ateletConns.Remove(nodeName)
 }
 
 func buildTLSConfig(ateletSPIFFEID, clientBundlePath, serverCAPath, expectedPodUID string) (*tls.Config, error) {

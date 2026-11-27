@@ -1314,7 +1314,7 @@ func newNodeAteletDialer(t *testing.T, srvImpl ateletpb.AteletServer) *AteletDia
 		Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}}},
 	}
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
-	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
+	dialer.ateletConns.Add("node-1", &ateletConn{podUID: "atelet-uid", ip: "10.0.0.1", conn: conn})
 	return dialer
 }
 
