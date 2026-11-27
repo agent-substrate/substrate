@@ -1052,9 +1052,9 @@ footer {
   &__cmd {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    height: 46px;
-    padding: 0 8px 0 14px;
+    gap: 8px;
+    min-height: 46px;
+    padding: 0 8px 0 12px;
     background: #111612;
     border: 1px solid #243028;
     border-radius: 10px;
@@ -1069,13 +1069,13 @@ footer {
 
   &__cmd-prompt {
     color: #64d86b;
-    font-size: 13.5px;
+    font-size: 11.5px;
     user-select: none;
     flex-shrink: 0;
   }
 
   &__cmd-text {
-    font-size: 13.5px;
+    font-size: 11.5px;
     color: #e4ebe6;
     white-space: nowrap;
     overflow-x: auto;
@@ -3329,6 +3329,7 @@ footer {
 // Tabs (tabpane shortcode & .code-tabs)
 .td-content {
   .nav-tabs {
+    margin-bottom: 0;
     border-bottom: 1px solid #243028;
     gap: 0;
     background: #111612;
@@ -3337,6 +3338,10 @@ footer {
     border-top-left-radius: 10px;
     border-top-right-radius: 10px;
     padding: 0 4px;
+
+    .nav-item {
+      margin-top: 0;
+    }
 
     .nav-link {
       color: #9aa89f;

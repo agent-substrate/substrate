@@ -48,6 +48,34 @@ This applies to an actor's own telemetry too: an OpenTelemetry SDK inside the ac
 cannot reach the collector until the actor has an `http` egress rule for it. See
 [Actor telemetry needs an egress policy](observability.md#actor-telemetry-needs-an-egress-policy).
 
+## Example EgressPolicy
+
+An actor has no egress policy by default, so all outbound traffic is denied
+until you create one. `EgressPolicy` manifests use the `protojson` schema (no
+`apiVersion`, `kind`, or `spec` wrapper), and `metadata` may be omitted on
+create:
+
+```yaml
+rules:
+  - https:
+      hostnames: ["api.github.com"]
+      ports:
+        numbers: [443]
+```
+
+Create the policy for an actor with `kubectl ate`:
+
+```bash
+kubectl ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
+```
+
+An `https` rule intercepts TLS at the gateway, so the actor must trust the
+gateway CA (see [MITM Trust Bundle](egress-trust-bundle.md)). Use
+`tlsPassthrough` to forward TLS without decryption. For `http` rules,
+credential injection, and `update`/`delete` commands, see the
+[API Reference](../reference/api.md) and
+[kubectl-ate Egress Policies](../reference/kubectl-ate.md#egress-policies).
+
 ## TCP
 
 | Port | Traffic | Behavior | Path | What the actor sees when refused |

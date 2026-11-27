@@ -59,7 +59,7 @@ limitations under the License.
         </div>
         <div class="as-hero__cmd">
           <span class="as-hero__cmd-prompt mono">$</span>
-          <span class="as-hero__cmd-text mono" id="hero-cli-cmd">kubectl ate create actor my-agent --template counter</span>
+          <span class="as-hero__cmd-text mono" id="hero-cli-cmd">kubectl ate create actor my-agent -a demo --template counter</span>
           <button type="button" class="as-copy-btn" data-copy-target="hero-cli-cmd" aria-label="Copy command" title="Copy command">
             <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
           </button>
@@ -327,14 +327,15 @@ limitations under the License.
       <h2 class="as-h2">Manage actors with kubectl ate</h2>
       <div class="as-term-card">
         <div class="as-term-card__bar">
-          <div role="tablist" class="as-term-card__tabs" aria-label="Actor lifecycle commands">
-            <button type="button" role="tab" class="as-term-tab is-active" aria-selected="true" data-term-tab="lifecycle">Actor lifecycle</button>
+          <div role="tablist" class="as-term-card__tabs" aria-label="kubectl ate commands">
+            <button type="button" role="tab" class="as-term-tab is-active" id="term-tab-lifecycle" aria-selected="true" aria-controls="term-pane-lifecycle" data-term-tab="lifecycle">Actor lifecycle</button>
+            <button type="button" role="tab" class="as-term-tab" id="term-tab-install" aria-selected="false" aria-controls="term-pane-install" data-term-tab="install">Install CLI</button>
           </div>
           <button type="button" class="as-copy-btn" data-copy-active-term="true" aria-label="Copy commands" title="Copy commands">
             <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
           </button>
         </div>
-        <pre class="as-term-card__pre mono is-active" data-term-pane="lifecycle" id="term-pane-lifecycle"><span class="as-term-comment"># 1 · create an atespace, template, and actor</span>
+        <pre class="as-term-card__pre mono is-active" role="tabpanel" aria-labelledby="term-tab-lifecycle" data-term-pane="lifecycle" id="term-pane-lifecycle"><span class="as-term-comment"># 1 · create an atespace, template, and actor</span>
 kubectl ate create atespace demo
 kubectl ate create actor-template -f counter-template.yaml
 kubectl ate create actor my-agent -a demo --template counter
@@ -346,6 +347,19 @@ curl -X POST http://localhost:8000/
 <span class="as-term-comment"># 3 · inspect state or suspend back to snapshot storage</span>
 kubectl ate get actor my-agent -a demo
 kubectl ate suspend actor my-agent -a demo</pre>
+        <pre class="as-term-card__pre mono" role="tabpanel" aria-labelledby="term-tab-install" data-term-pane="install" id="term-pane-install" hidden><span class="as-term-comment"># 1 · download the latest release for Linux or macOS</span>
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+BIN="kubectl-ate-${OS}-${ARCH}"
+URL="https://github.com/agent-substrate/substrate/releases"
+curl -fsSLO "${URL}/latest/download/${BIN}" &amp;&amp;
+curl -fsSLO "${URL}/latest/download/${BIN}.sha256"
+
+<span class="as-term-comment"># 2 · verify, install to ~/.local/bin, and add to PATH</span>
+if [ "$OS" = darwin ]; then shasum -a 256 -c "${BIN}.sha256"
+else sha256sum -c "${BIN}.sha256"; fi &amp;&amp;
+mkdir -p ~/.local/bin &amp;&amp;
+install -m 0755 "${BIN}" ~/.local/bin/kubectl-ate</pre>
       </div>
       <a href="{{ "docs/get-started/quickstart/" | relURL }}" class="as-arrow-link">
         <span>Full quickstart guide</span>
