@@ -140,7 +140,7 @@ func (s *AteWorkerService) checkMemory(ctx context.Context, h *hostedActor) {
 	attrs := append(ateattr.ActorLogAttrs(h.attribution),
 		slog.Uint64("memoryLimitBytes", kill.Limit),
 		slog.Uint64(string(ateattr.StatsMemoryUsageKey), kill.Current))
-	slog.LogAttrs(ctx, slog.LevelWarn, "Killing a sandbox over its memory limit", attrs...)
+	slog.LogAttrs(ctx, slog.LevelError, "Killing a sandbox over its memory limit", attrs...)
 	go func() {
 		if err := <-kill.Done; err != nil {
 			attrs = append(attrs, slog.Any("err", err))

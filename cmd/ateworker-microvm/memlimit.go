@@ -47,7 +47,7 @@ func (s *AteWorkerService) watchMemory(ctx context.Context) {
 			return
 		case <-ticker.C:
 			for _, h := range s.hostedActors() {
-				s.checkMemory(ctx, h)
+				s.checkMemory(ctx, cgroup.Root, h)
 			}
 		}
 	}
@@ -55,21 +55,21 @@ func (s *AteWorkerService) watchMemory(ctx context.Context) {
 
 // checkMemory kills h's VMM and virtiofsd if their cgroup is stuck at its
 // memory.high. watchVM then reports the actor crashed.
-func (s *AteWorkerService) checkMemory(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) checkMemory(ctx context.Context, cgroupRoot string, h *hostedActor) {
 	s.actorsMu.RLock()
 	ra := h.vm
 	s.actorsMu.RUnlock()
 	if ra == nil || ra.stopping.Load() {
 		return
 	}
-	kill, ok := ra.memory.Check(ctx, cgroup.Root, h.attribution.UID)
+	kill, ok := ra.memory.Check(ctx, cgroupRoot, h.attribution.UID)
 	if !ok {
 		return
 	}
 	attrs := append(ateattr.ActorLogAttrs(h.attribution),
 		slog.Uint64("memoryLimitBytes", kill.Limit),
 		slog.Uint64(string(ateattr.StatsMemoryUsageKey), kill.Current))
-	slog.LogAttrs(ctx, slog.LevelWarn, "Killing a microVM over its memory limit", attrs...)
+	slog.LogAttrs(ctx, slog.LevelError, "Killing a microVM over its memory limit", attrs...)
 	go func() {
 		if err := <-kill.Done; err != nil {
 			attrs = append(attrs, slog.Any("err", err))
