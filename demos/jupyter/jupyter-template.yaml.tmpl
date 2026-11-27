@@ -33,7 +33,7 @@ containers:
   - "--ServerApp.allow_origin='*'"
   - "--ServerApp.disable_check_xsrf=True"
   - "--port=80"
-  - "--ip=0.0.0.0"
+  - "--ip=*"
   wakeupProbe:
     httpGet:
       path: /api
