@@ -115,7 +115,7 @@ var (
 	// registry, via an exec plugin the node ships. Pointing atelet at the same
 	// config and bin dir (mounted read-only from the host) lets it pull with
 	// no cloud SDK compiled in, on any cloud whose nodes configure a provider.
-	imageCredentialProviderConfig = pflag.String("image-credential-provider-config", "", "Path to a kubelet CredentialProviderConfig. Its exec plugins supply image pull credentials; without it, pulls are anonymous.")
+	imageCredentialProviderConfig = pflag.String("image-credential-provider-config", "", "Path to a kubelet CredentialProviderConfig. Its exec plugins supply image pull credentials; without it, pulls use $DOCKER_CONFIG/config.json and are anonymous for a registry it does not list.")
 	imageCredentialProviderBinDir = pflag.String("image-credential-provider-bin-dir", "", "Directory holding the credential provider executables named by --image-credential-provider-config. Required when that flag is set.")
 
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
@@ -144,6 +144,18 @@ var (
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
+
+// imageKeychain returns the source of image pull credentials: the kubelet
+// credential provider when the flags name one, otherwise the Docker config.
+func imageKeychain(providerConfig, providerBinDir string) (authn.Keychain, error) {
+	if providerConfig == "" {
+		return authn.DefaultKeychain, nil
+	}
+	if providerBinDir == "" {
+		return nil, errors.New("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set")
+	}
+	return credentialprovider.New(providerConfig, providerBinDir)
+}
 
 func main() {
 	pflag.Parse()
@@ -240,19 +252,9 @@ func main() {
 
 	workerDialer := newWorkerDialer(256)
 
-	// Without a credential provider config, pulls are anonymous: all an
-	// unconfigured node (kind, say) can do and all a public registry needs.
-	var imageCredsKeychain authn.Keychain
-	if *imageCredentialProviderConfig != "" {
-		if *imageCredentialProviderBinDir == "" {
-			serverboot.Fatal(ctx, "Failed to configure image pull credentials",
-				errors.New("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set"))
-		}
-		kc, err := credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to configure image pull credentials", err)
-		}
-		imageCredsKeychain = kc
+	imageCredsKeychain, err := imageKeychain(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to configure image pull credentials", err)
 	}
 
 	// Validated before the caches are cleared, so a directory the flags
