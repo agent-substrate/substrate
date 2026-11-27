@@ -16,7 +16,7 @@ Create the test cluster as in
 [Test cluster prerequisites](README.md#test-cluster-prerequisites).
 
 Both tests pass `--cordon-system-infra-components`, which needs the two node
-pools in [System Infra Isolation](../../docs/architecture.md#system-infra-isolation):
+pools in [System Infra Isolation](../../docs/concepts/architecture.md#system-infra-isolation):
 `ate-system-infra` and `ate-postgres`. If the `ate-postgres` pool is missing,
 the install fails before it applies Postgres. If the `ate-system-infra` pool
 is missing or too small, its pods stay Pending and the install fails when
