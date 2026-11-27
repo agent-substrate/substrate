@@ -270,6 +270,130 @@ func TestPrintActorTo_YAML(t *testing.T) {
 	}
 }
 
+func TestPrintActorTo_DeclarationOrder(t *testing.T) {
+	created := time.Date(2026, 1, 1, 11, 55, 0, 0, time.UTC)
+	actor := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{
+			Atespace:   "team-a",
+			Name:       "id-1",
+			Uid:        "u-1",
+			Version:    2,
+			CreateTime: timestamppb.New(created),
+		},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "tpl"},
+		SourceTag:     &ateapi.ObjectRef{Atespace: "default", Name: "tag"},
+		Status: &ateapi.ActorStatus{
+			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapi.WorkerAssignment{
+				WorkerNamespace: "worker-ns",
+				WorkerPod:       "pod-1",
+				WorkerPodIps:    []string{"1.2.3.4"},
+			},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		format string
+		actor  *ateapi.Actor
+		want   string
+	}{
+		{
+			name:   "json",
+			format: "json",
+			actor:  actor,
+			want: `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "id-1",
+    "uid": "u-1",
+    "version": "2",
+    "createTime": "2026-01-01T11:55:00Z"
+  },
+  "actorTemplate": {
+    "atespace": "default",
+    "name": "tpl"
+  },
+  "sourceTag": {
+    "atespace": "default",
+    "name": "tag"
+  },
+  "status": {
+    "state": "ACTOR_STATE_RUNNING",
+    "workerAssignment": {
+      "workerNamespace": "worker-ns",
+      "workerPod": "pod-1",
+      "workerPodIps": [
+        "1.2.3.4"
+      ]
+    }
+  }
+}
+`,
+		},
+		{
+			name:   "yaml",
+			format: "yaml",
+			actor:  actor,
+			want: `metadata:
+  atespace: team-a
+  name: id-1
+  uid: u-1
+  version: "2"
+  createTime: "2026-01-01T11:55:00Z"
+actorTemplate:
+  atespace: default
+  name: tpl
+sourceTag:
+  atespace: default
+  name: tag
+status:
+  state: ACTOR_STATE_RUNNING
+  workerAssignment:
+    workerNamespace: worker-ns
+    workerPod: pod-1
+    workerPodIps:
+    - 1.2.3.4
+`,
+		},
+		{
+			name:   "json preserves angle brackets and ampersand",
+			format: "json",
+			actor:  &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: "a < b & c > d"}},
+			want: `{
+  "metadata": {
+    "name": "a < b & c > d"
+  }
+}
+`,
+		},
+		{
+			name:   "empty json",
+			format: "json",
+			actor:  &ateapi.Actor{},
+			want:   "{}\n",
+		},
+		{
+			name:   "empty yaml",
+			format: "yaml",
+			actor:  &ateapi.Actor{},
+			want:   "{}\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := PrintActorTo(&buf, tt.actor, tt.format); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if diff := cmp.Diff(tt.want, buf.String()); diff != "" {
+				t.Errorf("output mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestPrintWorkersTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
@@ -924,11 +1048,11 @@ func TestPrintWorkerTopTo_YAML(t *testing.T) {
 	output := buf.String()
 
 	expected := `workers:
-- cpu: 100m
-  memory: 128Mi
-  pod: worker-1
+- pod: worker-1
   pool: pool-1
   status: ASSIGNED
+  cpu: 100m
+  memory: 128Mi
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
