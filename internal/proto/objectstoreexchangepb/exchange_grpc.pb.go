@@ -47,7 +47,7 @@ const (
 type CredentialExchangeClient interface {
 	// ExchangeActorJwt verifies actor_jwt and returns a credential limited to
 	// the actor's snapshot prefixes. Errors:
-	//   - INVALID_ARGUMENT: actor_jwt is empty.
+	//   - INVALID_ARGUMENT: actor_jwt is empty or too long.
 	//   - UNAUTHENTICATED: actor_jwt fails signature, audience or expiry, or
 	//     does not name an actor.
 	//   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, the
@@ -93,7 +93,7 @@ func (c *credentialExchangeClient) ExchangeActorJwt(ctx context.Context, in *Exc
 type CredentialExchangeServer interface {
 	// ExchangeActorJwt verifies actor_jwt and returns a credential limited to
 	// the actor's snapshot prefixes. Errors:
-	//   - INVALID_ARGUMENT: actor_jwt is empty.
+	//   - INVALID_ARGUMENT: actor_jwt is empty or too long.
 	//   - UNAUTHENTICATED: actor_jwt fails signature, audience or expiry, or
 	//     does not name an actor.
 	//   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, the

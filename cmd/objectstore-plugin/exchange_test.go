@@ -15,7 +15,6 @@
 package main
 
 import (
-	"encoding/pem"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +23,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz/actorauthztest"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/testcert"
 )
@@ -50,7 +52,7 @@ func TestNewExchangeService(t *testing.T) {
 	}
 	tlsIssuer := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(tlsIssuer.Close)
-	tlsIssuerCA := writeServerCA(t, tlsIssuer)
+	tlsIssuerCA := actorauthztest.WriteServerCA(t, tlsIssuer)
 	otherCA := filepath.Join(t.TempDir(), "other-ca.pem")
 	if err := os.WriteFile(otherCA, testcert.NewServerTLS(t, net.ParseIP("127.0.0.1")).RootCA, 0o600); err != nil {
 		t.Fatal(err)
@@ -83,14 +85,68 @@ func TestNewExchangeService(t *testing.T) {
 	}
 }
 
-// writeServerCA writes srv's certificate to a PEM file and returns its path.
-func writeServerCA(t *testing.T, srv *httptest.Server) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "issuer-ca.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+// TestNewExchangeService_ClosesIssuerConnections checks that the connections
+// to the actor JWT issuer are closed by the returned function, and when a later
+// setup step fails.
+func TestNewExchangeService_ClosesIssuerConnections(t *testing.T) {
+	// An authorized_user file lets gcsissuer.New build its IAM client without
+	// a network call.
+	adc := filepath.Join(t.TempDir(), "adc.json")
+	if err := os.WriteFile(adc, []byte(`{"type":"authorized_user","client_id":"id","client_secret":"secret","refresh_token":"token"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	for _, tc := range []struct {
+		name string
+		// noAddress makes actorlookup.New fail.
+		noAddress bool
+		// adc is GOOGLE_APPLICATION_CREDENTIALS. A missing file makes
+		// gcsissuer.New fail.
+		adc     string
+		wantErr string
+	}{
+		{name: "release", adc: adc},
+		{name: "actor lookup fails", noAddress: true, adc: adc, wantErr: "Address is required"},
+		{name: "GCS issuer fails", adc: filepath.Join(t.TempDir(), "absent.json"), wantErr: "GCS credential issuer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ATE_STORAGE_BACKEND", "gcs")
+			t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", tc.adc)
+			auth, err := localjwtauthority.GenerateAuthority("ES256", "k1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pool := &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
+			conns := actorauthztest.NewConnCounter()
+			issuer := actorauthztest.ServeIssuer(t, pool, conns.ConnState)
+			issuerCA := actorauthztest.WriteServerCA(t, issuer)
+			cfg := exchangeConfig{
+				issuer:          issuer.URL,
+				issuerCAFile:    issuerCA,
+				transferAccount: "xfer@proj.iam.gserviceaccount.com",
+				ateapi: actorlookup.Config{
+					Address:          "127.0.0.1:1",
+					CAFile:           issuerCA,
+					ServerName:       "ate-api-server.ate-system.svc",
+					ClientCredBundle: filepath.Join(t.TempDir(), "client.pem"),
+				},
+			}
+			if tc.noAddress {
+				cfg.ateapi.Address = ""
+			}
+			_, release, err := newExchangeService(t.Context(), cfg)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to hold %q", err, tc.wantErr)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				release()
+			}
+			conns.WaitAllClosed(t)
+		})
+	}
 }
 
 func TestExchangeTransportCredentials_MissingBundle(t *testing.T) {
