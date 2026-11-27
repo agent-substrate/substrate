@@ -418,7 +418,7 @@ type AteWorkerService struct {
 	// terminateDead overrides terminateWorkload for a sandbox that died, when
 	// set. Only tests set it: the real teardown needs the tunnel. nil means
 	// terminateWorkload.
-	terminateDead func(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxExited bool) error
+	terminateDead func(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error
 
 	// flags holds the watched JSON flag configuration.
 	flags *flagStore
@@ -710,7 +710,6 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		flags:          s.flags,
 		enableCoreTags: s.enableCoreTags,
 	}
-	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
 			if hosted.memory.Killed() {
@@ -721,9 +720,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
 			}
-			if err := s.teardownContainers(cleanupCtx, req.GetActorUid(), req.GetActorDirs(), containerNames(req.GetSpec().GetContainers()), func() error {
-				return deleteContainers(cleanupCtx, rcmd, containersToDelete)
-			}); err != nil {
+			if err := s.teardownContainers(cleanupCtx, rcmd, req.GetActorUid(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to clean up runsc containers after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
@@ -740,7 +737,6 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := s.tunnel.ActivateEgress(attribution, egress); err != nil {
 		return nil, err
 	}
-	containersToDelete = append(containersToDelete, ocispec.SandboxID)
 	// Attribute the sandbox's runsc CLI output to the actor.
 	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
@@ -771,7 +767,6 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
-		containersToDelete = append(containersToDelete, ac.GetName())
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -877,7 +872,6 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
-	var sandboxExited bool
 
 	// Cleanup the containers after checkpointing. This also unhosts the actor,
 	// before the snapshot listing below can fail.
@@ -885,7 +879,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	terminate := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers, sandboxExited)
+		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers)
 		if err != nil {
 			slog.WarnContext(cleanupCtx, "failed to terminate workload after checkpoint",
 				slog.String("actor", attribution.Ref.String()),
@@ -924,7 +918,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
-			sandboxExited = waitSandboxExited(ctx, sandbox)
+			waitSandboxExited(ctx, sandbox)
 			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
@@ -935,7 +929,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing container filesystems: %w", err)
 			}
-			sandboxExited = waitSandboxExited(ctx, sandbox)
+			waitSandboxExited(ctx, sandbox)
 			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
@@ -957,7 +951,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
-			sandboxExited = waitSandboxExited(ctx, sandbox)
+			waitSandboxExited(ctx, sandbox)
 			timing.checkpoint = lap(&tLast)
 			return nil
 		}
@@ -1017,16 +1011,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	return resp, nil
 }
 
-// waitSandboxExited reports whether the checkpointed sandbox has exited.
-func waitSandboxExited(ctx context.Context, sandbox *sandboxProcess) bool {
+// waitSandboxExited waits for the checkpointed sandbox to exit.
+func waitSandboxExited(ctx context.Context, sandbox *sandboxProcess) {
 	if sandbox == nil {
-		return false
+		return
 	}
 	if err := sandbox.waitExited(ctx, sandboxExitTimeout); err != nil {
 		slog.WarnContext(ctx, "Sandbox did not exit after checkpoint", slog.Any("err", err))
-		return false
 	}
-	return true
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
@@ -1056,31 +1048,6 @@ func listSnapshotFiles(dir string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
-}
-
-// stopContainers stops the actor's application containers. The sandbox is left
-// running: cleanupContainers deletes the others through it before deleting it
-// last. runsc kill does not apply to a sandbox with no root container.
-func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) {
-	for _, ctr := range containers {
-		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
-		_ = rcmd.cmdWait(ctx, ctr.GetName())
-	}
-}
-
-func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) error {
-	// Application containers first, the sandbox last.
-	names := make([]string, 0, len(containers)+1)
-	for _, ctr := range containers {
-		names = append(names, ctr.GetName())
-	}
-	names = append(names, ocispec.SandboxID)
-
-	if err := rcmd.cmdDelete(ctx, names...); err != nil {
-		return fmt.Errorf("while deleting containers %q: %w", names, err)
-	}
-
-	return nil
 }
 
 func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
@@ -1167,7 +1134,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		flags:          s.flags,
 		enableCoreTags: s.enableCoreTags,
 	}
-	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
 			if hosted.memory.Killed() {
@@ -1178,9 +1144,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", err))
 			}
-			if err := s.teardownContainers(cleanupCtx, req.GetActorUid(), req.GetActorDirs(), containerNames(containers), func() error {
-				return deleteContainers(cleanupCtx, rcmd, containersToDelete)
-			}); err != nil {
+			if err := s.teardownContainers(cleanupCtx, rcmd, req.GetActorUid(), req.GetActorDirs(), containers); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to clean up runsc containers after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
@@ -1212,7 +1176,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		// Create and start the sandbox (cold boot with filesystem checkpoint bundles restored)
-		containersToDelete = append(containersToDelete, ocispec.SandboxID)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
 		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
@@ -1227,7 +1190,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore the sandbox (restores process state and filesystem checkpoint bundles)
-		containersToDelete = append(containersToDelete, ocispec.SandboxID)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
 		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
@@ -1257,7 +1219,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		if err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
-		containersToDelete = append(containersToDelete, ac.GetName())
 		err = rcmd.cmdCreate(ctx, pw, ac.GetName(), nil)
 		timing.appCreate += lap(&tLast)
 		if err != nil {
@@ -1329,7 +1290,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	attribution := workerstats.ActorAttributionFromRequest(req)
 
 	err := s.endActivation(ctx, s.lookupActor(attribution.UID), s.readFinal, func() error {
-		return s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers(), false)
+		return s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
@@ -1340,7 +1301,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container, sandboxExited bool) error {
+func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
 	if hosted := s.lookupActor(actorUID); hosted != nil {
 		hosted.stopping.Store(true)
 	}
@@ -1361,9 +1322,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	// container without its record and the actor unrecoverable.
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := s.teardownContainers(cleanupCtx, actorUID, actorDirs, containerNames(containers), func() error {
-		return terminateContainers(cleanupCtx, rcmd, containers, sandboxExited)
-	}); err != nil {
+	if err := s.teardownContainers(cleanupCtx, rcmd, actorUID, actorDirs, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 
@@ -1374,35 +1333,18 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	return errors.Join(errs...)
 }
 
-func terminateContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container, sandboxExited bool) error {
-	// Stop any live containers before their bundles can be removed.
-	if !sandboxExited {
-		stopContainers(ctx, rcmd, containers)
-	}
-	return cleanupContainers(ctx, rcmd, containers)
-}
-
-// deleteContainers deletes the given runsc containers, last first, and
-// returns every failure.
-func deleteContainers(ctx context.Context, rcmd containerRuntime, containers []string) error {
-	var errs []error
-	for _, container := range slices.Backward(containers) {
-		if err := rcmd.cmdDelete(ctx, container); err != nil {
-			errs = append(errs, fmt.Errorf("while deleting %q container: %w", container, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// teardownContainers deletes the actor's runsc containers with del. If that
-// fails, it kills the sandbox instead. It then releases the containers,
-// unless the kill failed too: the sentry may still run, so runsc's records
-// and the overlays stay for a retried TerminateWorkload to delete it.
-func (s *AteWorkerService) teardownContainers(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs, containers []string, del func() error) error {
-	if err := del(); err != nil {
+// teardownContainers deletes the actor's application containers and then its
+// sandbox with one runsc command. If that fails, it kills the sandbox instead.
+// It then releases the containers, unless the kill failed too: the sentry may
+// still run, so runsc's records and the overlays stay for a retried
+// TerminateWorkload to delete it.
+func (s *AteWorkerService) teardownContainers(ctx context.Context, rcmd containerRuntime, actorUID string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
+	names := append(containerNames(containers), ocispec.SandboxID)
+	if err := rcmd.cmdDelete(ctx, names...); err != nil {
+		err = fmt.Errorf("while deleting containers %q: %w", names, err)
 		slog.WarnContext(ctx, "Failed to delete runsc containers, killing the sandbox",
 			slog.String("actorUID", actorUID), slog.Any("err", err))
-		if killErr := s.killSandbox(ctx, actorUID, containers); killErr != nil {
+		if killErr := s.killSandbox(ctx, actorUID, containerNames(containers)); killErr != nil {
 			return errors.Join(err, killErr)
 		}
 	}

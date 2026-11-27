@@ -159,7 +159,7 @@ func TestWatchSandboxCrashWritesFinal(t *testing.T) {
 	}
 	t.Cleanup(sandbox.Close)
 	h.sandbox = sandbox
-	s.terminateDead = func(context.Context, resources.ActorRef, string, string, *ateworkerpb.ActorDirs, []*ateworkerpb.Container, bool) error {
+	s.terminateDead = func(context.Context, resources.ActorRef, string, string, *ateworkerpb.ActorDirs, []*ateworkerpb.Container) error {
 		setHostedActor(s, nil)
 		return os.RemoveAll(leaf) // as runsc delete does
 	}
