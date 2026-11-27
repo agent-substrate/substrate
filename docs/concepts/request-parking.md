@@ -20,9 +20,14 @@ wait elapses — instead of immediately returning `503` to the client.
 When a request arrives for a suspended actor, the router resumes it before
 routing:
 
-```
-Envoy --(ext_proc RequestHeaders)--> router.handleRequestHeaders
-    --> ActorResumer.ResumeActor --> ateapi ResumeActor (gRPC)
+```mermaid
+flowchart LR
+    envoy["Envoy"]
+    handler["router.handleRequestHeaders"]
+    resumer["ActorResumer.ResumeActor"]
+    ateapi["ateapi ResumeActor (gRPC)"]
+
+    envoy -->|"ext_proc RequestHeaders"| handler --> resumer --> ateapi
 ```
 
 `ateapi`'s `AssignWorkerStep` claims a worker from the actor's `WorkerPool`.
