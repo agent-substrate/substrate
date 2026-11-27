@@ -560,6 +560,16 @@ func TestToAteletResources(t *testing.T) {
 		name: "both",
 		in:   &ateapi.ResourceRequirements{Limits: &ateapi.Resources{CpuMillicores: 1000, MemoryBytes: 1 << 30}},
 		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1073741824, CpuMillicores: 1000}},
+	}, {
+		name: "both limits and requests",
+		in: &ateapi.ResourceRequirements{
+			Limits:   &ateapi.Resources{CpuMillicores: 1000, MemoryBytes: 1 << 30},
+			Requests: &ateapi.Resources{CpuMillicores: 100, MemoryBytes: 256 << 20},
+		},
+		want: &ateletpb.ResourceRequirements{
+			Limits:   &ateletpb.Resources{MemoryBytes: 1073741824, CpuMillicores: 1000},
+			Requests: &ateletpb.Resources{MemoryBytes: 268435456, CpuMillicores: 100},
+		},
 	}}
 
 	for _, tc := range tests {

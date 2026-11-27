@@ -2176,13 +2176,14 @@ func (s *filledUpScheduler) HasRoom(worker *ateapi.Worker, _ scheduling.Constrai
 // bug under test is in the metric path, so nothing here reaches a database.
 type contentionStore struct {
 	actorWorkflowStore
-	workers map[string]*ateapi.Worker
-	actor   *ateapi.Actor
+	workers        map[string]*ateapi.Worker
+	actor          *ateapi.Actor
+	lastAssignment *ateapi.ActorAssignment
 }
 
 // BindActorToWorker runs admit as the real store does under the Worker's row
 // lock, and returns its refusal unchanged.
-func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, _ *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	worker, ok := s.workers[workerName]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -2197,6 +2198,7 @@ func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string
 		return nil, err
 	}
 	s.actor = updated
+	s.lastAssignment = assignment
 	return updated, nil
 }
 
@@ -3557,5 +3559,24 @@ func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = cached
 	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl); err != nil {
 		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
+	}
+}
+
+func TestAssignWorkerAttempt_BooksRequests(t *testing.T) {
+	cached := contendedWorker("pod-a")
+	cached.Status.Capacity = &ateapi.WorkerResources{Actors: 4, CpuMillicores: 1000, MemoryBytes: 1 << 30}
+	w, actor, _ := newContendedWorkflow(t, &filledUpScheduler{workers: []*ateapi.Worker{cached}})
+	w.scheduler = scheduling.New(w.workerCache)
+
+	tmpl := &ateapi.ActorTemplate{Resources: &ateapi.ResourceRequirements{
+		Limits:   &ateapi.Resources{CpuMillicores: 2000, MemoryBytes: 2 << 30},
+		Requests: &ateapi.Resources{CpuMillicores: 250, MemoryBytes: 256 << 20},
+	}}
+	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl); err != nil {
+		t.Fatalf("assignWorkerAttempt() = %v", err)
+	}
+	got := w.store.(*contentionStore).lastAssignment.GetResources()
+	if got.GetCpuMillicores() != 250 || got.GetMemoryBytes() != 256<<20 {
+		t.Errorf("assignment resources = %v, want 250m, 256Mi", got)
 	}
 }

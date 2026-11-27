@@ -49,6 +49,16 @@ func FromLimits(l *ateworkerpb.Resources) SandboxSize {
 	return SandboxSize{MilliCPU: max(l.GetCpuMillicores(), 0), MemoryBytes: max(l.GetMemoryBytes(), 0)}
 }
 
+// BookedMemoryBytes returns the memory an actor books on the worker before
+// runtime overhead: its memory request when positive, otherwise its memory
+// limit. Negative values are clamped to zero.
+func BookedMemoryBytes(r *ateworkerpb.ResourceRequirements) int64 {
+	if mem := r.GetRequests().GetMemoryBytes(); mem > 0 {
+		return mem
+	}
+	return max(r.GetLimits().GetMemoryBytes(), 0)
+}
+
 // VCPUs converts the CPU limit to a whole vCPU count for the micro-VM, rounding
 // up so a fractional limit still yields a usable core (minimum 1 when a limit is
 // set). Returns 0 when the CPU limit is unset, letting the caller keep its

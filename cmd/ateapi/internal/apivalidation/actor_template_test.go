@@ -990,6 +990,83 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{CpuMillicores: 1000, MemoryBytes: -1}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "valid template resource requests",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(2000, 2<<30),
+				Requests: resources.CPUMemory(250, 512<<20),
+			}
+		},
+	}, {
+		name: "valid template resource requests equal to limits",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: resources.CPUMemory(1000, 512<<20),
+			}
+		},
+	}, {
+		name: "valid template resource requests with one dimension omitted",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: &ateapi.Resources{CpuMillicores: 100},
+			}
+		},
+	}, {
+		name: "template cpu request above limit",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: resources.CPUMemory(1500, 256<<20),
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "requests", "cpu_millicores"), nil, "")},
+	}, {
+		name: "template memory request above limit",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: resources.CPUMemory(500, 1<<30),
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "requests", "memory_bytes"), nil, "")},
+	}, {
+		name: "template empty requests struct",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: &ateapi.Resources{},
+			}
+		},
+	}, {
+		name: "template negative cpu request",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: &ateapi.Resources{CpuMillicores: -1, MemoryBytes: 256 << 20},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "requests", "cpu_millicores"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "template negative memory request",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(1000, 512<<20),
+				Requests: &ateapi.Resources{CpuMillicores: 250, MemoryBytes: -1},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "requests", "memory_bytes"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "container resource requests forbidden",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(500, 512<<20),
+				Requests: resources.CPUMemory(1000, 256<<20),
+			}
+		},
+		want: field.ErrorList{field.Forbidden(field.NewPath("containers").Index(0).Child("resources", "requests"), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

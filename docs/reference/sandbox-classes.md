@@ -36,7 +36,7 @@ An actor's CPU size comes from `resources.limits.cpuMillicores` on its `ActorTem
 An actor's memory size comes from `resources.limits.memoryBytes` on its `ActorTemplate`:
 
 - **gVisor (`gvisor`):** `memoryBytes` sets the sandbox cgroup memory limit and the total memory reported by the Sentry.
-- **MicroVM (`microvm`):** `memoryBytes` sets the guest RAM size and must be at least `128 MiB`. The VMM and `virtiofsd` overhead counts against the worker's capacity on top of `memoryBytes`. A `MEMORY` restore reuses the guest RAM and vCPU count recorded in the snapshot.
+- **MicroVM (`microvm`):** `memoryBytes` sets the guest RAM size and must be at least `128 MiB`. The VMM and `virtiofsd` overhead counts against the worker's capacity on top of the actor's requested memory (`limits.memoryBytes` when `requests` is unset). A `MEMORY` restore reuses the guest RAM and vCPU count recorded in the snapshot.
 
 ## Per-Container Resource Limits
 

@@ -596,6 +596,7 @@ func schedulingConstraints(actor *ateapi.Actor, tmpl *ateapi.ActorTemplate) sche
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
 		Limits:          tmpl.GetResources().GetLimits(),
+		Requests:        tmpl.GetResources().GetRequests(),
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))

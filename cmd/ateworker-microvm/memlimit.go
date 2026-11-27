@@ -25,15 +25,15 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 )
 
-// leafMemoryHigh is the memory.high for an actor's cgroup, or 0 for none: what
-// the actor books on the worker. The guest can't use more than its memory
+// leafMemoryHigh is the memory.high for an actor's cgroup, or 0 for none: its
+// memory limit plus runtime overhead. The guest can't use more than its memory
 // limit, so past that it's cloud-hypervisor or virtiofsd growing, which would
 // otherwise take the whole worker pod to its limit (see cgroup.MemoryGuard).
 func (s *AteWorkerService) leafMemoryHigh(memoryBytes int64) int64 {
 	if !s.throttleMemory || memoryBytes <= 0 {
 		return 0
 	}
-	return actorBooking(memoryBytes)
+	return actorBooking(memoryBytes, memoryBytes)
 }
 
 // watchMemory kills actors stuck at their cgroup's memory.high, until ctx is

@@ -35,6 +35,27 @@ func TestFromLimitsClampsNegative(t *testing.T) {
 	}
 }
 
+func TestBookedMemoryBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *ateworkerpb.ResourceRequirements
+		want int64
+	}{
+		{name: "nil", want: 0},
+		{name: "limits only", in: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 512 << 20}}, want: 512 << 20},
+		{name: "zero request falls back to limit", in: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 512 << 20}, Requests: &ateworkerpb.Resources{CpuMillicores: 250}}, want: 512 << 20},
+		{name: "positive request wins", in: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 512 << 20}, Requests: &ateworkerpb.Resources{MemoryBytes: 128 << 20}}, want: 128 << 20},
+		{name: "negative limit clamped", in: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: -1}}, want: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := BookedMemoryBytes(tc.in); got != tc.want {
+				t.Errorf("BookedMemoryBytes() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVCPUs(t *testing.T) {
 	cases := []struct {
 		milli int64

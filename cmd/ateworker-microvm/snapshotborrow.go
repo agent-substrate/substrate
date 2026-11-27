@@ -35,17 +35,21 @@ func (s *AteWorkerService) unbookedMemory(podLimit int64) int64 {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	for _, h := range s.actors {
-		unbooked -= actorBooking(h.memoryBytes)
+		unbooked -= actorBooking(h.memoryBytes, h.limitMemoryBytes)
 	}
 	return unbooked
 }
 
-// actorBooking is what the control plane books for an actor with this memory
-// limit: the limit plus actorOverhead.
-func actorBooking(memoryBytes int64) int64 {
+// actorBooking is what the control plane books for an actor with bookedBytes
+// requested and limitBytes as its memory limit. Zero limitBytes defaults to
+// bookedBytes.
+func actorBooking(bookedBytes, limitBytes int64) int64 {
+	if limitBytes <= 0 {
+		limitBytes = bookedBytes
+	}
 	const gib = 1 << 30
 	perGiB := actorOverhead.GetMemoryBytesPerGib()
-	return memoryBytes + actorOverhead.GetMemoryBytes() + memoryBytes/gib*perGiB + memoryBytes%gib*perGiB/gib
+	return bookedBytes + actorOverhead.GetMemoryBytes() + limitBytes/gib*perGiB + limitBytes%gib*perGiB/gib
 }
 
 // archiveDir archives srcDir to tarPath. When the pod can lend the whole

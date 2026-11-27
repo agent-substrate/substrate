@@ -21,15 +21,25 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
-// toAteletResources copies declared limits into atelet's form. Returns nil
-// when no limits are declared, so the OCI spec stays untouched for templates
-// that do not use them.
+// toAteletResources copies declared limits and requests into atelet's form.
+// Returns nil when neither carries a positive value, so the OCI spec stays
+// untouched for containers that declare no limits.
 func toAteletResources(r *ateapi.ResourceRequirements) *ateletpb.ResourceRequirements {
 	l := r.GetLimits()
-	if l.GetMemoryBytes() == 0 && l.GetCpuMillicores() == 0 {
+	req := r.GetRequests()
+	hasLimits := l.GetMemoryBytes() != 0 || l.GetCpuMillicores() != 0
+	hasRequests := req.GetMemoryBytes() != 0 || req.GetCpuMillicores() != 0
+	if !hasLimits && !hasRequests {
 		return nil
 	}
-	return &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}}
+	out := &ateletpb.ResourceRequirements{}
+	if hasLimits {
+		out.Limits = &ateletpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
+	}
+	if hasRequests {
+		out.Requests = &ateletpb.Resources{CpuMillicores: req.GetCpuMillicores(), MemoryBytes: req.GetMemoryBytes()}
+	}
+	return out
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
