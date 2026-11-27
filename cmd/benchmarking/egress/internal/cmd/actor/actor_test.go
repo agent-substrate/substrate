@@ -324,7 +324,9 @@ func TestNon200IsAnError(t *testing.T) {
 	})
 	h := serve(ok.host(), failing.host())
 
-	s := runLoop(t, h, StartRequest{Endpoints: 2}, atLeast(10))
+	// Each endpoint is requested on its own goroutine, so a total request
+	// count can be reached before the failing endpoint answers once.
+	s := runLoop(t, h, StartRequest{Endpoints: 2}, func(s *Stats) bool { return s.Rounds >= 5 })
 
 	if s.Errors["HTTP 503"] == 0 {
 		t.Errorf("errors = %v, want HTTP 503 counted", s.Errors)
