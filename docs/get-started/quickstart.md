@@ -5,17 +5,75 @@ weight: 2
 aliases:
   - "/docs/getting-started/"
 description: >
-  Deploy Agent Substrate on a local kind cluster and invoke your first stateful actor.
+  Install kubectl-ate to connect to an existing cluster, or deploy Agent Substrate on a local kind cluster and invoke your first stateful actor.
 ---
 
 # Quickstart & Installation
 
-Deploy the Agent Substrate control plane and the stateful **Counter** sample application on a local [kind](https://kind.sigs.k8s.io/) cluster.
+Connect the `kubectl-ate` CLI to an existing Agent Substrate cluster, or deploy the control plane and the stateful **Counter** sample application on a local [kind](https://kind.sigs.k8s.io/) cluster.
 
 > [!NOTE]
-> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go). A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
+> **Prerequisites:**
+>
+> - **Existing cluster (client only):** [`kubectl`](https://kubernetes.io/docs/tasks/tools/) configured against a Kubernetes 1.37+ cluster (or 1.36 with `PodCertificateRequest` and `ClusterTrustBundle` enabled; check with `kubectl config current-context`). Building `kubectl-ate` from source also requires [Go](https://go.dev/doc/install) with `$(go env GOBIN)` (or `$(go env GOPATH)/bin` when `GOBIN` is unset) on `$PATH`.
+> - **Local `kind` cluster:** [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go). A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
-## 1. Clone the repository
+## Connect to an existing cluster
+
+If Agent Substrate is already installed on your cluster, you only need the `kubectl-ate` CLI plugin.
+
+### 1. Install `kubectl-ate`
+
+Download a prebuilt static binary from [GitHub Releases](https://github.com/agent-substrate/substrate/releases), verify its checksum, and install it into `~/.local/bin`:
+
+<div class="code-tabs">
+<div class="code-tab" data-tab="Linux" data-persist="linux">
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+BIN="kubectl-ate-linux-${ARCH}"
+BASE="https://github.com/agent-substrate/substrate/releases/latest/download"
+curl -fsSLO "${BASE}/${BIN}" &&
+curl -fsSLO "${BASE}/${BIN}.sha256" &&
+sha256sum -c "${BIN}.sha256" &&
+mkdir -p ~/.local/bin &&
+install -m 0755 "${BIN}" ~/.local/bin/kubectl-ate
+```
+
+</div>
+<div class="code-tab" data-tab="macOS" data-persist="macos">
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+BIN="kubectl-ate-darwin-${ARCH}"
+BASE="https://github.com/agent-substrate/substrate/releases/latest/download"
+curl -fsSLO "${BASE}/${BIN}" &&
+curl -fsSLO "${BASE}/${BIN}.sha256" &&
+shasum -a 256 -c "${BIN}.sha256" &&
+mkdir -p ~/.local/bin &&
+install -m 0755 "${BIN}" ~/.local/bin/kubectl-ate
+```
+
+</div>
+</div>
+
+Make sure `~/.local/bin` is on your `PATH` (for example, `export PATH="$HOME/.local/bin:$PATH"`). To build from source instead, see [Running the CLI](../reference/kubectl-ate.md#running-the-cli).
+
+### 2. Verify cluster connectivity
+
+Check the CLI install, confirm your active kubeconfig context points at the Substrate cluster, and list atespaces:
+
+```bash
+kubectl ate --version
+kubectl config current-context
+kubectl ate get atespaces
+```
+
+`kubectl ate` discovers `ate-api-server` from your active kubeconfig context and opens a temporary port-forward tunnel automatically. For non-admin RBAC or authenticating with `--token-file`, see [People running `kubectl ate`](../guides/authentication.md#people-running-kubectl-ate).
+
+## Deploy a local `kind` cluster
+
+### 1. Clone the repository
 
 Clone the repository (if you haven't yet) and `cd` to it:
 
@@ -24,7 +82,7 @@ git clone https://github.com/agent-substrate/substrate.git
 cd substrate
 ```
 
-## 2. Deploy Agent Substrate & Create an Actor
+### 2. Deploy Agent Substrate & Create an Actor
 
 Run the following commands from the repository root to provision a local `kind` cluster, install Agent Substrate, and create a `counter` actor:
 
@@ -42,11 +100,11 @@ go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"
 # 4. Deploy the Counter sample application
 go run ./cmd/ate-setup deploy demo counter
 
-# 5. Install the kubectl-ate CLI plugin and create a stateful actor
+# 5. Build kubectl-ate from this checkout (skip if installed from a release above)
 go install ./cmd/kubectl-ate
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
-# 6. Serve a local proxy on port 8000 that sends requests to the actor through the router
+# 6. Create a stateful actor and serve a local proxy on port 8000
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ```
 
@@ -59,7 +117,7 @@ kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ./hack/delete-kind-cluster.sh
 ```
 
-## 3. Snapshot & Telemetry Configuration
+### 3. Snapshot & Telemetry Configuration
 
 In `kind`, snapshots are stored in the in-cluster S3-compatible `rustfs` service (`BUCKET_NAME=ate-snapshots`), and telemetry exports to the local OpenTelemetry Collector (`manifests/ate-install/kind/ate-otel-config.yaml`):
 
@@ -82,7 +140,7 @@ snapshotConfig:
 
 The template sets no `storageLocation`, so its snapshots go under ate-api-server's `--snapshot-location`. The kind profile points that at the local `rustfs` bucket, `gs://ate-snapshots/`.
 
-## 4. Verify Your Running Actor
+### 4. Verify Your Running Actor
 
 With `kubectl ate proxy actor` running in your first terminal, open a **second terminal** and send an HTTP `POST` request to wake and increment your actor:
 
