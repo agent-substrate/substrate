@@ -112,6 +112,7 @@ type actor_template
     # can_get for now; a separate relation so running a template can later
     # require more than reading it.
     define can_use_template: viewer from parent_atespace
+    define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
 
 # A named snapshot owned by an atespace. Its scope controls which atespaces

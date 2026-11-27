@@ -78,10 +78,12 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapi.Up
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapi.EgressPolicy) error {
+		// Metadata identity is server-owned. Labels come from the request.
 		metadata := toUpdate.GetMetadata()
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, policy)
 		toUpdate.Metadata = metadata
+		applyMetadataLabels(metadata, policy.GetMetadata())
 		defaults.Apply(toUpdate)
 		return nil
 	})

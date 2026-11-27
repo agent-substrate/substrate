@@ -75,9 +75,9 @@ func ActorTemplateFromManifest(manifest []byte) (*ateapi.ActorTemplate, error) {
 	return template, nil
 }
 
-// CreateActorTemplate creates the template through the ate API. Actor
-// templates are immutable (no update RPC), so an existing template is left
-// in place: delete the demo and redeploy to change it.
+// CreateActorTemplate creates the template through the ate API. The template
+// spec is immutable, so an existing template is left in place: delete the
+// demo and redeploy to change it.
 func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template *ateapi.ActorTemplate) error {
 	ref := resources.ActorTemplateRefFromActorTemplate(template)
 	_, err := client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: template})

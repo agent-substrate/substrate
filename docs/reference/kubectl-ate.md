@@ -85,6 +85,10 @@ kubectl ate get actors -A
 # Get a specific actor by name and output as raw YAML
 kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 
+# List actors whose metadata.labels contain every pair.
+# These are resource labels, not WorkerPool labels.
+kubectl ate get actors -a <atespace> -l tier=paid,env=prod
+
 # List all physical workers or get specific workers by name
 kubectl ate get workers
 kubectl ate get worker <worker-name>
@@ -161,9 +165,9 @@ kubectl ate delete atespace <atespace>
 
 An **actor template** describes what an actor runs: containers, volumes,
 snapshot policy, and worker selection. Templates live in an
-atespace and are immutable — there is no update; delete and recreate to change
-one (or create a new template and repoint suspended actors to it with
-`kubectl ate update actor --template`).
+atespace. The spec is immutable: delete and recreate to change one, or create
+a new template and repoint suspended actors with
+`kubectl ate update actor --template`. Labels are the exception.
 
 ```bash
 # Create a template from a manifest (protojson-shaped ateapi.ActorTemplate,
@@ -173,6 +177,7 @@ kubectl ate create actor-template -f template.yaml
 
 # List templates, or get one (also: -o yaml prints the re-applyable manifest).
 kubectl ate get actor-templates -a <atespace>
+kubectl ate get actor-templates -a <atespace> -l tier=paid
 kubectl ate get actor-template <name> -a <atespace> -o yaml
 
 # Delete a template. This also deletes its golden actor and golden snapshot.
@@ -262,6 +267,26 @@ kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
+
+### Labels
+
+Actors, actor templates, and egress policies carry `metadata.labels`.
+Keys and values use Kubernetes label syntax. A list filter (`-l`) keeps
+resources whose labels contain every pair. Labels do not select worker pools
+and do not change scheduling.
+
+```bash
+# Set a label. key- removes one. --overwrite replaces an existing value.
+kubectl ate label actor <actor-name> -a <atespace> tier=paid
+kubectl ate label actor <actor-name> -a <atespace> --overwrite tier=free
+kubectl ate label actor <actor-name> -a <atespace> tier-
+
+kubectl ate label actor-template <name> -a <atespace> env=prod
+kubectl ate label egress-policy <actor-name> -a <atespace> team=edge
+```
+
+`kubectl ate label actor-template` changes labels only. The template spec stays
+as stored. `-o yaml` prints the labels; the table view does not.
 
 ### Egress Policies
 

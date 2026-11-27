@@ -179,6 +179,7 @@ viewer, and a global role holds the same role in every atespace. So
 |---|---|---|
 | `CreateActorTemplate` | `can_create_actor_template`, `metadata.atespace` | Atespace editor |
 | `GetActorTemplate` | `can_get`, the template | Viewer of its atespace |
+| `UpdateActorTemplate` | `can_update`, the template | Editor of its atespace. The RPC replaces `metadata.labels` and leaves every other field as stored |
 | `DeleteActorTemplate` | `can_delete`, the template | Editor of its atespace |
 | `ListActorTemplates` | `can_list_actor_templates`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
 | `CreateActor` | 1. `can_create_actor`, the actor's atespace<br>2. `can_use_template`, the actor template<br>3. `can_use_tag`, the `sourceTag`, if one is given | 1. Atespace editor<br>2. Viewer of the template's atespace, which may be another one<br>3. Editor of the tag's atespace. When `sourceTag` is omitted, the handler resolves the template's golden tag without checking `can_use_tag`. |

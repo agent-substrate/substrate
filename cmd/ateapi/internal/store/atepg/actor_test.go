@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
@@ -141,6 +142,119 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		if _, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1, PageToken: workerPage.NextPageToken}); err == nil {
 			t.Errorf("ListAtespaces with a worker page token = nil error, want an error")
 		}
+	}
+}
+
+func TestSetUpdateMetadataCopiesLabels(t *testing.T) {
+	stored := &ateapi.ResourceMetadata{Version: 1, Labels: map[string]string{"tier": "free"}}
+	mutated := &ateapi.ResourceMetadata{Labels: map[string]string{"env": "prod"}}
+	got := setUpdateMetadata(stored, mutated)
+	if got.GetVersion() != 2 {
+		t.Errorf("version = %d, want 2", got.GetVersion())
+	}
+	if got.GetLabels()["env"] != "prod" || got.GetLabels()["tier"] != "" {
+		t.Errorf("labels = %v, want env=prod", got.GetLabels())
+	}
+	mutated.Labels["env"] = "changed"
+	if got.GetLabels()["env"] != "prod" {
+		t.Errorf("setUpdateMetadata did not copy labels: env = %q", got.GetLabels()["env"])
+	}
+	if got.GetUpdateTime() == nil {
+		t.Error("update_time is nil")
+	}
+}
+
+func TestUpdateActor_AppliesLabels(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	created, err := s.CreateActor(ctx, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{
+			Atespace: "team-a",
+			Name:     "actor-a",
+			Labels:   map[string]string{"tier": "free"},
+		},
+		Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	ref := resources.ActorRefFromActor(created)
+	updated, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(created), func(actor *ateapi.Actor) error {
+		actor.Metadata.Name = "other"
+		actor.Metadata.Labels = map[string]string{"env": "prod"}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+	if updated.GetMetadata().GetName() != "actor-a" {
+		t.Errorf("name = %q, want actor-a", updated.GetMetadata().GetName())
+	}
+	if got := updated.GetMetadata().GetLabels()["env"]; got != "prod" {
+		t.Errorf("env label = %q, want prod", got)
+	}
+	if _, ok := updated.GetMetadata().GetLabels()["tier"]; ok {
+		t.Errorf("tier label = %q, want it cleared", updated.GetMetadata().GetLabels()["tier"])
+	}
+
+	cleared, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(updated), func(actor *ateapi.Actor) error {
+		actor.Metadata.Labels = nil
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor(clear) failed: %v", err)
+	}
+	if len(cleared.GetMetadata().GetLabels()) != 0 {
+		t.Errorf("labels = %v, want none", cleared.GetMetadata().GetLabels())
+	}
+}
+
+func TestListActors_MatchLabels(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	for _, spec := range []struct {
+		name, tier string
+	}{
+		{"a", "paid"},
+		{"b", "free"},
+		{"c", "paid"},
+	} {
+		if _, err := s.CreateActor(ctx, &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace: "team-a",
+				Name:     spec.name,
+				Labels:   map[string]string{"tier": spec.tier},
+			},
+			Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		}); err != nil {
+			t.Fatalf("CreateActor(%s) failed: %v", spec.name, err)
+		}
+	}
+
+	var got []string
+	token := ""
+	for {
+		page, err := s.ListActors(ctx, "team-a", store.ListOptions{
+			PageSize:    1,
+			PageToken:   token,
+			MatchLabels: map[string]string{"tier": "paid"},
+		})
+		if err != nil {
+			t.Fatalf("ListActors failed: %v", err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("page length = %d, want 1", len(page.Items))
+		}
+		got = append(got, page.Items[0].GetMetadata().GetName())
+		token = page.NextPageToken
+		if token == "" {
+			break
+		}
+	}
+	if diff := cmp.Diff([]string{"a", "c"}, got); diff != "" {
+		t.Errorf("ListActors(tier=paid) mismatch (-want +got):\n%s", diff)
 	}
 }
 

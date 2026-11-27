@@ -748,7 +748,7 @@ Registers a new logical actor in the system.
 #### `UpdateActor`
 Replaces the mutable fields of an existing actor with the ones in the request (`kubectl ate update actor`).
 *   **Request:** `UpdateActorRequest`
-    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
+    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `status` and the rest of `metadata` are server-owned and ignored. `metadata.labels` is the exception: it replaces the stored labels, and leaving it unset clears them. Labels filter `ListActors`. They do not affect scheduling. `source_tag` is immutable.
     *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `PerTemplateSnapshotLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
     *   `worker_selector` may be updated or cleared (`nil`) in any state, but not while another operation is changing the actor. The updated selector takes effect on the next `ResumeActor`.
     *   A suspended actor with a local snapshot is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`. If at least one worker on any node is eligible and the actor is larger than each of them, it returns `FAILED_PRECONDITION`.
@@ -815,7 +815,7 @@ Removes an actor in any state from the registry and cleans up associated resourc
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
 *   **GetActor:** Retrieves a single actor by ID.
-*   **ListActors:** Lists all actors currently tracked in the database.
+*   **ListActors:** Lists actors. `label_selector` keeps actors whose `metadata.labels` contain every pair. Unset lists every actor.
 
 #### `GetWorker` / `ListWorkers` / `ListWorkerActorAssignments`
 Query the physical resource pool.

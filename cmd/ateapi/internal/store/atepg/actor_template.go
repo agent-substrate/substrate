@@ -109,7 +109,7 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 			return nil, err
 		}
 	}
-	dbTemplate.Metadata = setUpdateMetadata(oldMeta)
+	dbTemplate.Metadata = setUpdateMetadata(oldMeta, dbTemplate.Metadata)
 	if markForDeletion && dbTemplate.Metadata.DeleteTime == nil {
 		dbTemplate.Metadata.DeleteTime = proto.CloneOf(dbTemplate.Metadata.UpdateTime)
 	}
@@ -148,49 +148,79 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 		return store.ListResponse[*ateapi.ActorTemplate]{}, err
 	}
 
-	var rows pgx.Rows
-	if atespace != "" {
-		var last *string
-		if len(token.Last) == 1 {
-			last = &token.Last[0]
-		}
-		rows, err = p.pool.Query(ctx, `
-			SELECT atespace, name, proto FROM actor_templates
-			WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
-			ORDER BY name LIMIT $3`, atespace, last, int64(pageSize)+1)
-	} else {
-		var lastAtespace, lastName *string
-		if len(token.Last) == 2 {
-			lastAtespace, lastName = &token.Last[0], &token.Last[1]
-		}
-		rows, err = p.pool.Query(ctx, `
-			SELECT atespace, name, proto FROM actor_templates
-			WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
-			ORDER BY atespace, name LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
+	var lastName, lastAtespace string
+	if atespace != "" && len(token.Last) == 1 {
+		lastName = token.Last[0]
 	}
-	if err != nil {
-		return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
+	if atespace == "" && len(token.Last) == 2 {
+		lastAtespace, lastName = token.Last[0], token.Last[1]
 	}
-	defer rows.Close()
 
 	type key struct{ atespace, name string }
 	var keys []key
 	var result []*ateapi.ActorTemplate
-	for rows.Next() {
-		var k key
-		var protoBytes []byte
-		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
-			return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
+	for len(result) <= int(pageSize) {
+		need := int(pageSize) + 1 - len(result)
+		var rows pgx.Rows
+		if atespace != "" {
+			nameCursor := lastName
+			var last *string
+			if nameCursor != "" {
+				last = &nameCursor
+			}
+			rows, err = p.pool.Query(ctx, `
+				SELECT atespace, name, proto FROM actor_templates
+				WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
+				ORDER BY name LIMIT $3`, atespace, last, int64(need))
+		} else {
+			cursorAtespace, cursorName := lastAtespace, lastName
+			var cursorAtespacePtr, cursorNamePtr *string
+			if cursorAtespace != "" || cursorName != "" {
+				cursorAtespacePtr, cursorNamePtr = &cursorAtespace, &cursorName
+			}
+			rows, err = p.pool.Query(ctx, `
+				SELECT atespace, name, proto FROM actor_templates
+				WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
+				ORDER BY atespace, name LIMIT $3`, cursorAtespacePtr, cursorNamePtr, int64(need))
 		}
-		template := &ateapi.ActorTemplate{}
-		if err := unmarshalRow(protoBytes, template, "actor template", k.atespace, k.name); err != nil {
-			return store.ListResponse[*ateapi.ActorTemplate]{}, err
+		if err != nil {
+			return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
 		}
-		keys = append(keys, k)
-		result = append(result, template)
-	}
-	if err := rows.Err(); err != nil {
-		return store.ListResponse[*ateapi.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
+		n := 0
+		scanErr := func() error {
+			defer rows.Close()
+			for rows.Next() {
+				n++
+				var k key
+				var protoBytes []byte
+				if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
+					return fmt.Errorf("scanning actor template row: %w", err)
+				}
+				lastAtespace, lastName = k.atespace, k.name
+				template := &ateapi.ActorTemplate{}
+				if err := unmarshalRow(protoBytes, template, "actor template", k.atespace, k.name); err != nil {
+					return err
+				}
+				if !store.MatchLabels(template.GetMetadata().GetLabels(), opts.MatchLabels) {
+					continue
+				}
+				keys = append(keys, k)
+				result = append(result, template)
+				if len(result) > int(pageSize) {
+					break
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("listing actor templates: %w", err)
+			}
+			return nil
+		}()
+		if scanErr != nil {
+			return store.ListResponse[*ateapi.ActorTemplate]{}, scanErr
+		}
+		if n == 0 || n < need || len(result) > int(pageSize) {
+			break
+		}
 	}
 	var nextToken string
 	if len(result) > int(pageSize) {

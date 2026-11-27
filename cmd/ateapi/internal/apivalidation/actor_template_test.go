@@ -1048,6 +1048,11 @@ func TestValidateActorTemplateUpdate(t *testing.T) {
 		name:   "metadata.create_time changed",
 		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.Metadata.CreateTime = timestamppb.New(time.Unix(1500, 0)) },
 		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "create_time"), nil, "").WithOrigin("immutable")},
+	}, {
+		name: "metadata.labels changed",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Labels = map[string]string{"tier": "paid"}
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

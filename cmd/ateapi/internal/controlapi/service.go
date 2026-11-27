@@ -134,6 +134,7 @@ type serviceStore interface {
 	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition) (*ateapi.AccessPolicy, error)
 	CreateActorTemplate(ctx context.Context, template *ateapi.ActorTemplate) (*ateapi.ActorTemplate, error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapi.ActorTemplate, error)
+	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorTemplate], error)
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition) (*ateapi.ActorTemplate, error)
 	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Worker], error)

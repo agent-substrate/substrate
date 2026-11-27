@@ -36,6 +36,51 @@ func createTestActorTemplate(t *testing.T, s *Persistence, atespace, name string
 	}
 }
 
+func TestListActorTemplates_MatchLabels(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	for _, spec := range []struct{ name, tier string }{
+		{"a", "paid"},
+		{"b", "free"},
+		{"c", "paid"},
+	} {
+		if _, err := s.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace: "team-a",
+				Name:     spec.name,
+				Labels:   map[string]string{"tier": spec.tier},
+			},
+		}); err != nil {
+			t.Fatalf("CreateActorTemplate(%s) failed: %v", spec.name, err)
+		}
+	}
+
+	var got []string
+	token := ""
+	for {
+		page, err := s.ListActorTemplates(ctx, "team-a", store.ListOptions{
+			PageSize:    1,
+			PageToken:   token,
+			MatchLabels: map[string]string{"tier": "paid"},
+		})
+		if err != nil {
+			t.Fatalf("ListActorTemplates failed: %v", err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("page length = %d, want 1", len(page.Items))
+		}
+		got = append(got, page.Items[0].GetMetadata().GetName())
+		token = page.NextPageToken
+		if token == "" {
+			break
+		}
+	}
+	if diff := cmp.Diff([]string{"a", "c"}, got); diff != "" {
+		t.Errorf("ListActorTemplates(tier=paid) mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()

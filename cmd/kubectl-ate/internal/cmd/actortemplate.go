@@ -29,6 +29,7 @@ import (
 var (
 	getActorTemplateAtespaceFlag     string
 	getActorTemplateAllAtespacesFlag bool
+	getActorTemplateSelectorFlag     string
 	createActorTemplateFilenameFlag  string
 	deleteActorTemplateAtespaceFlag  string
 )
@@ -42,6 +43,10 @@ var getActorTemplatesCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := validateAtespaceFlags("actor templates", args, getActorTemplateAtespaceFlag, getActorTemplateAllAtespacesFlag); err != nil {
 			return err
+		}
+		selector, err := parseLabelSelector(getActorTemplateSelectorFlag)
+		if err != nil {
+			return wrapUsageError(err)
 		}
 
 		ctx := cmd.Context()
@@ -60,6 +65,9 @@ var getActorTemplatesCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("failed to get actor template %q: %w", name, err)
 				}
+				if selector != nil && !labelsMatch(resp.GetMetadata().GetLabels(), selector.GetMatchLabels()) {
+					return fmt.Errorf("actor template %q does not match label selector %q", name, getActorTemplateSelectorFlag)
+				}
 				templates = append(templates, resp)
 			}
 			if len(templates) == 1 {
@@ -72,8 +80,9 @@ var getActorTemplatesCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListActorTemplates(ctx, &ateapi.ListActorTemplatesRequest{
-				Options:  &ateapi.ListOptions{PageSize: 100, PageToken: pageToken},
-				Atespace: getActorTemplateAtespaceFlag,
+				Options:       &ateapi.ListOptions{PageSize: 100, PageToken: pageToken},
+				Atespace:      getActorTemplateAtespaceFlag,
+				LabelSelector: selector,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actor templates: %w", err)
@@ -101,7 +110,8 @@ message in its protojson form, exactly as printed by
 The template's atespace and name come from the manifest's metadata.
 The atespace must already exist.
 
-Actor templates are immutable: there is no update; delete and recreate to change one.`,
+The template spec is immutable. Delete and recreate to change it.
+Labels are the exception: kubectl ate label actor-template sets them.`,
 	Args: noArgs("the template name comes from the manifest passed to -f/--filename", "filename"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := readFileOrStdin(cmd.InOrStdin(), createActorTemplateFilenameFlag)
@@ -184,6 +194,7 @@ func readFileOrStdin(in io.Reader, path string) ([]byte, error) {
 func init() {
 	getActorTemplatesCmd.Flags().StringVarP(&getActorTemplateAtespaceFlag, "atespace", "a", "", "get actor-templates in a specific atespace (mutually exclusive with --all-atespaces)")
 	getActorTemplatesCmd.Flags().BoolVarP(&getActorTemplateAllAtespacesFlag, "all-atespaces", "A", false, "get actor-templates across all atespaces (mutually exclusive with --atespace)")
+	getActorTemplatesCmd.Flags().StringVarP(&getActorTemplateSelectorFlag, "selector", "l", "", "filter by resource labels, as a comma-separated list of key=value")
 	getCmd.AddCommand(getActorTemplatesCmd)
 
 	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "manifest file holding a single JSON or YAML actor-template document, or - for stdin")

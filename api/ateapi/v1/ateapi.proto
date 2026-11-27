@@ -211,6 +211,11 @@ service Control {
     option (method).resource = "ActorTemplate";
   }
 
+  // Replace an ActorTemplate's labels. Every other field is left as stored.
+  rpc UpdateActorTemplate(UpdateActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
+
   rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {
     option (method).resource = "ActorTemplate";
   }
@@ -392,8 +397,8 @@ enum TagScope {
   TAG_SCOPE_PUBLISHED = 2;
 }
 
-// Selector matches worker pools by label.
-// Only equality-based matching is supported.
+// Selector matches labels by exact equality.
+// Worker-pool selection and resource list filters both use it.
 message Selector {
   // match_labels selects by exact equality on a set of labels.
   //
@@ -474,6 +479,15 @@ message ResourceMetadata {
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
   google.protobuf.Timestamp delete_time = 7;
+
+  // labels are caller-set key-value pairs. List calls can filter on them.
+  // They do not affect scheduling. Keys and values use Kubernetes label syntax.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
+  map<string, string> labels = 8;
 }
 
 // ExternalVolumes is the external volume state recorded on an actor, wrapped
@@ -1752,6 +1766,20 @@ message GetActorTemplateRequest {
   ObjectRef actor_template = 1;
 }
 
+message UpdateActorTemplateRequest {
+  // The template to relabel. metadata.atespace and metadata.name identify
+  // it. metadata.uid and metadata.version are required preconditions.
+  // metadata.labels replaces the stored labels. Unset clears them.
+  // Every field other than metadata is ignored.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # only metadata.labels is applied
+  // +k8s:customValidation # descend into metadata
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
+  ActorTemplate actor_template = 1;
+}
+
 message ListActorTemplatesRequest {
   // The atespace to list actor templates from. Empty lists across all
   // atespaces.
@@ -1764,6 +1792,12 @@ message ListActorTemplatesRequest {
   //
   // +k8s:optional
   ListOptions options = 2;
+
+  // label_selector keeps templates whose labels contain every pair. Unset
+  // lists every template.
+  //
+  // +k8s:optional
+  Selector label_selector = 3;
 }
 
 message ListActorTemplatesResponse {
@@ -2277,6 +2311,12 @@ message ListActorsRequest {
   //
   // +k8s:optional
   ListOptions options = 2;
+
+  // label_selector keeps actors whose labels contain every pair. Unset
+  // lists every actor.
+  //
+  // +k8s:optional
+  Selector label_selector = 3;
 }
 
 message ListActorsResponse {

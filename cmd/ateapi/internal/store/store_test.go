@@ -179,6 +179,25 @@ func TestPreconditionFrom(t *testing.T) {
 	}
 }
 
+func TestMatchLabels(t *testing.T) {
+	have := map[string]string{"tier": "paid", "env": "prod"}
+	if !MatchLabels(have, nil) {
+		t.Error("MatchLabels(have, nil) = false, want true")
+	}
+	if !MatchLabels(have, map[string]string{"tier": "paid"}) {
+		t.Error("MatchLabels(subset) = false, want true")
+	}
+	if MatchLabels(have, map[string]string{"tier": "free"}) {
+		t.Error("MatchLabels(wrong value) = true, want false")
+	}
+	if MatchLabels(have, map[string]string{"missing": "x"}) {
+		t.Error("MatchLabels(missing key) = true, want false")
+	}
+	if MatchLabels(nil, map[string]string{"tier": "paid"}) {
+		t.Error("MatchLabels(nil have) = true, want false")
+	}
+}
+
 func TestNormalizeListOptions(t *testing.T) {
 	got, err := NormalizeListOptions(ListOptions{})
 	if err != nil {

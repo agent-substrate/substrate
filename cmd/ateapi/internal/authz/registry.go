@@ -207,6 +207,9 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapi.Control_GetActorTemplate_FullMethodName: rule(checksOf(func(r *ateapi.GetActorTemplateRequest) ([]check, field.ErrorList) {
 		return onActorTemplate(RelationCanGet, r.GetActorTemplate(), field.NewPath("actor_template"))
 	})),
+	ateapi.Control_UpdateActorTemplate_FullMethodName: rule(checksOf(func(r *ateapi.UpdateActorTemplateRequest) ([]check, field.ErrorList) {
+		return onActorTemplate(RelationCanUpdate, r.GetActorTemplate().GetMetadata(), field.NewPath("actor_template", "metadata"))
+	})),
 	ateapi.Control_ListActorTemplates_FullMethodName: rule(checksOf(func(r *ateapi.ListActorTemplatesRequest) ([]check, field.ErrorList) {
 		return onAtespaceOrGlobal(RelationCanListActorTemplates, r.GetAtespace(), field.NewPath("atespace"))
 	})),

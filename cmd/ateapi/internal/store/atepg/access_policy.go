@@ -88,7 +88,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	if err := mutate(dbPolicy); err != nil {
 		return nil, err
 	}
-	dbPolicy.Metadata = setUpdateMetadata(oldMeta)
+	dbPolicy.Metadata = setUpdateMetadata(oldMeta, dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling updated global access policy: %w", err)
@@ -173,7 +173,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := mutate(dbPolicy); err != nil {
 		return nil, err
 	}
-	dbPolicy.Metadata = setUpdateMetadata(oldMeta)
+	dbPolicy.Metadata = setUpdateMetadata(oldMeta, dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling updated access policy: %w", err)

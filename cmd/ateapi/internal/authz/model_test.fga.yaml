@@ -230,35 +230,40 @@ tests:
 
   - name: 3. Actor Template Operations (Inherited from Atespace)
     check:
-      - user: user:alice # Owner can get, use, delete private template
+      - user: user:alice # Owner can get, use, update, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
+          can_update: true
           can_delete: true
-      - user: user:bob # Editor can get, use, delete private template
+      - user: user:bob # Editor can get, use, update, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
+          can_update: true
           can_delete: true
-      - user: user:dave # Viewer can get and use, but NOT delete
+      - user: user:dave # Viewer can get and use, but NOT update or delete
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
+          can_update: false
           can_delete: false
       - user: user:frank # Global viewer can get and use template via parent global
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
+          can_update: false
           can_delete: false
       - user: user:eve # External cannot access private template
         object: actor_template:private-template
         assertions:
           can_get: false
           can_use_template: false
+          can_update: false
           can_delete: false
 
   - name: 4. Actor Instance Operations (Inherited from Atespace)

@@ -17,6 +17,7 @@ package controlapi
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
@@ -45,8 +46,8 @@ func TestToStoreListOptions(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := toStoreListOptions(tt.opts); got != tt.want {
-				t.Errorf("toStoreListOptions(%v) = %+v, want %+v", tt.opts, got, tt.want)
+			if diff := cmp.Diff(tt.want, toStoreListOptions(tt.opts)); diff != "" {
+				t.Errorf("toStoreListOptions(%v) mismatch (-want +got):\n%s", tt.opts, diff)
 			}
 		})
 	}

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -441,13 +442,15 @@ func validateSnapshotURIs(resource string, snapshots ...*ateapi.Snapshot) error 
 	return nil
 }
 
-// setUpdateMetadata modifies the input metadata for an update operation and
-// returns it. There are no mutable metadata fields yet. If some are added in
-// the future, (e.g. labels), this would take 2 params and merge them.
-func setUpdateMetadata(metadata *ateapi.ResourceMetadata) *ateapi.ResourceMetadata {
-	metadata.Version++
-	metadata.UpdateTime = timestamppb.Now()
-	return metadata
+// setUpdateMetadata bumps the stored metadata and keeps labels from mutated.
+// Every other metadata field stays as it was stored.
+func setUpdateMetadata(stored, mutated *ateapi.ResourceMetadata) *ateapi.ResourceMetadata {
+	if mutated != nil {
+		stored.Labels = maps.Clone(mutated.GetLabels())
+	}
+	stored.Version++
+	stored.UpdateTime = timestamppb.Now()
+	return stored
 }
 
 func mapDeleteError(err error, uid string, version int64, precondition store.Precondition) error {
