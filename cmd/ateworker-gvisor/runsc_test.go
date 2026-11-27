@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -280,6 +281,39 @@ func TestCheckpointArgs(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("checkpointArgs() = %v, want %v", got, want)
+	}
+}
+
+// TestCmdCheckpointMarksKilledRunsc checks which failures of runsc checkpoint
+// are marked as `errSandboxSaving`.
+func TestCmdCheckpointMarksKilledRunsc(t *testing.T) {
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		// script stands in for runsc.
+		script     string
+		wantSaving bool
+	}{
+		{name: "killed by a signal", ctx: context.Background(), script: "kill -KILL $$\n", wantSaving: true},
+		{name: "exits with an error", ctx: context.Background(), script: "exit 1\n"},
+		{name: "never started", ctx: ended, script: "exit 0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "runsc")
+			if err := os.WriteFile(path, []byte("#!/bin/sh\n"+tc.script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			r := &runsc{path: path, actorUID: "test-actor-123", actorDirs: testActorDirs, flags: mustFlagStore(t)}
+			err := r.cmdCheckpoint(tc.ctx, ocispec.SandboxID, t.TempDir(), nil)
+			if err == nil {
+				t.Fatal("cmdCheckpoint succeeded")
+			}
+			if got := errors.Is(err, errSandboxSaving); got != tc.wantSaving {
+				t.Errorf("cmdCheckpoint = %v, is errSandboxSaving: %t, want %t", err, got, tc.wantSaving)
+			}
+		})
 	}
 }
 

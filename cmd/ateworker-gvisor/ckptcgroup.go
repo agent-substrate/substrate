@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"go.ate.dev/substrate/internal/ocispec"
@@ -35,14 +36,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// During checkpoint, moving the sentry from <uid>-_sandbox into a sibling
-// <uid>-_ckpt cgroup (memory.max = "max", cpu.max copied from <uid>-_sandbox)
-// prevents newly written pages.img cache from evicting clean pages or
-// throttling the sentry under the actor's memory.high. Removing <uid>-_ckpt
-// after sandbox teardown reparents the cache to the worker scope for fast
-// local Resume, and dropActorCheckpointCacheAsync unlinks non-preserved files
-// in the restore dir or evicts preserved checkpoint page cache via
-// POSIX_FADV_DONTNEED once background restore page loading completes.
+// Checkpointing writes about as much page cache as the sandbox holds. The new
+// pages.img file would evict clean pages or throttle the sentry if it were
+// charged to <uid>-_sandbox under the actor's memory limit.
+// checkpointIsolated either lifts the leaf's memory.high for the checkpoint,
+// or moves the sentry into a sibling <uid>-_ckpt cgroup with
+// memory.max = "max" and cpu.max copied from <uid>-_sandbox.
+//
+// The cgroup that holds the cache is removed after sandbox teardown, the leaf
+// by `runsc delete` or <uid>-_ckpt. That leaves the cache charged to the
+// worker scope for fast local Resume. dropActorCheckpointCacheAsync unlinks
+// non-preserved files in the restore dir or evicts preserved checkpoint page
+// cache via POSIX_FADV_DONTNEED once background restore page loading completes.
 
 const (
 	// checkpointCgroupSuffix uses a leading underscore like _sandbox so it cannot
@@ -101,11 +106,11 @@ func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actor
 // writeExisting writes a cgroup interface file without creating it, so a node
 // that did not delegate the controller has nothing written.
 func writeExisting(path, value string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString(value)
+	_, err = f.WriteString(value + "\n")
 	return errors.Join(err, f.Close())
 }
 
@@ -132,6 +137,20 @@ func cgroupHasPID(dir string, pid int) bool {
 
 // movePID is a var so tests can model cgroup2 PID migration on a temp dir.
 var movePID = writeCgroupPID
+
+// slowCheckpointReason is a possible reason that checkpoints have to take
+// the slow, high-contention path.
+type slowCheckpointReason struct {
+	text   string
+	warned sync.Once
+}
+
+var (
+	slowCacheLimit = &slowCheckpointReason{text: "the checkpoint's page cache needs a memory limit"}
+	slowNotHosted  = &slowCheckpointReason{text: "the worker does not host the actor"}
+	slowMemoryMax  = &slowCheckpointReason{text: "the sandbox leaf may have a memory.max"}
+	slowLiftFailed = &slowCheckpointReason{text: "lifting the sandbox leaf's memory.high failed"}
+)
 
 func writeCgroupPID(dir string, pid int) error {
 	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
@@ -168,19 +187,83 @@ func (c *checkpointCgroup) remove() error {
 	return nil
 }
 
-// checkpointIsolated isolates the sentry into a sibling cgroup, runs
-// checkpoint, and tears down the workload
-// before removing the sibling cgroup so its page cache reparents cleanly. If
-// checkpoint fails, it moves the sentry back into its sandbox leaf (or terminates
-// the workload if that rollback fails).
+// checkpointIsolated keeps the checkpoint's page cache out of the actor's
+// memory limit, runs checkpoint, and tears down the workload.
+//
+// With no cacheHigh and a hosted actor whose sandbox leaf has no memory.max
+// (see hostedActor.memoryHigh), it lifts the leaf's memory.high and the sentry
+// stays in the leaf, under the cpu.max runsc sets there for a checkpoint. The
+// cache is charged to the leaf, so usage holds the leaf's readings (see
+// leafUsage). If checkpoint or terminate fails, it puts the limit back and
+// thaws the readings. If checkpoint fails with errSandboxSaving, it first
+// calls waitExit, which waits for the sandbox to exit and reports whether it
+// did. The readings of a sandbox that exited stay frozen, so its final record
+// leaves the checkpoint-induced usage out.
+//
+// Otherwise it warns that the checkpoint is slow, isolates the sentry into a
+// sibling cgroup, and tears down the workload before removing the sibling
+// cgroup so its page cache reparents cleanly. If checkpoint fails, it moves
+// the sentry back into its sandbox leaf (or terminates the workload if that
+// rollback fails).
 func checkpointIsolated(
 	ctx context.Context,
 	cgroupRoot, actorUID string,
 	cacheHigh int64,
 	actorDirs *ateworkerpb.ActorDirs,
+	hosted *hostedActor,
+	waitExit func() bool,
 	checkpoint func(context.Context) error,
 	terminate func() error,
 ) error {
+	var slowReason *slowCheckpointReason
+	var liftErr error
+	switch {
+	case cacheHigh != 0:
+		slowReason = slowCacheLimit
+	case hosted == nil:
+		slowReason = slowNotHosted
+	case hosted.memoryHigh == "":
+		slowReason = slowMemoryMax
+	default:
+		leafDir := filepath.Join(cgroupRoot, ocispec.GVisorCgroupLeaf(actorUID, ocispec.SandboxID))
+		high := filepath.Join(leafDir, "memory.high")
+		var err error
+		if hosted.memoryHigh != "max" {
+			err = writeExisting(high, "max")
+		}
+		if err == nil {
+			hosted.leaf.freezeReading()
+			err = checkpoint(ctx)
+			if err == nil && terminate() == nil {
+				// runsc delete removed the leaf, and the actor is unhosted
+				hosted.leaf.thawReading()
+				return nil
+			}
+			if errors.Is(err, errSandboxSaving) {
+				// The limit put back below would throttle the rest of the save.
+				slog.InfoContext(ctx, "Waiting for the sandbox to exit after a failed checkpoint",
+					slog.String("actorUID", actorUID))
+				if waitExit() {
+					// The readings stay frozen.
+					return err
+				}
+			}
+			// The leaf may still be there. The limit goes back before
+			// readings resume.
+			_ = writeExisting(high, hosted.memoryHigh)
+			hosted.leaf.thawReading()
+			return err
+		}
+		slowReason, liftErr = slowLiftFailed, err
+	}
+	// Log at warn-level the first time, then debug-level.
+	level := slog.LevelDebug
+	slowReason.warned.Do(func() { level = slog.LevelWarn })
+	attrs := []slog.Attr{slog.String("actorUID", actorUID), slog.String("reason", slowReason.text)}
+	if liftErr != nil {
+		attrs = append(attrs, slog.Any("err", liftErr))
+	}
+	slog.LogAttrs(ctx, level, "Slow checkpoint: moving the sentry to a checkpoint cgroup", attrs...)
 	ckptCgroup, err := isolateCheckpointCache(cgroupRoot, actorDirs, actorUID, cacheHigh)
 	if err != nil {
 		slog.WarnContext(ctx, "Checkpointing without page cache isolation",

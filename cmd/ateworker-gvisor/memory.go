@@ -50,7 +50,7 @@ func (s *AteWorkerService) unbookedMemory(podLimit int64) int64 {
 // cgroup, 0 for none, and what it borrowed for it.
 //
 // The checkpoint writes about as much as the sandbox holds through the page
-// cache, charged to the checkpoint cgroup. At the worker pod's memory limit
+// cache, charged to the worker pod. At the worker pod's memory limit
 // that can OOM-kill the whole pod, so the cache may only grow into what the
 // actor booked and the sandbox left untouched, plus what it can borrow. When
 // the pod can lend all of it there is no limit: memory.high also shrinks the

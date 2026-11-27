@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"time"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -279,7 +280,7 @@ func pendingSample(active *resources.ActorAttribution) *ateworkerpb.WorkloadStat
 func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
 	var raw cgroupstats.Sample
 	sample, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
-		sample, r, err := s.sampleSandbox(&h.attribution)
+		sample, r, err := s.sampleSandbox(h)
 		raw = r
 		return sample, nil, err
 	})
@@ -299,19 +300,20 @@ func markMemoryUnmeasured(s *ateworkerpb.WorkloadStatsSample) {
 }
 
 // sampleSandbox reads the sandbox cgroup and builds the sample attributed to
-// active, returning the raw reading alongside it. Errors come back raw --
+// h, returning the raw reading alongside it. Errors come back raw --
 // notably fs.ErrNotExist for a cgroup that is not there yet -- because the
 // callers disagree on what that means: an error code for the keyed read, a
 // pending sample for the sweep.
 // The read holds no lifecycle lock, so the keyed caller re-checks the actor
 // record it loaded after this returns.
-func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
+func (s *AteWorkerService) sampleSandbox(h *hostedActor) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
+	active := &h.attribution
 	read := s.readSandboxCgroup
 	if read == nil {
 		read = cgroupstats.Read
 	}
 	observedAt := time.Now()
-	sample, err := read(filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(active.UID, sandboxCgroupContainer)))
+	sample, err := h.leaf.read(filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(active.UID, sandboxCgroupContainer)), read)
 	if err != nil {
 		return nil, cgroupstats.Sample{}, err
 	}
@@ -333,6 +335,49 @@ func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*a
 
 		ObservedAtUnixNano: observedAt.UnixNano(),
 	}, sample, nil
+}
+
+// leafUsage represents a freezable cgroup reading.
+//
+// Useful during checkpointing such that the reported usage does not
+// include increased page file usage during checkpointing, which would
+// return a misleading peak memory figure.
+type leafUsage struct {
+	mu sync.Mutex
+	// frozen determines whether to return `lastReading` or to take a
+	// fresh reading.
+	frozen bool
+	// lastReading is the latest reading. Used if non-nil and frozen.
+	lastReading *cgroupstats.Sample
+}
+
+// freezeReading makes the leaf repeat its latest reading until thaw.
+func (u *leafUsage) freezeReading() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.frozen = true
+}
+
+// thawReading makes the leaf do actual cgroup stats reading again.
+func (u *leafUsage) thawReading() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.frozen = false
+}
+
+// read reads the cgroup usage, or returns the latest reading if frozen.
+func (u *leafUsage) read(dir string, read func(string) (cgroupstats.Sample, error)) (cgroupstats.Sample, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.frozen && u.lastReading != nil {
+		return *u.lastReading, nil
+	}
+	sample, err := read(dir)
+	if err != nil {
+		return cgroupstats.Sample{}, err
+	}
+	u.lastReading = &sample
+	return sample, nil
 }
 
 // warnDeadSandbox logs, once per activation, that h's sandbox cgroup has no

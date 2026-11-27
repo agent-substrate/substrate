@@ -48,6 +48,10 @@ func (s *AteWorkerService) throttleSandboxMemory(ctx context.Context, hosted *ho
 		slog.LogAttrs(ctx, slog.LevelWarn, "Sandbox keeps its memory.max, an OOM kill in it will restart the worker", attrs...)
 		return
 	}
+	hosted.memoryHigh = "max"
+	if limit != 0 {
+		hosted.memoryHigh = strconv.FormatUint(limit, 10)
+	}
 	hosted.memory.Resume(limit)
 }
 

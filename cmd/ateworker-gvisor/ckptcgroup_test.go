@@ -19,14 +19,17 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -101,6 +104,13 @@ func mustRead(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// memoryHigh returns the value last written to dir's memory.high.
+func memoryHigh(t *testing.T, dir string) string {
+	t.Helper()
+	value, _, _ := strings.Cut(mustRead(t, filepath.Join(dir, "memory.high")), "\n")
+	return value
 }
 
 func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
@@ -221,7 +231,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, 0, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs, nil, nil,
 			func(context.Context) error {
 				if got := mustRead(t, filepath.Join(ckptDir, "cgroup.procs")); got != "101" {
 					t.Errorf("checkpoint cgroup.procs during checkpoint = %q, want 101", got)
@@ -253,7 +263,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, 0, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs, nil, nil,
 			func(context.Context) error {
 				if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
 					t.Errorf("checkpoint cgroup should not be created without a sandbox pid: %v", err)
@@ -280,7 +290,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, 0, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs, nil, nil,
 			func(context.Context) error {
 				return errors.New("checkpoint boom")
 			},
@@ -310,7 +320,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, 0, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs, nil, nil,
 			func(context.Context) error {
 				movePID = func(string, int) error { return unix.EACCES }
 				return errors.New("checkpoint boom")
@@ -339,7 +349,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, 0, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs, nil, nil,
 			func(context.Context) error {
 				if err := os.RemoveAll(f.leaf); err != nil {
 					t.Fatal(err)
@@ -369,7 +379,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, 0, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs, nil, nil,
 			func(context.Context) error { return nil },
 			func() error {
 				// Non-empty ckptDir emulates a sentry still alive in the cgroup.
@@ -386,6 +396,265 @@ func TestCheckpointIsolated(t *testing.T) {
 			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
 		}
 	})
+}
+
+// liftableActor returns a hosted actor where the sandbox leaf is
+// limited by memory.high alone.
+func liftableActor(t *testing.T, f ckptFixture) *hostedActor {
+	t.Helper()
+	mustWrite(t, filepath.Join(f.leaf, "memory.high"), "805306368\n")
+	leafMemory(t, f, 524288000, 629145600)
+	return readActor(t, f, "805306368")
+}
+
+// readActor returns a hosted actor with memoryHigh, and a reading of the
+// fixture's sandbox leaf.
+func readActor(t *testing.T, f ckptFixture, memoryHigh string) *hostedActor {
+	t.Helper()
+	h := &hostedActor{memoryHigh: memoryHigh}
+	if _, err := h.leaf.read(f.leaf, cgroupstats.Read); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// leafMemory sets the memory.current and memory.peak of the fixture's sandbox
+// leaf.
+func leafMemory(t *testing.T, f ckptFixture, current, peak uint64) {
+	t.Helper()
+	mustWrite(t, filepath.Join(f.leaf, "memory.current"), strconv.FormatUint(current, 10)+"\n")
+	mustWrite(t, filepath.Join(f.leaf, "memory.peak"), strconv.FormatUint(peak, 10)+"\n")
+}
+
+const slowCheckpointMsg = "Slow checkpoint: moving the sentry to a checkpoint cgroup"
+
+// resetSlowCheckpointWarnings resets the slowCheckpointReason sync.Once's.
+func resetSlowCheckpointWarnings() {
+	for _, r := range []*slowCheckpointReason{slowCacheLimit, slowNotHosted, slowMemoryMax, slowLiftFailed} {
+		r.warned = sync.Once{}
+	}
+}
+
+func TestCheckpointIsolatedLiftsMemoryHigh(t *testing.T) {
+	t.Run("keeps the sentry in its leaf when the cache needs no limit", func(t *testing.T) {
+		logs := captureWarnings(t)
+		f := newCkptFixture(t, "101")
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		hosted := liftableActor(t, f)
+		// The sandbox grew since that reading, which the frozen leaf repeats.
+		leafMemory(t, f, 534773760, 629145600)
+		var terminated bool
+
+		err := checkpointIsolated(
+			context.Background(),
+			f.root, testActorUID, 0, f.actorDirs, hosted, nil,
+			func(context.Context) error {
+				if got := memoryHigh(t, f.leaf); got != "max" {
+					t.Errorf("sandbox leaf memory.high during checkpoint = %q, want max", got)
+				}
+				// Emulate the snapshot's page cache.
+				leafMemory(t, f, 1048576000, 1153433600)
+				if got, err := hosted.leaf.read(f.leaf, cgroupstats.Read); err != nil || got.MemoryCurrentBytes != 524288000 || got.MemoryPeakBytes != 629145600 {
+					t.Errorf("sandbox leaf usage during checkpoint = current %d peak %d, err %v, want current 524288000 peak 629145600 from before it",
+						got.MemoryCurrentBytes, got.MemoryPeakBytes, err)
+				}
+				if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+					t.Errorf("checkpoint cgroup created: stat err = %v", err)
+				}
+				return nil
+			},
+			func() error {
+				terminated = true
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("checkpointIsolated: %v", err)
+		}
+		if !terminated {
+			t.Error("terminate was not called")
+		}
+		if strings.Contains(logs.String(), slowCheckpointMsg) {
+			t.Errorf("warned of a slow checkpoint without moving the sentry: %s", logs)
+		}
+		// runsc delete removes the leaf when terminate succeeds.
+		// For the test fixture though, check nothing gets written
+		// to it again.
+		if got := memoryHigh(t, f.leaf); got != "max" {
+			t.Errorf("sandbox leaf memory.high after terminate = %q, want max: written again", got)
+		}
+		if got, err := hosted.leaf.read(f.leaf, cgroupstats.Read); err != nil || got.MemoryCurrentBytes != 1048576000 {
+			t.Errorf("sandbox leaf usage after terminate = current %d, err %v, want current 1048576000: still frozen", got.MemoryCurrentBytes, err)
+		}
+	})
+
+	t.Run("writes nothing when the leaf has no memory.high to lift", func(t *testing.T) {
+		f := newCkptFixture(t, "101")
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+
+		err := checkpointIsolated(
+			context.Background(),
+			f.root, testActorUID, 0, f.actorDirs, &hostedActor{memoryHigh: "max"}, nil,
+			func(context.Context) error {
+				if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+					t.Errorf("checkpoint cgroup created: stat err = %v", err)
+				}
+				return nil
+			},
+			func() error { return nil },
+		)
+		if err != nil {
+			t.Fatalf("checkpointIsolated: %v", err)
+		}
+	})
+
+	t.Run("puts memory.high back when terminate leaves the sandbox leaf", func(t *testing.T) {
+		f := newCkptFixture(t, "101")
+
+		err := checkpointIsolated(
+			context.Background(),
+			f.root, testActorUID, 0, f.actorDirs, liftableActor(t, f), nil,
+			func(context.Context) error { return nil },
+			func() error { return errors.New("terminate boom") },
+		)
+		if err != nil {
+			t.Fatalf("checkpointIsolated: %v", err)
+		}
+		if got := memoryHigh(t, f.leaf); got != "805306368" {
+			t.Errorf("sandbox leaf memory.high after failed terminate = %q, want 805306368", got)
+		}
+	})
+
+	saving := fmt.Errorf("runsc killed: %w", errSandboxSaving)
+	for _, tc := range []struct {
+		name string
+		// err is what checkpoint fails with.
+		err error
+		// wantWait is whether it waits for the sandbox to exit, and exits
+		// whether the sandbox does.
+		wantWait, exits bool
+	}{
+		{name: "puts memory.high back and keeps workload alive when checkpoint fails", err: errors.New("checkpoint failed")},
+		{name: "puts memory.high back when a sandbox left saving outlives the wait", err: saving, wantWait: true},
+		{name: "keeps the readings of a sandbox left saving frozen once it exits", err: saving, wantWait: true, exits: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCkptFixture(t, "101")
+			hosted := liftableActor(t, f)
+			var terminated, waited bool
+
+			err := checkpointIsolated(
+				context.Background(),
+				f.root, testActorUID, 0, f.actorDirs, hosted,
+				func() bool {
+					waited = true
+					if got := memoryHigh(t, f.leaf); got != "max" {
+						t.Errorf("sandbox leaf memory.high while the sandbox saves = %q, want max", got)
+					}
+					return tc.exits
+				},
+				func(context.Context) error {
+					// Emulate the page cache of a partial snapshot, reclaimed since.
+					leafMemory(t, f, 419430400, 1153433600)
+					return tc.err
+				},
+				func() error {
+					terminated = true
+					return nil
+				},
+			)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("checkpointIsolated = %v, want %v", err, tc.err)
+			}
+			if waited != tc.wantWait {
+				t.Errorf("waited for the sandbox to exit: %t, want %t", waited, tc.wantWait)
+			}
+			if terminated {
+				t.Error("terminate was called after a failed checkpoint")
+			}
+			wantHigh, wantCurrent := "805306368", uint64(419430400)
+			if tc.exits {
+				wantHigh, wantCurrent = "max", 524288000
+			}
+			if got := memoryHigh(t, f.leaf); got != wantHigh {
+				t.Errorf("sandbox leaf memory.high after failed checkpoint = %q, want %q", got, wantHigh)
+			}
+			got, err := hosted.leaf.read(f.leaf, cgroupstats.Read)
+			if err != nil {
+				t.Fatalf("reading the sandbox leaf after failed checkpoint: %v", err)
+			}
+			if got.MemoryCurrentBytes != wantCurrent {
+				t.Errorf("sandbox leaf usage after failed checkpoint = current %d, want current %d", got.MemoryCurrentBytes, wantCurrent)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		// memoryHigh is what the worker holds as the leaf's memory.high, and
+		// leafHigh the file. An empty leafHigh leaves the file out.
+		memoryHigh, leafHigh string
+		cacheHigh            int64
+		// unhosted leaves the actor without a hostedActor.
+		unhosted bool
+		// wantReason is part of the reason the slow checkpoint warning gives,
+		// and wantErr part of its error, if it has one.
+		wantReason, wantErr string
+	}{
+		{name: "the cache needs a limit", memoryHigh: "805306368", leafHigh: "805306368\n", cacheHigh: 64 << 20, wantReason: "needs a memory limit"},
+		{name: "the worker does not host the actor", leafHigh: "805306368\n", unhosted: true, wantReason: "does not host the actor"},
+		{name: "the leaf may have a memory.max", leafHigh: "max\n", wantReason: "may have a memory.max"},
+		{name: "the leaf's memory.high cannot be lifted", memoryHigh: "805306368", wantReason: "memory.high failed", wantErr: "no such file or directory"},
+	} {
+		t.Run("moves the sentry when "+tc.name, func(t *testing.T) {
+			resetSlowCheckpointWarnings()
+			logs := captureWarnings(t)
+			f := newCkptFixture(t, "101")
+			if tc.leafHigh != "" {
+				mustWrite(t, filepath.Join(f.leaf, "memory.high"), tc.leafHigh)
+			}
+			leafMemory(t, f, 524288000, 629145600)
+			ckptDir := checkpointCgroupDir(f.root, testActorUID)
+			var hosted *hostedActor
+			if !tc.unhosted {
+				hosted = readActor(t, f, tc.memoryHigh)
+			}
+
+			err := checkpointIsolated(
+				context.Background(),
+				f.root, testActorUID, tc.cacheHigh, f.actorDirs, hosted, nil,
+				func(context.Context) error {
+					if got := mustRead(t, filepath.Join(ckptDir, "cgroup.procs")); got != "101" {
+						t.Errorf("checkpoint cgroup.procs during checkpoint = %q, want 101", got)
+					}
+					if hosted != nil {
+						leafMemory(t, f, 419430400, 629145600)
+						if got, err := hosted.leaf.read(f.leaf, cgroupstats.Read); err != nil || got.MemoryCurrentBytes != 419430400 {
+							t.Errorf("sandbox leaf usage during checkpoint = current %d, err %v, want current 419430400", got.MemoryCurrentBytes, err)
+						}
+					}
+					if tc.leafHigh == "" {
+						return nil
+					}
+					if got := mustRead(t, filepath.Join(f.leaf, "memory.high")); got != tc.leafHigh {
+						t.Errorf("sandbox leaf memory.high during checkpoint = %q, want unchanged %q", got, tc.leafHigh)
+					}
+					return nil
+				},
+				func() error {
+					// Emulate container teardown emptying the checkpoint cgroup so rmdir succeeds.
+					_ = os.Remove(filepath.Join(ckptDir, "cpu.max"))
+					return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+				},
+			)
+			if err != nil {
+				t.Fatalf("checkpointIsolated: %v", err)
+			}
+			if got := logs.String(); !strings.Contains(got, slowCheckpointMsg) || !strings.Contains(got, tc.wantReason) || !strings.Contains(got, tc.wantErr) {
+				t.Errorf("warnings = %s, want %q with a reason containing %q and an error containing %q", got, slowCheckpointMsg, tc.wantReason, tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestRemoveStaleCheckpointCgroups(t *testing.T) {
@@ -626,14 +895,14 @@ func TestIsolateCheckpointCacheLimitsTheCache(t *testing.T) {
 	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 64<<20); err != nil {
 		t.Fatalf("isolateCheckpointCache: %v", err)
 	}
-	if got := mustRead(t, filepath.Join(dir, "memory.high")); got != "67108864" {
+	if got := memoryHigh(t, dir); got != "67108864" {
 		t.Errorf("checkpoint memory.high = %q, want 67108864", got)
 	}
 	// a leftover cgroup reused without a limit drops the old one
 	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0); err != nil {
 		t.Fatalf("isolateCheckpointCache: %v", err)
 	}
-	if got := mustRead(t, filepath.Join(dir, "memory.high")); got != "max" {
+	if got := memoryHigh(t, dir); got != "max" {
 		t.Errorf("checkpoint memory.high = %q, want max", got)
 	}
 }

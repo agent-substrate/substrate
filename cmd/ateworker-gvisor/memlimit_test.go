@@ -78,6 +78,35 @@ func TestSwapMemoryMaxForHighNoLimit(t *testing.T) {
 	}
 }
 
+func TestThrottleSandboxMemoryRecordsMemoryHigh(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		throttle bool
+		files    map[string]string
+		want     string
+	}{
+		{name: "limited", throttle: true, files: map[string]string{"memory.max": "268435456\n", "memory.high": "max\n"}, want: "268435456"},
+		{name: "unlimited", throttle: true, files: map[string]string{"memory.max": "max\n", "memory.high": "max\n"}, want: "max"},
+		{name: "no memory controller", throttle: true, want: "max"},
+		{name: "memory.max kept: swap failed", throttle: true, files: map[string]string{"memory.max": "bogus\n"}},
+		{name: "memory.max kept: not throttling", files: map[string]string{"memory.max": "268435456\n", "memory.high": "max\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &AteWorkerService{cgroupRoot: t.TempDir(), throttleMemory: tc.throttle}
+			h := &hostedActor{attribution: resources.ActorAttribution{UID: "uid-a"}}
+			leaf := s.sandboxLeaf("uid-a")
+			if err := os.Mkdir(leaf, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeCgroupFiles(t, leaf, tc.files)
+			s.throttleSandboxMemory(context.Background(), h)
+			if h.memoryHigh != tc.want {
+				t.Errorf("memoryHigh = %q, want %q", h.memoryHigh, tc.want)
+			}
+		})
+	}
+}
+
 func TestRemoveStaleSandboxLeaf(t *testing.T) {
 	root := t.TempDir()
 	s := &AteWorkerService{cgroupRoot: root}
