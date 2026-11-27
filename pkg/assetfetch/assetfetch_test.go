@@ -50,7 +50,13 @@ func TestParseURI(t *testing.T) {
 		{"https://acct.blob.core.windows.net/assets/vmlinux#frag", codes.InvalidArgument},
 		{"mailto:secret@example.com", codes.InvalidArgument},
 		{"https://acct\x7f/x", codes.InvalidArgument},
-		{"gs://bucket/" + strings.Repeat("x", MaxURIBytes), codes.InvalidArgument},
+		{"gs://bucket/" + strings.Repeat("x", MaxURICharacters), codes.InvalidArgument},
+		// The CRD's MaxLength counts characters, so a URI at the limit that
+		// carries non-ASCII object names is admitted by the API server and must
+		// be admitted here too, even though it is far longer in bytes.
+		{"gs://bucket/" + strings.Repeat("x", MaxURICharacters-len("gs://bucket/")), codes.OK},
+		{"gs://bucket/" + strings.Repeat("é", MaxURICharacters-len("gs://bucket/")), codes.OK},
+		{"gs://bucket/" + strings.Repeat("é", MaxURICharacters-len("gs://bucket/")+1), codes.InvalidArgument},
 	} {
 		_, err := ParseURI(tc.uri)
 		if got := status.Code(err); got != tc.want {
