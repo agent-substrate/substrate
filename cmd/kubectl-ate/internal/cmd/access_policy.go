@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -78,6 +79,19 @@ rejects the update when they no longer match those of the stored policy.`,
 	RunE: runUpdateAccessPolicy,
 }
 
+var applyAccessPolicyCmd = &cobra.Command{
+	Use:   "access-policy (-a <atespace> | --global) -f <manifest>",
+	Short: "Create or update an access policy from a manifest",
+	Long: "Create or update the access policy of an atespace, or the global access policy.\n\n" + accessPolicyManifestHelp + `
+
+When metadata.uid and metadata.version are omitted, apply creates the policy if
+missing, leaves it unchanged if it already matches, or updates it against the
+stored uid and version. When both are provided, they are enforced as update
+preconditions.`,
+	Args: validateApplyAccessPolicyArgs,
+	RunE: runApplyAccessPolicy,
+}
+
 var deleteAccessPolicyCmd = &cobra.Command{
 	Use:     "access-policy -a <atespace>",
 	Aliases: []string{"access-policies"},
@@ -103,8 +117,46 @@ func (s accessPolicyScope) String() string {
 	return fmt.Sprintf("atespace %q", s.atespace)
 }
 
+func (s accessPolicyScope) policyLabel() string {
+	if s.global() {
+		return "global access policy"
+	}
+	return fmt.Sprintf("access policy for atespace %q", s.atespace)
+}
+
 func (s accessPolicyScope) ref() *ateapi.ObjectRef {
 	return &ateapi.ObjectRef{Name: s.atespace}
+}
+
+// validateApplyAccessPolicyArgs validates positional args, swallowed flags,
+// scope flags, and -f/--filename together so all CLI usage errors report in a
+// single pass.
+func validateApplyAccessPolicyArgs(cmd *cobra.Command, args []string) error {
+	if err := checkSwallowedFlags(cmd); err != nil {
+		return err
+	}
+	if len(args) > 0 {
+		return usageErrorf("%q takes no positional arguments (received %s)", cmd.CommandPath(), joinQuoted(args))
+	}
+	atespace := strings.TrimSpace(accessPolicyFlags.atespace)
+	atespaceChanged := cmd.Flags().Changed("atespace")
+	global := accessPolicyFlags.global
+	missing := missingRequiredFlags(cmd, []string{"filename"})
+
+	var errs []string
+	switch {
+	case (atespace != "" || atespaceChanged) && global:
+		errs = append(errs, "-a/--atespace and --global are mutually exclusive")
+	case atespace == "" && !global:
+		errs = append(errs, "one of -a/--atespace or --global is required")
+	}
+	if len(missing) > 0 {
+		errs = append(errs, "missing "+formatMissingFlagsClause(missing))
+	}
+	if len(errs) > 0 {
+		return usageErrorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // scopeFromFlags requires exactly one of --atespace and --global.
@@ -206,14 +258,51 @@ type accessPolicyRunner struct {
 	stderr    io.Writer
 }
 
-func (r *accessPolicyRunner) get(ctx context.Context) error {
-	var policy *ateapi.AccessPolicy
-	var err error
+func (r *accessPolicyRunner) getPolicy(ctx context.Context) (*ateapi.AccessPolicy, error) {
 	if r.scope.global() {
-		policy, err = r.client.GetGlobalAccessPolicy(ctx, &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
-	} else {
-		policy, err = r.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), Name: resources.SingletonName})
+		return r.client.GetGlobalAccessPolicy(ctx, &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
 	}
+	return r.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), Name: resources.SingletonName})
+}
+
+func (r *accessPolicyRunner) createPolicy(ctx context.Context, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+	if r.scope.global() {
+		return r.client.CreateGlobalAccessPolicy(ctx, &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: policy})
+	}
+	return r.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
+}
+
+func (r *accessPolicyRunner) updatePolicy(ctx context.Context, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+	if r.scope.global() {
+		return r.client.UpdateGlobalAccessPolicy(ctx, &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: policy})
+	}
+	return r.client.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
+}
+
+func (r *accessPolicyRunner) label() string      { return r.scope.policyLabel() }
+func (r *accessPolicyRunner) subcommand() string { return "access-policy" }
+
+func (r *accessPolicyRunner) requireParent(ctx context.Context) error {
+	return requireScope(ctx, r.client, r.scope)
+}
+
+func (r *accessPolicyRunner) metadata(policy *ateapi.AccessPolicy) *ateapi.ResourceMetadata {
+	return policy.Metadata
+}
+
+func (r *accessPolicyRunner) setMetadata(policy *ateapi.AccessPolicy, meta *ateapi.ResourceMetadata) {
+	policy.Metadata = meta
+}
+
+func (r *accessPolicyRunner) printApplied(policy *ateapi.AccessPolicy, action applyAction) error {
+	if err := printer.PrintAccessPolicyTo(r.stdout, r.scope.atespace, policy, r.outputFmt); err != nil {
+		return err
+	}
+	return writeAppliedStatus(r.stderr, r.outputFmt, r.label(), action)
+}
+
+func (r *accessPolicyRunner) get(ctx context.Context) error {
+	policy, err := r.getPolicy(ctx)
 	if status.Code(err) == codes.NotFound {
 		if err := requireScope(ctx, r.client, r.scope); err != nil {
 			return err
@@ -229,13 +318,7 @@ func (r *accessPolicyRunner) get(ctx context.Context) error {
 }
 
 func (r *accessPolicyRunner) create(ctx context.Context, policy *ateapi.AccessPolicy) error {
-	var created *ateapi.AccessPolicy
-	var err error
-	if r.scope.global() {
-		created, err = r.client.CreateGlobalAccessPolicy(ctx, &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: policy})
-	} else {
-		created, err = r.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
-	}
+	created, err := r.createPolicy(ctx, policy)
 	if status.Code(err) == codes.AlreadyExists {
 		return fmt.Errorf(`%s already has an access policy; change it with "kubectl ate update access-policy": %w`, r.scope, err)
 	}
@@ -246,13 +329,7 @@ func (r *accessPolicyRunner) create(ctx context.Context, policy *ateapi.AccessPo
 }
 
 func (r *accessPolicyRunner) update(ctx context.Context, policy *ateapi.AccessPolicy) error {
-	var updated *ateapi.AccessPolicy
-	var err error
-	if r.scope.global() {
-		updated, err = r.client.UpdateGlobalAccessPolicy(ctx, &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: policy})
-	} else {
-		updated, err = r.client.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
-	}
+	updated, err := r.updatePolicy(ctx, policy)
 	if status.Code(err) == codes.NotFound {
 		if err := requireScope(ctx, r.client, r.scope); err != nil {
 			return err
@@ -266,6 +343,10 @@ func (r *accessPolicyRunner) update(ctx context.Context, policy *ateapi.AccessPo
 		return fmt.Errorf("failed to update %s access policy: %w", r.scope, err)
 	}
 	return printer.PrintAccessPolicyTo(r.stdout, r.scope.atespace, updated, r.outputFmt)
+}
+
+func (r *accessPolicyRunner) apply(ctx context.Context, policy *ateapi.AccessPolicy) error {
+	return applySingleton(ctx, r, policy)
 }
 
 func (r *accessPolicyRunner) delete(ctx context.Context, options *ateapi.DeleteOptions) error {
@@ -350,6 +431,26 @@ func runUpdateAccessPolicy(cmd *cobra.Command, _ []string) error {
 	return runner.update(cmd.Context(), policy)
 }
 
+func runApplyAccessPolicy(cmd *cobra.Command, _ []string) error {
+	var scope accessPolicyScope
+	if !accessPolicyFlags.global {
+		scope = accessPolicyScope{atespace: accessPolicyFlags.atespace}
+	}
+	policy, err := loadAccessPolicyManifest(cmd.InOrStdin(), accessPolicyFlags.filename)
+	if err != nil {
+		return err
+	}
+	if _, err := validateApplyPreconditions(policy.Metadata); err != nil {
+		return err
+	}
+	runner, closeFn, err := newAccessPolicyRunner(cmd, scope)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	return runner.apply(cmd.Context(), policy)
+}
+
 func runDeleteAccessPolicy(cmd *cobra.Command, _ []string) error {
 	options, err := deleteOptionsFromFlags(deleteGuardFlags{
 		uidSet:     cmd.Flags().Changed("uid"),
@@ -369,7 +470,7 @@ func runDeleteAccessPolicy(cmd *cobra.Command, _ []string) error {
 }
 
 func init() {
-	for _, c := range []*cobra.Command{getAccessPolicyCmd, createAccessPolicyCmd, updateAccessPolicyCmd} {
+	for _, c := range []*cobra.Command{getAccessPolicyCmd, createAccessPolicyCmd, updateAccessPolicyCmd, applyAccessPolicyCmd} {
 		c.Flags().StringVarP(&accessPolicyFlags.atespace, "atespace", "a", "", "Atespace whose access policy to use")
 		c.Flags().BoolVar(&accessPolicyFlags.global, "global", false, "Use the global access policy instead of an atespace's")
 	}
@@ -377,9 +478,11 @@ func init() {
 		c.Flags().StringVarP(&accessPolicyFlags.filename, "filename", "f", "", "Manifest file holding one AccessPolicy; use - for stdin (required)")
 		_ = c.MarkFlagRequired("filename")
 	}
+	applyAccessPolicyCmd.Flags().StringVarP(&accessPolicyFlags.filename, "filename", "f", "", "Manifest file holding one AccessPolicy; use - for stdin")
 	getCmd.AddCommand(getAccessPolicyCmd)
 	createCmd.AddCommand(createAccessPolicyCmd)
 	updateCmd.AddCommand(updateAccessPolicyCmd)
+	applyCmd.AddCommand(applyAccessPolicyCmd)
 
 	deleteAccessPolicyCmd.Flags().StringVarP(&accessPolicyFlags.atespace, "atespace", "a", "", "Atespace whose access policy to delete (required)")
 	_ = deleteAccessPolicyCmd.MarkFlagRequired("atespace")

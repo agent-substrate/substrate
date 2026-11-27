@@ -74,6 +74,23 @@ rejects the update when they no longer match those of the stored egress policy.`
 	RunE: runUpdateEgressPolicy,
 }
 
+var applyEgressPolicyCmd = &cobra.Command{
+	Use:   "egress-policy <actor-name> -f <manifest>",
+	Short: "Create or update an actor's egress policy from a manifest",
+	Long: `Create or update the egress policy of an actor from a manifest file.
+
+The manifest is a YAML or JSON EgressPolicy, as printed by
+"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+Its metadata may be omitted.
+
+When metadata.uid and metadata.version are omitted, apply creates the policy if
+missing, leaves it unchanged if it already matches, or updates it against the
+stored uid and version. When both are provided, they are enforced as update
+preconditions.`,
+	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
+	RunE: runApplyEgressPolicy,
+}
+
 var deleteEgressPolicyCmd = &cobra.Command{
 	Use:   "egress-policy <actor-name>",
 	Short: "Delete the egress policy of an actor",
@@ -352,6 +369,104 @@ func runUpdateEgressPolicy(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx)
 }
 
+// egressPolicyApplier abstracts the RPCs apply egress-policy makes.
+type egressPolicyApplier interface {
+	GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error)
+	CreateActorEgressPolicy(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error)
+	UpdateActorEgressPolicy(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error)
+	actorGetter
+}
+
+// applyEgressPolicyRunner executes the apply egress-policy command logic.
+type applyEgressPolicyRunner struct {
+	applier   egressPolicyApplier
+	actor     *ateapi.ObjectRef
+	policy    *ateapi.EgressPolicy
+	outputFmt string
+	stdout    io.Writer
+	stderr    io.Writer
+}
+
+func (r *applyEgressPolicyRunner) label() string {
+	return fmt.Sprintf("egress policy for actor %q in atespace %q", r.actor.GetName(), r.actor.GetAtespace())
+}
+
+func (r *applyEgressPolicyRunner) subcommand() string { return "egress-policy" }
+
+func (r *applyEgressPolicyRunner) getPolicy(ctx context.Context) (*ateapi.EgressPolicy, error) {
+	return r.applier.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{
+		Actor: r.actor,
+		Name:  resources.SingletonName,
+	})
+}
+
+func (r *applyEgressPolicyRunner) createPolicy(ctx context.Context, policy *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error) {
+	return r.applier.CreateActorEgressPolicy(ctx, &ateapi.CreateActorEgressPolicyRequest{
+		Actor:        r.actor,
+		EgressPolicy: policy,
+	})
+}
+
+func (r *applyEgressPolicyRunner) updatePolicy(ctx context.Context, policy *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error) {
+	return r.applier.UpdateActorEgressPolicy(ctx, &ateapi.UpdateActorEgressPolicyRequest{
+		Actor:        r.actor,
+		EgressPolicy: policy,
+	})
+}
+
+func (r *applyEgressPolicyRunner) requireParent(ctx context.Context) error {
+	return requireActor(ctx, r.applier, r.actor)
+}
+
+func (r *applyEgressPolicyRunner) metadata(policy *ateapi.EgressPolicy) *ateapi.ResourceMetadata {
+	return policy.Metadata
+}
+
+func (r *applyEgressPolicyRunner) setMetadata(policy *ateapi.EgressPolicy, meta *ateapi.ResourceMetadata) {
+	policy.Metadata = meta
+}
+
+func (r *applyEgressPolicyRunner) printApplied(policy *ateapi.EgressPolicy, action applyAction) error {
+	if err := printer.PrintEgressPolicyTo(r.stdout, r.actor.GetName(), policy, r.outputFmt); err != nil {
+		return err
+	}
+	return writeAppliedStatus(r.stderr, r.outputFmt, r.label(), action)
+}
+
+func (r *applyEgressPolicyRunner) Run(ctx context.Context) error {
+	return applySingleton(ctx, r, r.policy)
+}
+
+func runApplyEgressPolicy(cmd *cobra.Command, args []string) error {
+	policy, err := loadEgressPolicyManifest(cmd.InOrStdin(), egressPolicyFlags.filename)
+	if err != nil {
+		return err
+	}
+	if err := overrideEgressPolicyMetadata(policy, egressPolicyFlags.atespace); err != nil {
+		return err
+	}
+	if _, err := validateApplyPreconditions(policy.Metadata); err != nil {
+		return err
+	}
+
+	ctx := cmd.Context()
+	apiClient, err := newAPIClient(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+	}
+	defer apiClient.Close()
+
+	runner := &applyEgressPolicyRunner{
+		applier:   apiClient,
+		actor:     &ateapi.ObjectRef{Atespace: egressPolicyFlags.atespace, Name: args[0]},
+		policy:    policy,
+		outputFmt: outputFmt,
+		stdout:    cmd.OutOrStdout(),
+		stderr:    cmd.ErrOrStderr(),
+	}
+	return runner.Run(ctx)
+}
+
 // egressPolicyDeleter abstracts the RPCs delete egress-policy makes.
 type egressPolicyDeleter interface {
 	DeleteActorEgressPolicy(ctx context.Context, req *ateapi.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error)
@@ -445,6 +560,10 @@ func init() {
 	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
 	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "a manifest file holding a single JSON or YAML egress-policy document, or - for stdin")
 	updateCmd.AddCommand(updateEgressPolicyCmd)
+
+	applyEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
+	applyEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "a manifest file holding a single JSON or YAML egress-policy document, or - for stdin")
+	applyCmd.AddCommand(applyEgressPolicyCmd)
 
 	deleteEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
 	deleteEgressPolicyCmd.Flags().StringVar(&egressPolicyFlags.uid, "uid", "", "delete only if the policy's metadata.uid matches; from get -o yaml")
