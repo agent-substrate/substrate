@@ -50,7 +50,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi.Wo
 func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
 	currentUID := worker.GetMetadata().GetUid()
 	currentVersion := worker.GetMetadata().GetVersion()
-	worker.Metadata = setUpdateMetadata(worker.Metadata)
+	worker.Metadata = setUpdateMetadata(worker.Metadata, worker.Metadata)
 	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		return fmt.Errorf("marshaling worker: %w", err)

@@ -14,7 +14,11 @@
 
 package controlapi
 
-import "go.ate.dev/substrate/api/ateapi/v1"
+import (
+	"maps"
+
+	"go.ate.dev/substrate/api/ateapi/v1"
+)
 
 // scrubResourceMetadataForCreate removes fields that should not be set by the
 // user when creating a resource.
@@ -39,4 +43,17 @@ func scrubResourceMetadataForUpdate(in *ateapi.ResourceMetadata) {
 	in.CreateTime = nil // will be set later
 	in.UpdateTime = nil // will be set later
 	in.DeleteTime = nil // will be set later
+}
+
+// applyMetadataLabels copies caller-owned labels onto the stored metadata.
+// A nil source clears them.
+func applyMetadataLabels(dst, src *ateapi.ResourceMetadata) {
+	if dst == nil {
+		return
+	}
+	if src == nil {
+		dst.Labels = nil
+		return
+	}
+	dst.Labels = maps.Clone(src.GetLabels())
 }

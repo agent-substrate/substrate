@@ -48,6 +48,20 @@ func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapi.DeleteA
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateUpdateActorTemplateRequest(ctx context.Context, req *ateapi.UpdateActorTemplateRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_UpdateActorTemplateRequest(ctx, op, nil, req, nil)
+}
+
+// ValidateCustom_UpdateActorTemplateRequest_ActorTemplate checks the metadata
+// the request is allowed to carry. The handler applies only labels.
+func ValidateCustom_UpdateActorTemplateRequest_ActorTemplate(ctx context.Context, op operation.Operation, fldPath *field.Path, template, _ *ateapi.ActorTemplate) field.ErrorList {
+	if template == nil || template.Metadata == nil {
+		return nil
+	}
+	return Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), template.Metadata, nil)
+}
+
 func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
 	op := MakeUpdateOp(ctx)

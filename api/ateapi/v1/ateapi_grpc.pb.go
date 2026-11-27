@@ -66,6 +66,7 @@ const (
 	Control_DeleteAtespace_FullMethodName             = "/substrate.ateapi.v1.Control/DeleteAtespace"
 	Control_CreateActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/CreateActorTemplate"
 	Control_GetActorTemplate_FullMethodName           = "/substrate.ateapi.v1.Control/GetActorTemplate"
+	Control_UpdateActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/UpdateActorTemplate"
 	Control_ListActorTemplates_FullMethodName         = "/substrate.ateapi.v1.Control/ListActorTemplates"
 	Control_DeleteActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/DeleteActorTemplate"
 	Control_GetGlobalAccessPolicy_FullMethodName      = "/substrate.ateapi.v1.Control/GetGlobalAccessPolicy"
@@ -172,6 +173,8 @@ type ControlClient interface {
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// Replace an ActorTemplate's labels. Every other field is left as stored.
+	UpdateActorTemplate(ctx context.Context, in *UpdateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
 	// tag in the template's atespace.
@@ -535,6 +538,16 @@ func (c *controlClient) GetActorTemplate(ctx context.Context, in *GetActorTempla
 	return out, nil
 }
 
+func (c *controlClient) UpdateActorTemplate(ctx context.Context, in *UpdateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorTemplate)
+	err := c.cc.Invoke(ctx, Control_UpdateActorTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorTemplatesResponse)
@@ -720,6 +733,8 @@ type ControlServer interface {
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
 	CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error)
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
+	// Replace an ActorTemplate's labels. Every other field is left as stored.
+	UpdateActorTemplate(context.Context, *UpdateActorTemplateRequest) (*ActorTemplate, error)
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
 	// tag in the template's atespace.
@@ -851,6 +866,9 @@ func (UnimplementedControlServer) CreateActorTemplate(context.Context, *CreateAc
 }
 func (UnimplementedControlServer) GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorTemplate not implemented")
+}
+func (UnimplementedControlServer) UpdateActorTemplate(context.Context, *UpdateActorTemplateRequest) (*ActorTemplate, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateActorTemplate not implemented")
 }
 func (UnimplementedControlServer) ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActorTemplates not implemented")
@@ -1494,6 +1512,24 @@ func _Control_GetActorTemplate_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_UpdateActorTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateActorTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateActorTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateActorTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateActorTemplate(ctx, req.(*UpdateActorTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListActorTemplates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorTemplatesRequest)
 	if err := dec(in); err != nil {
@@ -1794,6 +1830,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetActorTemplate",
 			Handler:    _Control_GetActorTemplate_Handler,
+		},
+		{
+			MethodName: "UpdateActorTemplate",
+			Handler:    _Control_UpdateActorTemplate_Handler,
 		},
 		{
 			MethodName: "ListActorTemplates",

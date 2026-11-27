@@ -100,12 +100,42 @@ func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resource
 	return s.store.GetActorTemplate(ctx, templateRef)
 }
 
+func (s *RPCService) UpdateActorTemplate(ctx context.Context, req *ateapi.UpdateActorTemplateRequest) (*ateapi.ActorTemplate, error) {
+	in := req.GetActorTemplate()
+	if in != nil {
+		scrubResourceMetadataForUpdate(in.Metadata)
+	}
+	if errs := apivalidation.ValidateUpdateActorTemplateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
+	updated, err := s.impl.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(in), func(toUpdate *ateapi.ActorTemplate) error {
+		applyMetadataLabels(toUpdate.GetMetadata(), in.GetMetadata())
+		return nil
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef).WithCause(err)
+		case errors.Is(err, store.ErrVersionConflict), errors.Is(err, store.ErrUIDConflict):
+			return nil, apierror.Aborted("concurrent update conflict, please retry").WithCause(err)
+		case errors.Is(err, store.ErrPreconditionRequired):
+			return nil, apierror.InvalidArgument("while updating actor template %s: %w", templateRef, err)
+		default:
+			return nil, fmt.Errorf("while updating actor template: %w", err)
+		}
+	}
+	return updated, nil
+}
+
 func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapi.ListActorTemplatesRequest) (*ateapi.ListActorTemplatesResponse, error) {
 	if errs := apivalidation.ValidateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
+	opts := toStoreListOptions(req.GetOptions())
+	opts.MatchLabels = req.GetLabelSelector().GetMatchLabels()
+	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), opts)
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actor templates in db: %w", err))
 	}
@@ -141,9 +171,9 @@ func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resou
 }
 
 // validatedActorTemplateMutation wraps mutate so the ActorTemplate it writes is
-// validated as an update of the stored ActorTemplate. There is no update RPC
-// for ActorTemplates, so only the server mutates them, and a validation
-// failure is an internal error.
+// validated as an update of the stored ActorTemplate. UpdateActorTemplate only
+// changes labels. Other mutations are server-side, and a validation failure
+// there is an internal error.
 func validatedActorTemplateMutation(ctx context.Context, mutate func(*ateapi.ActorTemplate) error) func(*ateapi.ActorTemplate) error {
 	return func(toUpdate *ateapi.ActorTemplate) error {
 		oldVal := proto.CloneOf(toUpdate)

@@ -47,6 +47,7 @@ const maxWorkerSelectorLabels = 10
 var (
 	getActorAtespaceFlag          string
 	getActorAllAtespacesFlag      bool
+	getActorSelectorFlag          string
 	createActorAtespaceFlag       string
 	createActorTemplateFlag       string
 	createActorTagFlag            string
@@ -72,6 +73,10 @@ var getActorsCmd = &cobra.Command{
 		if err := validateAtespaceFlags("actors", args, getActorAtespaceFlag, getActorAllAtespacesFlag); err != nil {
 			return err
 		}
+		selector, err := parseLabelSelector(getActorSelectorFlag)
+		if err != nil {
+			return wrapUsageError(err)
+		}
 
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -88,6 +93,9 @@ var getActorsCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("failed to get actor %q: %w", actorName, err)
 				}
+				if selector != nil && !labelsMatch(resp.GetMetadata().GetLabels(), selector.GetMatchLabels()) {
+					return fmt.Errorf("actor %q does not match label selector %q", actorName, getActorSelectorFlag)
+				}
 				actors = append(actors, resp)
 			}
 			if len(actors) == 1 {
@@ -100,8 +108,9 @@ var getActorsCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListActors(ctx, &ateapi.ListActorsRequest{
-				Options:  &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
-				Atespace: getActorAtespaceFlag,
+				Options:       &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
+				Atespace:      getActorAtespaceFlag,
+				LabelSelector: selector,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actors: %w", err)
@@ -871,6 +880,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w, stderr io.Wri
 func init() {
 	getActorsCmd.Flags().StringVarP(&getActorAtespaceFlag, "atespace", "a", "", "get actors in a specific atespace (mutually exclusive with --all-atespaces)")
 	getActorsCmd.Flags().BoolVarP(&getActorAllAtespacesFlag, "all-atespaces", "A", false, "get actors across all atespaces (mutually exclusive with --atespace)")
+	getActorsCmd.Flags().StringVarP(&getActorSelectorFlag, "selector", "l", "", "filter by resource labels, as a comma-separated list of key=value")
 	getCmd.AddCommand(getActorsCmd)
 
 	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")

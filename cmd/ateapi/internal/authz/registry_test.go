@@ -92,6 +92,14 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanListActorTemplates, GlobalRootObject}},
 		},
 		{
+			name:       "UpdateActorTemplate",
+			fullMethod: ateapi.Control_UpdateActorTemplate_FullMethodName,
+			req: &ateapi.UpdateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
+			}},
+			want: []check{{RelationCanUpdate, "actor_template:team-a/tmpl"}},
+		},
+		{
 			name:       "DeleteActorTemplate",
 			fullMethod: ateapi.Control_DeleteActorTemplate_FullMethodName,
 			req:        &ateapi.DeleteActorTemplateRequest{ActorTemplate: localTemplate},

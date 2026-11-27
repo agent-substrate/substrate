@@ -232,9 +232,9 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := validateSnapshotURIs(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetStatus().GetSnapshot()); err != nil {
 		return nil, err
 	}
-	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the state this attempt read.
-	dbTag.Metadata = setUpdateMetadata(oldMeta)
+	// Identity fields stay as stored. Labels come from the closure.
+	// Version and update time come from the state this attempt read.
+	dbTag.Metadata = setUpdateMetadata(oldMeta, dbTag.Metadata)
 	if markForDeletion && dbTag.Metadata.DeleteTime == nil {
 		dbTag.Metadata.DeleteTime = proto.CloneOf(dbTag.Metadata.UpdateTime)
 	}

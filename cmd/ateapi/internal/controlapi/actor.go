@@ -224,7 +224,9 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapi.ListActorsReque
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
+	opts := toStoreListOptions(req.GetOptions())
+	opts.MatchLabels = req.GetLabelSelector().GetMatchLabels()
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), opts)
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -264,7 +266,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			return apierror.FailedPrecondition("Actor %s is being deleted", actorRef)
 		}
-		// Status and Metadata are server-owned fields.
+		// Status and metadata identity are server-owned. Labels come from the request.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is
 		// cleared rather than kept from the stored actor.
@@ -274,6 +276,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
+		applyMetadataLabels(metadata, inActor.GetMetadata())
 		defaults.Apply(toUpdate)
 		return nil
 	})

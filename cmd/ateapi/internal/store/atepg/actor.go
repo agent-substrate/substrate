@@ -125,9 +125,9 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
 		return nil, err
 	}
-	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the state this attempt read.
-	dbActor.Metadata = setUpdateMetadata(oldMeta)
+	// Identity fields stay as stored. Labels come from the closure.
+	// Version and update time come from the state this attempt read.
+	dbActor.Metadata = setUpdateMetadata(oldMeta, dbActor.Metadata)
 	if markForDeletion && dbActor.Metadata.DeleteTime == nil {
 		dbActor.Metadata.DeleteTime = proto.CloneOf(dbActor.Metadata.UpdateTime)
 	}
@@ -197,9 +197,9 @@ func (p *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 	var items []*ateapi.Actor
 	var nextToken string
 	if atespace != "" {
-		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
+		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken, opts.MatchLabels)
 	} else {
-		items, nextToken, err = p.listActorsGlobal(ctx, opts.PageSize, opts.PageToken)
+		items, nextToken, err = p.listActorsGlobal(ctx, opts.PageSize, opts.PageToken, opts.MatchLabels)
 	}
 	if err != nil {
 		return store.ListResponse[*ateapi.Actor]{}, err
@@ -207,7 +207,7 @@ func (p *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 	return store.ListResponse[*ateapi.Actor]{Items: items, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapi.Actor, string, error) {
+func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string, match map[string]string) ([]*ateapi.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr, kindActor, atespace, 1)
 	if err != nil {
 		return nil, "", err
@@ -217,33 +217,37 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 		last = &token.Last[0]
 	}
 
-	rows, err := p.pool.Query(ctx, `
-		SELECT name, proto FROM actors
-		WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
-		ORDER BY name
-		LIMIT $3`, atespace, last, int64(pageSize)+1)
-	if err != nil {
-		return nil, "", fmt.Errorf("listing actors in %q: %w", atespace, err)
-	}
-	defer rows.Close()
-
 	var names []string
 	var result []*ateapi.Actor
-	for rows.Next() {
-		var name string
-		var protoBytes []byte
-		if err := rows.Scan(&name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning actor row: %w", err)
+	for len(result) <= int(pageSize) {
+		need := int(pageSize) + 1 - len(result)
+		rows, err := p.pool.Query(ctx, `
+			SELECT name, proto FROM actors
+			WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
+			ORDER BY name
+			LIMIT $3`, atespace, last, int64(need))
+		if err != nil {
+			return nil, "", fmt.Errorf("listing actors in %q: %w", atespace, err)
 		}
-		a := &ateapi.Actor{}
-		if err := unmarshalRow(protoBytes, a, "actor", atespace, name); err != nil {
-			return nil, "", err
+		n, batchLast, scanErr := scanActorPage(rows, func(name string, protoBytes []byte) error {
+			a := &ateapi.Actor{}
+			if err := unmarshalRow(protoBytes, a, "actor", atespace, name); err != nil {
+				return err
+			}
+			if !store.MatchLabels(a.GetMetadata().GetLabels(), match) {
+				return nil
+			}
+			result = append(result, a)
+			names = append(names, name)
+			return nil
+		}, func() bool { return len(result) > int(pageSize) })
+		if scanErr != nil {
+			return nil, "", scanErr
 		}
-		result = append(result, a)
-		names = append(names, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing actors in %q: %w", atespace, err)
+		if n == 0 || n < need || len(result) > int(pageSize) {
+			break
+		}
+		last = &batchLast
 	}
 
 	var nextToken string
@@ -254,44 +258,96 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 	return result, nextToken, nil
 }
 
-func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapi.Actor, string, error) {
+// scanActorPage reads name/proto rows until full reports true or the rows end.
+// n is the number of rows read. batchLast is the last name read.
+func scanActorPage(rows pgx.Rows, accept func(name string, protoBytes []byte) error, full func() bool) (n int, batchLast string, err error) {
+	defer rows.Close()
+	for rows.Next() {
+		n++
+		var name string
+		var protoBytes []byte
+		if err = rows.Scan(&name, &protoBytes); err != nil {
+			return n, batchLast, fmt.Errorf("scanning actor row: %w", err)
+		}
+		batchLast = name
+		if err = accept(name, protoBytes); err != nil {
+			return n, batchLast, err
+		}
+		if full() {
+			break
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return n, batchLast, fmt.Errorf("listing actors: %w", err)
+	}
+	return n, batchLast, nil
+}
+
+func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, pageTokenStr string, match map[string]string) ([]*ateapi.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr, kindActor, "", 2)
 	if err != nil {
 		return nil, "", err
 	}
-	var lastAtespace, lastName *string
+	var lastAtespace, lastName string
 	if len(token.Last) == 2 {
-		lastAtespace, lastName = &token.Last[0], &token.Last[1]
+		lastAtespace, lastName = token.Last[0], token.Last[1]
 	}
-
-	rows, err := p.pool.Query(ctx, `
-		SELECT atespace, name, proto FROM actors
-		WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
-		ORDER BY atespace, name
-		LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
-	if err != nil {
-		return nil, "", fmt.Errorf("listing actors: %w", err)
-	}
-	defer rows.Close()
 
 	type key struct{ atespace, name string }
 	var keys []key
 	var result []*ateapi.Actor
-	for rows.Next() {
-		var k key
-		var protoBytes []byte
-		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning actor row: %w", err)
+	for len(result) <= int(pageSize) {
+		need := int(pageSize) + 1 - len(result)
+		// Copy the cursor. The scan below advances lastAtespace and lastName,
+		// and the query must keep the values from before this batch.
+		cursorAtespace, cursorName := lastAtespace, lastName
+		var cursorAtespacePtr, cursorNamePtr *string
+		if cursorAtespace != "" || cursorName != "" {
+			cursorAtespacePtr, cursorNamePtr = &cursorAtespace, &cursorName
 		}
-		a := &ateapi.Actor{}
-		if err := unmarshalRow(protoBytes, a, "actor", k.atespace, k.name); err != nil {
-			return nil, "", err
+		rows, err := p.pool.Query(ctx, `
+			SELECT atespace, name, proto FROM actors
+			WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
+			ORDER BY atespace, name
+			LIMIT $3`, cursorAtespacePtr, cursorNamePtr, int64(need))
+		if err != nil {
+			return nil, "", fmt.Errorf("listing actors: %w", err)
 		}
-		result = append(result, a)
-		keys = append(keys, k)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing actors: %w", err)
+		n := 0
+		scanErr := func() error {
+			defer rows.Close()
+			for rows.Next() {
+				n++
+				var k key
+				var protoBytes []byte
+				if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
+					return fmt.Errorf("scanning actor row: %w", err)
+				}
+				lastAtespace, lastName = k.atespace, k.name
+				a := &ateapi.Actor{}
+				if err := unmarshalRow(protoBytes, a, "actor", k.atespace, k.name); err != nil {
+					return err
+				}
+				if !store.MatchLabels(a.GetMetadata().GetLabels(), match) {
+					continue
+				}
+				result = append(result, a)
+				keys = append(keys, k)
+				if len(result) > int(pageSize) {
+					break
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("listing actors: %w", err)
+			}
+			return nil
+		}()
+		if scanErr != nil {
+			return nil, "", scanErr
+		}
+		if n == 0 || n < need || len(result) > int(pageSize) {
+			break
+		}
 	}
 
 	var nextToken string

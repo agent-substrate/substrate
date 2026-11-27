@@ -470,6 +470,20 @@ type ListOptions struct {
 	// PageToken resumes a listing after the page it was issued for. Empty
 	// starts from the first page.
 	PageToken string
+	// MatchLabels keeps items whose labels contain every pair. Empty matches
+	// every item.
+	MatchLabels map[string]string
+}
+
+// MatchLabels reports whether have contains every pair in want. An empty want
+// matches every have.
+func MatchLabels(have, want map[string]string) bool {
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // DefaultPageSize is used by store implementations when PageSize is unset.

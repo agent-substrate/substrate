@@ -81,6 +81,18 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) { m.Name = "ID1" }))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
+		"valid actor.metadata.labels",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Labels = map[string]string{"tier": "paid"}
+		}))),
+		nil,
+	}, {
+		"invalid actor.metadata.labels key",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Labels = map[string]string{"bad key!": "paid"}
+		}))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "labels"), "bad key!", "").WithOrigin("format=k8s-label-key")},
+	}, {
 		"valid actor.actor_template",
 		validReq(validActor(withActorTemplate("as", "tmpl"))),
 		nil,
