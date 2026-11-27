@@ -355,6 +355,7 @@ message ContainerSpec {
   // resources are the container's own declared limits, if any.
   //
   // +k8s:optional
+  // +k8s:subfield(requests)=+k8s:forbidden
   ResourceRequirements resources = 4;
 
   // user is the process identity, the image's USER resolved against its
@@ -377,6 +378,12 @@ message ResourceRequirements {
   //
   // +k8s:optional
   Resources limits = 1;
+
+  // requests is the amount of compute resources booked on the worker.
+  // Each zero dimension defaults to limits.
+  //
+  // +k8s:optional
+  Resources requests = 2;
 }
 
 // Resources is an amount of each compute resource.

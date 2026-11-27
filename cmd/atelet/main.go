@@ -2383,6 +2383,9 @@ func toAteworkerResources(r *ateletpb.ResourceRequirements) *ateworkerpb.Resourc
 	if l := r.GetLimits(); l != nil {
 		out.Limits = &ateworkerpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
 	}
+	if req := r.GetRequests(); req != nil {
+		out.Requests = &ateworkerpb.Resources{CpuMillicores: req.GetCpuMillicores(), MemoryBytes: req.GetMemoryBytes()}
+	}
 	return out
 }
 

@@ -18,8 +18,8 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
-// The same ateapi.Resources is what an Actor's limits ask for, what a Worker
-// supplies, and the sum of what a Worker's Actors hold, so they subtract.
+// The same ateapi.Resources is what an Actor books, what a Worker supplies,
+// and the sum of what a Worker's Actors hold, so they subtract.
 //
 // A zero dimension is none of that resource. A Worker reports every dimension
 // it has, so a zero in its capacity is one it cannot supply at all.

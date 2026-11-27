@@ -103,6 +103,93 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 	} else if got.MemTotalBytes < wantMemBytes/2 {
 		t.Errorf("sandbox MemTotal = %d bytes, unexpectedly far below the declared 512Mi limit", got.MemTotalBytes)
 	}
+
+	t.Run("requests book less while sandbox keeps limits", func(t *testing.T) {
+		baseTmpl, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{
+			ActorTemplate: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
+		})
+		if err != nil {
+			t.Fatalf("GetActorTemplate %q: %v", sizingTemplate, err)
+		}
+		const (
+			reqTemplate = "probe-sized-requests"
+			reqActor    = "sized-requested-actor"
+			reqCPU      = 250
+			reqMemBytes = 256 * 1024 * 1024
+		)
+		if _, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+			ActorTemplate: &ateapi.ActorTemplate{
+				Metadata:       &ateapi.ResourceMetadata{Atespace: sizingNamespace, Name: reqTemplate},
+				WorkerSelector: baseTmpl.GetWorkerSelector(),
+				Containers:     baseTmpl.GetContainers(),
+				SnapshotConfig: &ateapi.SnapshotConfig{
+					GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+				},
+				Resources: &ateapi.ResourceRequirements{
+					Limits:   resources.CPUMemory(wantCPU*1000, wantMemBytes),
+					Requests: resources.CPUMemory(reqCPU, reqMemBytes),
+				},
+			},
+		}); err != nil {
+			t.Fatalf("CreateActorTemplate %q: %v", reqTemplate, err)
+		}
+		t.Cleanup(func() {
+			_, _ = clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{
+				ActorTemplate: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: reqTemplate},
+			})
+		})
+
+		createAndResumeActorFromTemplate(t, ctx, clients, reqActor, reqTemplate)
+
+		reqGot := getResources(t, ctx, rc, reqActor)
+		if reqGot.NumCPU != wantCPU {
+			t.Errorf("sandbox NumCPU with requests = %d, want %d", reqGot.NumCPU, wantCPU)
+		}
+		if reqGot.MemTotalError != "" {
+			t.Errorf("probe could not read MemTotal: %s", reqGot.MemTotalError)
+		} else if reqGot.MemTotalBytes > wantMemBytes*11/10 || reqGot.MemTotalBytes < wantMemBytes/2 {
+			t.Errorf("sandbox MemTotal with requests = %d bytes, want near 512Mi limit (%d)", reqGot.MemTotalBytes, wantMemBytes)
+		}
+
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: reqActor},
+		})
+		if err != nil {
+			t.Fatalf("GetActor %q: %v", reqActor, err)
+		}
+		workerRef := actor.GetStatus().GetWorkerAssignment().GetWorker()
+		assignments, err := clients.SubstrateAPI.ListWorkerActorAssignments(ctx, &ateapi.ListWorkerActorAssignmentsRequest{
+			Worker: workerRef,
+		})
+		if err != nil {
+			t.Fatalf("ListWorkerActorAssignments: %v", err)
+		}
+		var booked *ateapi.Resources
+		for _, a := range assignments.GetActorAssignments() {
+			if a.GetActorUid() == actor.GetMetadata().GetUid() {
+				booked = a.GetResources()
+				break
+			}
+		}
+		if booked == nil {
+			t.Fatalf("worker %v has no assignment for actor UID %q", workerRef, actor.GetMetadata().GetUid())
+		}
+		if booked.GetCpuMillicores() != reqCPU {
+			t.Errorf("booked cpu_millicores = %d, want %d", booked.GetCpuMillicores(), reqCPU)
+		}
+		worker, err := clients.SubstrateAPI.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: workerRef})
+		if err != nil {
+			t.Fatalf("GetWorker %v: %v", workerRef, err)
+		}
+		var overhead *ateapi.RuntimeOverhead
+		if classes := worker.GetStatus().GetSandboxClasses(); len(classes) > 0 {
+			overhead = classes[0].GetDefaultRuntime().GetActorOverhead()
+		}
+		wantBookedMem := reqMemBytes + overhead.GetMemoryBytes() + wantMemBytes*overhead.GetMemoryBytesPerGib()/(1<<30)
+		if booked.GetMemoryBytes() != wantBookedMem {
+			t.Errorf("booked memory_bytes = %d, want %d", booked.GetMemoryBytes(), wantBookedMem)
+		}
+	})
 }
 
 // deploySizedProbe installs the sized probe fixture for the sandbox class
@@ -117,9 +204,14 @@ func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients) {
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
+	createAndResumeActorFromTemplate(t, ctx, clients, id, sizingTemplate)
+}
+
+func createAndResumeActorFromTemplate(t *testing.T, ctx context.Context, clients *e2e.Clients, id, templateName string) {
+	t.Helper()
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: sizingNamespace, Name: id},
-		ActorTemplate: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: templateName},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
@@ -129,7 +221,6 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: id}})
 	})
 
-	// Resume from the golden snapshot (the restore path).
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}

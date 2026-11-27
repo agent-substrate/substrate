@@ -64,6 +64,10 @@ type Constraints struct {
 	// Limits are the actor's declared resource limits, in the units a Worker
 	// reports its capacity in, so the two subtract.
 	Limits *ateapi.Resources
+
+	// Requests are the actor's declared resource requests, in the units a
+	// Worker reports its capacity in. Each zero dimension defaults to Limits.
+	Requests *ateapi.Resources
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -310,24 +314,36 @@ func (s *scheduler) HasRoom(worker *ateapi.Worker, constraints Constraints) bool
 	return ok
 }
 
-// Booking is what an actor takes from the worker's capacity: its limits plus
-// the overhead of the worker runtime it would run under there. It reports
-// false when that doesn't fit in an int64, and the actor doesn't fit on the worker.
+// Booking is what an actor takes from the worker's capacity: its requested
+// resources (defaulting each unset dimension to Limits) plus the overhead of
+// the worker runtime it would run under there. It reports false when that
+// doesn't fit in an int64, and the actor doesn't fit on the worker.
 func Booking(worker *ateapi.Worker, constraints Constraints) (*ateapi.Resources, bool) {
+	cpu := constraints.Requests.GetCpuMillicores()
+	if cpu == 0 {
+		cpu = constraints.Limits.GetCpuMillicores()
+	}
+	mem := constraints.Requests.GetMemoryBytes()
+	if mem == 0 {
+		mem = constraints.Limits.GetMemoryBytes()
+	}
 	overhead := constraints.SnapshotRuntime.WorkerRuntimeFor(worker.GetStatus()).GetActorOverhead()
 	if overhead == nil {
-		return constraints.Limits, true
+		return resources.CPUMemory(cpu, mem), true
 	}
 	limit := constraints.Limits.GetMemoryBytes()
+	if limit == 0 {
+		limit = mem
+	}
 	scaled, ok := perGiB(limit, overhead.GetMemoryBytesPerGib())
 	if !ok {
 		return nil, false
 	}
-	memory, ok := sum(limit, overhead.GetMemoryBytes(), scaled)
+	memory, ok := sum(mem, overhead.GetMemoryBytes(), scaled)
 	if !ok {
 		return nil, false
 	}
-	return &ateapi.Resources{CpuMillicores: constraints.Limits.GetCpuMillicores(), MemoryBytes: memory}, true
+	return resources.CPUMemory(cpu, memory), true
 }
 
 // perGiB scales rate bytes per GiB to n bytes, and reports false on overflow.

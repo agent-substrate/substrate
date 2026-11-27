@@ -883,6 +883,7 @@ type ContainerSpec struct {
 	// resources are the container's own declared limits, if any.
 	//
 	// +k8s:optional
+	// +k8s:subfield(requests)=+k8s:forbidden
 	Resources *ResourceRequirements `protobuf:"bytes,4,opt,name=resources,proto3" json:"resources,omitempty"`
 	// user is the process identity, the image's USER resolved against its
 	// /etc/passwd and /etc/group. Unset is root.
@@ -1032,7 +1033,12 @@ type ResourceRequirements struct {
 	// limits is the maximum amount of compute resources allowed.
 	//
 	// +k8s:optional
-	Limits        *Resources `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
+	Limits *Resources `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
+	// requests is the amount of compute resources booked on the worker.
+	// Each zero dimension defaults to limits.
+	//
+	// +k8s:optional
+	Requests      *Resources `protobuf:"bytes,2,opt,name=requests,proto3" json:"requests,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1070,6 +1076,13 @@ func (*ResourceRequirements) Descriptor() ([]byte, []int) {
 func (x *ResourceRequirements) GetLimits() *Resources {
 	if x != nil {
 		return x.Limits
+	}
+	return nil
+}
+
+func (x *ResourceRequirements) GetRequests() *Resources {
+	if x != nil {
+		return x.Requests
 	}
 	return nil
 }
@@ -2238,9 +2251,10 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\vProcessUser\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x10\n" +
 	"\x03gid\x18\x02 \x01(\rR\x03gid\x12'\n" +
-	"\x0fadditional_gids\x18\x03 \x03(\rR\x0eadditionalGids\"D\n" +
+	"\x0fadditional_gids\x18\x03 \x03(\rR\x0eadditionalGids\"v\n" +
 	"\x14ResourceRequirements\x12,\n" +
-	"\x06limits\x18\x01 \x01(\v2\x14.ateworker.ResourcesR\x06limits\"U\n" +
+	"\x06limits\x18\x01 \x01(\v2\x14.ateworker.ResourcesR\x06limits\x120\n" +
+	"\brequests\x18\x02 \x01(\v2\x14.ateworker.ResourcesR\brequests\"U\n" +
 	"\tResources\x12%\n" +
 	"\x0ecpu_millicores\x18\x01 \x01(\x03R\rcpuMillicores\x12!\n" +
 	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\"@\n" +
@@ -2400,36 +2414,37 @@ var file_internal_proto_ateworkerpb_ateworker_proto_depIdxs = []int32{
 	11, // 14: ateworker.ContainerSpec.resources:type_name -> ateworker.ResourceRequirements
 	10, // 15: ateworker.ContainerSpec.user:type_name -> ateworker.ProcessUser
 	12, // 16: ateworker.ResourceRequirements.limits:type_name -> ateworker.Resources
-	15, // 17: ateworker.WakeupProbe.http_get:type_name -> ateworker.HttpGetAction
-	7,  // 18: ateworker.CheckpointWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
-	0,  // 19: ateworker.CheckpointWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
-	2,  // 20: ateworker.CheckpointWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
-	7,  // 21: ateworker.RestoreWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
-	27, // 22: ateworker.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 23: ateworker.RestoreWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
-	6,  // 24: ateworker.RestoreWorkloadRequest.egress_gateway:type_name -> ateworker.EgressGateway
-	11, // 25: ateworker.RestoreWorkloadRequest.resources:type_name -> ateworker.ResourceRequirements
-	2,  // 26: ateworker.RestoreWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
-	1,  // 27: ateworker.WorkloadStatsSample.source:type_name -> ateworker.StatsSource
-	22, // 28: ateworker.GetWorkloadStatsResponse.sample:type_name -> ateworker.WorkloadStatsSample
-	22, // 29: ateworker.GetActiveWorkloadStatsResponse.samples:type_name -> ateworker.WorkloadStatsSample
-	5,  // 30: ateworker.Worker.RunWorkload:input_type -> ateworker.RunWorkloadRequest
-	17, // 31: ateworker.Worker.CheckpointWorkload:input_type -> ateworker.CheckpointWorkloadRequest
-	19, // 32: ateworker.Worker.RestoreWorkload:input_type -> ateworker.RestoreWorkloadRequest
-	21, // 33: ateworker.Worker.GetWorkloadStats:input_type -> ateworker.GetWorkloadStatsRequest
-	24, // 34: ateworker.Worker.GetActiveWorkloadStats:input_type -> ateworker.GetActiveWorkloadStatsRequest
-	3,  // 35: ateworker.Worker.TerminateWorkload:input_type -> ateworker.TerminateWorkloadRequest
-	16, // 36: ateworker.Worker.RunWorkload:output_type -> ateworker.RunWorkloadResponse
-	18, // 37: ateworker.Worker.CheckpointWorkload:output_type -> ateworker.CheckpointWorkloadResponse
-	20, // 38: ateworker.Worker.RestoreWorkload:output_type -> ateworker.RestoreWorkloadResponse
-	23, // 39: ateworker.Worker.GetWorkloadStats:output_type -> ateworker.GetWorkloadStatsResponse
-	25, // 40: ateworker.Worker.GetActiveWorkloadStats:output_type -> ateworker.GetActiveWorkloadStatsResponse
-	4,  // 41: ateworker.Worker.TerminateWorkload:output_type -> ateworker.TerminateWorkloadResponse
-	36, // [36:42] is the sub-list for method output_type
-	30, // [30:36] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	12, // 17: ateworker.ResourceRequirements.requests:type_name -> ateworker.Resources
+	15, // 18: ateworker.WakeupProbe.http_get:type_name -> ateworker.HttpGetAction
+	7,  // 19: ateworker.CheckpointWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
+	0,  // 20: ateworker.CheckpointWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
+	2,  // 21: ateworker.CheckpointWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
+	7,  // 22: ateworker.RestoreWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
+	27, // 23: ateworker.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	0,  // 24: ateworker.RestoreWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
+	6,  // 25: ateworker.RestoreWorkloadRequest.egress_gateway:type_name -> ateworker.EgressGateway
+	11, // 26: ateworker.RestoreWorkloadRequest.resources:type_name -> ateworker.ResourceRequirements
+	2,  // 27: ateworker.RestoreWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
+	1,  // 28: ateworker.WorkloadStatsSample.source:type_name -> ateworker.StatsSource
+	22, // 29: ateworker.GetWorkloadStatsResponse.sample:type_name -> ateworker.WorkloadStatsSample
+	22, // 30: ateworker.GetActiveWorkloadStatsResponse.samples:type_name -> ateworker.WorkloadStatsSample
+	5,  // 31: ateworker.Worker.RunWorkload:input_type -> ateworker.RunWorkloadRequest
+	17, // 32: ateworker.Worker.CheckpointWorkload:input_type -> ateworker.CheckpointWorkloadRequest
+	19, // 33: ateworker.Worker.RestoreWorkload:input_type -> ateworker.RestoreWorkloadRequest
+	21, // 34: ateworker.Worker.GetWorkloadStats:input_type -> ateworker.GetWorkloadStatsRequest
+	24, // 35: ateworker.Worker.GetActiveWorkloadStats:input_type -> ateworker.GetActiveWorkloadStatsRequest
+	3,  // 36: ateworker.Worker.TerminateWorkload:input_type -> ateworker.TerminateWorkloadRequest
+	16, // 37: ateworker.Worker.RunWorkload:output_type -> ateworker.RunWorkloadResponse
+	18, // 38: ateworker.Worker.CheckpointWorkload:output_type -> ateworker.CheckpointWorkloadResponse
+	20, // 39: ateworker.Worker.RestoreWorkload:output_type -> ateworker.RestoreWorkloadResponse
+	23, // 40: ateworker.Worker.GetWorkloadStats:output_type -> ateworker.GetWorkloadStatsResponse
+	25, // 41: ateworker.Worker.GetActiveWorkloadStats:output_type -> ateworker.GetActiveWorkloadStatsResponse
+	4,  // 42: ateworker.Worker.TerminateWorkload:output_type -> ateworker.TerminateWorkloadResponse
+	37, // [37:43] is the sub-list for method output_type
+	31, // [31:37] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_internal_proto_ateworkerpb_ateworker_proto_init() }

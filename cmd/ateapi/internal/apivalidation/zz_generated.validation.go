@@ -1385,6 +1385,10 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_ActorTemplate_Resources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			func() { // cohort = "limits"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "limits",
@@ -2187,6 +2191,24 @@ func Validate_Container(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "requests"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "requests",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Requests }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *v1.Resources) field.ErrorList {
+						return validate.ForbiddenPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "requests",
+					func(o *v1.ResourceRequirements) *v1.Resources { return o.Requests }, ateDeepEqual, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -7430,6 +7452,36 @@ func Validate_ResourceRequirements(
 				return oldObj.Limits
 			})
 		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.ResourceRequirements.Requests
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ResourceRequirements) *v1.Resources {
+				return oldObj.Requests
+			})
+		errs = append(errs, fn(fldPath.Child("requests"), obj.Requests, oldVal, oldObj != nil)...)
 	}
 
 	return errs

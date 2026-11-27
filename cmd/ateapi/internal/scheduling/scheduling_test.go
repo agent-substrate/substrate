@@ -827,6 +827,44 @@ func TestBooking(t *testing.T) {
 	if got, ok := Booking(plain, Constraints{Limits: limits}); !ok || !proto.Equal(got, limits) {
 		t.Errorf("Booking() without overhead = %v, %v, want the limits %v", got, ok, limits)
 	}
+
+	requests := &ateapi.Resources{CpuMillicores: 100, MemoryBytes: gib / 4}
+	if got, ok := Booking(plain, Constraints{Limits: limits, Requests: requests}); !ok || !proto.Equal(got, requests) {
+		t.Errorf("Booking() with requests = %v, %v, want %v", got, ok, requests)
+	}
+	if got, ok := Booking(plain, Constraints{Limits: limits, Requests: &ateapi.Resources{CpuMillicores: 100}}); !ok || got.GetCpuMillicores() != 100 || got.GetMemoryBytes() != gib/2 {
+		t.Errorf("Booking() with cpu-only request = %v, %v, want 100m and %d bytes", got, ok, gib/2)
+	}
+	if got, ok := Booking(plain, Constraints{Limits: limits, Requests: &ateapi.Resources{MemoryBytes: gib / 4}}); !ok || got.GetCpuMillicores() != 500 || got.GetMemoryBytes() != gib/4 {
+		t.Errorf("Booking() with memory-only request = %v, %v, want 500m and %d bytes", got, ok, gib/4)
+	}
+	// Runtime overhead per GiB still scales with guest RAM (Limits.MemoryBytes),
+	// added on top of the requested memory.
+	wantWithOverhead := int64(gib/4 + 4<<20 + 4<<20)
+	if got, ok := Booking(w, Constraints{Limits: limits, Requests: requests}); !ok || got.GetCpuMillicores() != 100 || got.GetMemoryBytes() != wantWithOverhead {
+		t.Errorf("Booking() with requests and overhead = %v, %v, want 100m and %d bytes", got, ok, wantWithOverhead)
+	}
+}
+
+func TestScheduleBooksRequestsBelowLimits(t *testing.T) {
+	const gib = 1 << 30
+	w := worker("w", "gvisor", "node-a", nil,
+		withMaxActors(4),
+		withCapacity(1000, gib),
+		assignedFor("team-a", "a1", &ateapi.Resources{CpuMillicores: 750, MemoryBytes: 3 * gib / 4}))
+	s := New(fleet{w})
+
+	limits := &ateapi.Resources{CpuMillicores: 1000, MemoryBytes: gib}
+	if _, err := s.Schedule(context.Background(), Constraints{Limits: limits}); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("Schedule(limits only) = %v, want ErrNoCapacity", err)
+	}
+	got, err := s.Schedule(context.Background(), Constraints{
+		Limits:   limits,
+		Requests: &ateapi.Resources{CpuMillicores: 250, MemoryBytes: gib / 4},
+	})
+	if err != nil || got.GetWorkerPod() != "w" {
+		t.Fatalf("Schedule(with requests) = %v, %v, want worker w", got, err)
+	}
 }
 
 // A booking that overflows fits nowhere, rather than wrapping negative and

@@ -3360,6 +3360,87 @@ func TestResumeActor(t *testing.T) {
 	}
 }
 
+func TestResumeActorBooksRequestsAndForwardsLimits(t *testing.T) {
+	ns := namespaceForTest("ns-resume-requests-limits")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	if _, err := tc.client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
+		ActorTemplate: &ateapi.ActorTemplate{
+			Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-req"},
+			SnapshotConfig: &ateapi.SnapshotConfig{
+				GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+			},
+			Containers: []*ateapi.Container{{
+				Name:    "main",
+				Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				Command: []string{"/main"},
+			}},
+			WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+			Resources: &ateapi.ResourceRequirements{
+				Limits:   resources.CPUMemory(4000, 2<<30),
+				Requests: resources.CPUMemory(250, 256<<20),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	// Worker capacity (2000m, 1Gi) is half the template's limits (4000m, 2Gi)
+	// yet fits two actors at their requests (250m, 256Mi).
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	reportWorkerCapacity(t, tc, podUID, 2)
+
+	for _, id := range []string{"a1", "a2"} {
+		if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: id},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-req"},
+		}}); err != nil {
+			t.Fatalf("CreateActor %s failed: %v", id, err)
+		}
+		if _, err := tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: id},
+		}); err != nil {
+			t.Fatalf("ResumeActor %s failed: %v", id, err)
+		}
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	runRes := tc.fakeAtelet.RunRequest.GetResources()
+	tc.fakeAtelet.Lock.Unlock()
+	if got := runRes.GetLimits(); got.GetCpuMillicores() != 4000 || got.GetMemoryBytes() != 2<<30 {
+		t.Errorf("atelet RunRequest limits = %v, want 4000m and 2Gi", got)
+	}
+	if got := runRes.GetRequests(); got.GetCpuMillicores() != 250 || got.GetMemoryBytes() != 256<<20 {
+		t.Errorf("atelet RunRequest requests = %v, want 250m and 256Mi", got)
+	}
+
+	w, err := tc.client.GetWorker(context.Background(), &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: podUID}})
+	if err != nil {
+		t.Fatalf("GetWorker failed: %v", err)
+	}
+	wantAlloc := &ateapi.WorkerResources{Actors: 2, CpuMillicores: 500, MemoryBytes: 512 << 20}
+	if diff := cmp.Diff(wantAlloc, w.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
+		t.Errorf("Worker allocated mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, id := range []string{"a1", "a2"} {
+		if _, err := tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: id},
+		}); err != nil {
+			t.Fatalf("DeleteActor %s failed: %v", id, err)
+		}
+	}
+	w, err = tc.client.GetWorker(context.Background(), &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: podUID}})
+	if err != nil {
+		t.Fatalf("GetWorker after delete failed: %v", err)
+	}
+	if got := w.GetStatus().GetAllocated(); got != nil {
+		t.Errorf("Worker allocated after delete = %v, want nil", got)
+	}
+}
+
 func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	ns := namespaceForTest("ns-resume-literal-env")
 	tc := setupTest(t, ns)

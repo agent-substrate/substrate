@@ -76,7 +76,7 @@ type runningActor struct {
 	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
 	// virtiofsd exits once its only client is gone.
 	stopping atomic.Bool
-	// memoryBytes is the actor's memory limit, what it books on the worker.
+	// memoryBytes is what the actor books on the worker before overhead.
 	memoryBytes int64
 	// memory kills the actor's cgroup once it is stuck at its memory.high.
 	memory cgroup.MemoryGuard
@@ -260,16 +260,17 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	p := actorBootParams{
-		executionUID:     req.GetExecutionUid(),
-		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:         req.GetActorUid(),
-		actorDirs:        req.GetActorDirs(),
-		templateAtespace: req.GetActorTemplateAtespace(),
-		templateName:     req.GetActorTemplateName(),
-		containers:       req.GetSpec().GetContainers(),
-		assetPaths:       req.GetRuntimeAssetPaths(),
-		egressGateway:    req.GetEgressGateway(),
-		size:             sizing.FromLimits(req.GetResources().GetLimits()),
+		executionUID:      req.GetExecutionUid(),
+		actorRef:          resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:          req.GetActorUid(),
+		actorDirs:         req.GetActorDirs(),
+		templateAtespace:  req.GetActorTemplateAtespace(),
+		templateName:      req.GetActorTemplateName(),
+		containers:        req.GetSpec().GetContainers(),
+		assetPaths:        req.GetRuntimeAssetPaths(),
+		egressGateway:     req.GetEgressGateway(),
+		size:              sizing.FromLimits(req.GetResources().GetLimits()),
+		bookedMemoryBytes: sizing.BookedMemoryBytes(req.GetResources()),
 	}
 
 	attribution := p.actorAttribution()
@@ -279,7 +280,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false, p.size.MemoryBytes); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false, p.bookedMemoryBytes, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -320,6 +321,8 @@ type actorBootParams struct {
 	// the RunWorkload / RestoreWorkload RPC. It sizes the VM itself (vCPUs,
 	// memory); a container's own cgroup limit comes from its declared resources.
 	size sizing.SandboxSize
+	// bookedMemoryBytes is what the actor books on the worker before overhead.
+	bookedMemoryBytes int64
 	// rootfsUpperSnapshotDir, when set, names a snapshot directory holding the
 	// per-container rootfs upper tars; the cold boot re-materializes the uppers
 	// from it instead of starting from a pristine dir. A ROOTFS restore sets it
@@ -374,7 +377,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false, p.size.MemoryBytes); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false, p.bookedMemoryBytes, p.size.MemoryBytes); err != nil {
 			return err
 		}
 	}
@@ -612,7 +615,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{executionUID: p.executionUID, chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{executionUID: p.executionUID, chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.bookedMemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}

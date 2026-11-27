@@ -912,6 +912,24 @@ func Validate_ContainerSpec(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "requests"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "requests",
+					func(o *ateworkerpb.ResourceRequirements) *ateworkerpb.Resources { return o.Requests }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *ateworkerpb.Resources) field.ErrorList {
+						return validate.ForbiddenPointer(ctx, op, fldPath, obj, oldObj)
+					}).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "requests",
+					func(o *ateworkerpb.ResourceRequirements) *ateworkerpb.Resources { return o.Requests }, ateDeepEqual, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -1129,6 +1147,36 @@ func Validate_ResourceRequirements(
 				return oldObj.Limits
 			})
 		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateworkerpb.ResourceRequirements.Requests
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateworkerpb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateworkerpb.ResourceRequirements) *ateworkerpb.Resources {
+				return oldObj.Requests
+			})
+		errs = append(errs, fn(fldPath.Child("requests"), obj.Requests, oldVal, oldObj != nil)...)
 	}
 
 	return errs

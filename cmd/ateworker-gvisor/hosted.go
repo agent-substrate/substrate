@@ -56,7 +56,7 @@ type hostedActor struct {
 	// nothing that waits on it later can be fooled by a reused pid. Nil if it
 	// could not be pinned. Set once, under the actor's lock.
 	sandbox *sandboxProcess
-	// memoryBytes is the actor's memory limit, what it books on the worker.
+	// memoryBytes is what the actor books on the worker.
 	memoryBytes int64
 	// memory kills the sandbox once it is stuck at its memory.high.
 	memory cgroup.MemoryGuard

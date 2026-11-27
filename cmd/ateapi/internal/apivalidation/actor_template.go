@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
@@ -162,4 +163,26 @@ func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, f
 
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return resources.ValidateDropCapabilities(fldPath, value)
+}
+
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ResourceRequirements) field.ErrorList {
+	req := value.GetRequests()
+	lim := value.GetLimits()
+	if req == nil || lim == nil {
+		return nil
+	}
+	var errs field.ErrorList
+	if lim.GetCpuMillicores() > 0 && req.GetCpuMillicores() > lim.GetCpuMillicores() {
+		errs = append(errs, field.Invalid(
+			fldPath.Child("requests", "cpu_millicores"),
+			req.GetCpuMillicores(),
+			fmt.Sprintf("must be less than or equal to cpu_millicores limit (%d)", lim.GetCpuMillicores())))
+	}
+	if lim.GetMemoryBytes() > 0 && req.GetMemoryBytes() > lim.GetMemoryBytes() {
+		errs = append(errs, field.Invalid(
+			fldPath.Child("requests", "memory_bytes"),
+			req.GetMemoryBytes(),
+			fmt.Sprintf("must be less than or equal to memory_bytes limit (%d)", lim.GetMemoryBytes())))
+	}
+	return errs
 }

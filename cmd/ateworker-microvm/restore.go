@@ -147,16 +147,17 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	p := actorBootParams{
-		executionUID:     req.GetExecutionUid(),
-		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:         req.GetActorUid(),
-		actorDirs:        req.GetActorDirs(),
-		templateAtespace: req.GetActorTemplateAtespace(),
-		templateName:     req.GetActorTemplateName(),
-		containers:       req.GetSpec().GetContainers(),
-		assetPaths:       req.GetRuntimeAssetPaths(),
-		egressGateway:    req.GetEgressGateway(),
-		size:             sizing.FromLimits(req.GetResources().GetLimits()),
+		executionUID:      req.GetExecutionUid(),
+		actorRef:          resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:          req.GetActorUid(),
+		actorDirs:         req.GetActorDirs(),
+		templateAtespace:  req.GetActorTemplateAtespace(),
+		templateName:      req.GetActorTemplateName(),
+		containers:        req.GetSpec().GetContainers(),
+		assetPaths:        req.GetRuntimeAssetPaths(),
+		egressGateway:     req.GetEgressGateway(),
+		size:              sizing.FromLimits(req.GetResources().GetLimits()),
+		bookedMemoryBytes: sizing.BookedMemoryBytes(req.GetResources()),
 	}
 	restoreDir := p.actorDirs.GetRestoreDir()
 	durableDir := p.actorDirs.GetDurableDirVolumeMountsDir()
@@ -173,7 +174,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
 	resumesGuest := includesMemory(req.GetFidelity())
-	if _, err := s.hostActor(ctx, attribution, resumesGuest, p.size.MemoryBytes); err != nil {
+	if _, err := s.hostActor(ctx, attribution, resumesGuest, p.bookedMemoryBytes, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -523,7 +524,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	ra := &runningActor{
 		executionUID: p.executionUID,
 		chProc:       chProc, vfsdProc: vfsdProc,
-		apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
+		apiSocket: apiSocket, memoryBytes: p.bookedMemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
 		preserveRestoreSource:   preserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful

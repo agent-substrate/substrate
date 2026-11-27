@@ -20,7 +20,7 @@ import "testing"
 
 func TestLeafMemoryHigh(t *testing.T) {
 	throttled := &AteWorkerService{throttleMemory: true}
-	if got, want := throttled.leafMemoryHigh(1<<30), actorBooking(1<<30); got != want {
+	if got, want := throttled.leafMemoryHigh(1<<30), actorBooking(1<<30, 1<<30); got != want {
 		t.Errorf("leafMemoryHigh(1GiB) = %d, want the booking %d", got, want)
 	}
 	if got := throttled.leafMemoryHigh(0); got != 0 {
