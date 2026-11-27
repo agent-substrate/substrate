@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"testing"
 
+	"go.ate.dev/substrate/internal/oidcjwt"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -37,15 +38,17 @@ const (
 )
 
 func TestValidateServerConfig(t *testing.T) {
-	validProvider := JWTProvider{Name: "test", Issuer: "https://issuer.example", Verify: func(context.Context, string) (string, error) { return "", nil }}
+	validProvider := JWTProvider{Name: "test", Issuer: "https://issuer.example", Verify: func(context.Context, string) (*oidcjwt.Claims, error) { return nil, nil }}
+	reviewer := clusterReviewer(nil)
 	tests := []struct {
 		name    string
 		cfg     ServerConfig
 		wantErr bool
 	}{
-		{name: "valid", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider}}},
-		{name: "missing verifier", cfg: ServerConfig{}, wantErr: true},
-		{name: "duplicate issuer", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider, validProvider}}, wantErr: true},
+		{name: "valid", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider}, TokenReviewer: reviewer}},
+		{name: "missing verifier", cfg: ServerConfig{TokenReviewer: reviewer}, wantErr: true},
+		{name: "duplicate issuer", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider, validProvider}, TokenReviewer: reviewer}, wantErr: true},
+		{name: "missing TokenReviewer", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider}}, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -72,11 +75,11 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 	withBearer := func(ctx context.Context, token string) context.Context {
 		return metadata.NewIncomingContext(ctx, metadata.Pairs("authorization", "Bearer "+token))
 	}
-	verifyGoodToken := func(_ context.Context, bearer string) (string, error) {
+	verifyGoodToken := func(_ context.Context, bearer string) (*oidcjwt.Claims, error) {
 		if bearer != testGoodToken {
-			return "", fmt.Errorf("bad token")
+			return nil, fmt.Errorf("bad token")
 		}
-		return subject, nil
+		return &oidcjwt.Claims{Subject: subject}, nil
 	}
 
 	tests := []struct {
@@ -84,7 +87,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 		ctx  context.Context
 		// verify is the bearer token verifier; nil means the test fails if
 		// it is called (the certificate identity must take precedence).
-		verify   func(context.Context, string) (string, error)
+		verify   func(context.Context, string) (*oidcjwt.Claims, error)
 		want     principal.PrincipalInfo
 		wantCode codes.Code
 	}{
@@ -142,12 +145,15 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			verify := tt.verify
 			if verify == nil {
-				verify = func(context.Context, string) (string, error) {
+				verify = func(context.Context, string) (*oidcjwt.Claims, error) {
 					t.Fatal("bearer token verifier called; certificate identity must take precedence")
-					return "", nil
+					return nil, nil
 				}
 			}
-			auth := newChainedAuthenticator(ServerConfig{JWTProviders: []JWTProvider{{Name: "test", Issuer: issuer, Verify: verify}}})
+			auth := newChainedAuthenticator(ServerConfig{
+				JWTProviders:  []JWTProvider{{Name: "test", Issuer: issuer, Verify: verify}},
+				TokenReviewer: clusterReviewer(nil),
+			})
 			newCtx, err := auth.authenticate(tt.ctx)
 			if code := status.Code(err); code != tt.wantCode {
 				t.Fatalf("authenticate: code=%v (err=%v), want %v", code, err, tt.wantCode)
@@ -168,8 +174,9 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 
 func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 	auth := jwtServerAuthenticator{
-		providers: []JWTProvider{{Name: "test", Issuer: "https://issuer.example", Verify: func(context.Context, string) (string, error) {
-			return "", fmt.Errorf("bad token")
+		tokenReviewer: clusterReviewer(nil),
+		providers: []JWTProvider{{Name: "test", Issuer: "https://issuer.example", Verify: func(context.Context, string) (*oidcjwt.Claims, error) {
+			return nil, fmt.Errorf("bad token")
 		}}},
 	}
 
@@ -197,8 +204,9 @@ func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
 	const subject = "system:serviceaccount:default:router"
 	const issuer = "https://issuer.example"
 	auth := jwtServerAuthenticator{
-		providers: []JWTProvider{{Name: "test", Issuer: issuer, Verify: func(context.Context, string) (string, error) {
-			return subject, nil
+		tokenReviewer: clusterReviewer(nil),
+		providers: []JWTProvider{{Name: "test", Issuer: issuer, Verify: func(context.Context, string) (*oidcjwt.Claims, error) {
+			return &oidcjwt.Claims{Subject: subject}, nil
 		}}},
 	}
 
@@ -218,12 +226,12 @@ func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
 }
 
 func TestJWTServerAuthenticatorTriesProviders(t *testing.T) {
-	auth := jwtServerAuthenticator{providers: []JWTProvider{
-		{Name: "first", Issuer: "https://first.example", Verify: func(context.Context, string) (string, error) {
-			return "", fmt.Errorf("wrong issuer")
+	auth := jwtServerAuthenticator{tokenReviewer: clusterReviewer(nil), providers: []JWTProvider{
+		{Name: "first", Issuer: "https://first.example", Verify: func(context.Context, string) (*oidcjwt.Claims, error) {
+			return nil, fmt.Errorf("wrong issuer")
 		}},
-		{Name: "second", Issuer: "https://second.example", Verify: func(context.Context, string) (string, error) {
-			return "subject", nil
+		{Name: "second", Issuer: "https://second.example", Verify: func(context.Context, string) (*oidcjwt.Claims, error) {
+			return &oidcjwt.Claims{Subject: "subject"}, nil
 		}},
 	}}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer e30.eyJpc3MiOiJodHRwczovL3NlY29uZC5leGFtcGxlIn0.eA"))

@@ -20,6 +20,10 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	authv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
@@ -40,6 +44,8 @@ func testSecurityRegression(t *testing.T, ctx context.Context, f *fixture) {
 	t.Run("revocation takes effect", func(t *testing.T) { testRevocation(t, ctx, f) })
 	t.Run("recreated atespace drops old grants", func(t *testing.T) { testAtespaceRecreated(t, ctx, f) })
 	t.Run("recreated AccessPolicy rejects stale updates", func(t *testing.T) { testAccessPolicyRecreated(t, ctx, f) })
+	t.Run("deleted ServiceAccount's token is rejected", func(t *testing.T) { testServiceAccountDeleted(t, ctx, f) })
+	t.Run("token bound to a deleted pod is rejected", func(t *testing.T) { testBoundPodDeleted(t, ctx, f) })
 	t.Run("WorkerService accepts only atelet", func(t *testing.T) { testWorkerServiceRequiresAtelet(t, ctx, f) })
 }
 
@@ -266,6 +272,89 @@ func testAccessPolicyRecreated(t *testing.T, ctx context.Context, f *fixture) {
 	}
 }
 
+// testServiceAccountDeleted checks that a ServiceAccount token stops working
+// once its ServiceAccount is deleted, also after another ServiceAccount with
+// the same name replaces it. The policy names the ServiceAccount, so the new
+// one's token keeps the grant.
+func testServiceAccountDeleted(t *testing.T, ctx context.Context, f *fixture) {
+	const name = "deleted-zed"
+	old := newPrincipal(t, ctx, f.clients, f.atespace, name)
+	setAtespacePolicy(t, ctx, f.clients, f.atespace, binding("viewer", old))
+	cleanupAtespacePolicy(t, f.clients, f.atespace)
+	expectAll(t, ctx, []call{{"GetActor", old, getActor(f.actor), allowed}})
+	if t.Failed() {
+		return
+	}
+
+	if err := f.clients.K8s.CoreV1().ServiceAccounts(f.atespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("deleting ServiceAccount %s/%s: %v", f.atespace, name, err)
+	}
+	expectAll(t, ctx, []call{{"GetActor", old, getActor(f.actor), unauthenticated}})
+
+	recreated := newPrincipal(t, ctx, f.clients, f.atespace, name)
+	expectAll(t, ctx, []call{
+		{"GetActor", old, getActor(f.actor), unauthenticated},
+		{"GetActor", recreated, getActor(f.actor), allowed},
+	})
+}
+
+// neverPulledImage is the base image in .ko.yaml. The pod using it never
+// runs, so it is never pulled.
+const neverPulledImage = "gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99"
+
+// testBoundPodDeleted checks that a token bound to a pod stops working once
+// the pod is deleted, while a token for the same ServiceAccount without a
+// bound object keeps working. The pod has a scheduling gate, so it never
+// runs.
+func testBoundPodDeleted(t *testing.T, ctx context.Context, f *fixture) {
+	const name = "bound-yan"
+	unbound := newPrincipal(t, ctx, f.clients, f.atespace, name)
+	pods := f.clients.K8s.CoreV1().Pods(f.atespace)
+	pod, err := pods.Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: corev1.PodSpec{
+			ServiceAccountName:           name,
+			AutomountServiceAccountToken: ptr.To(false),
+			SchedulingGates:              []corev1.PodSchedulingGate{{Name: "ate.dev/authz-e2e"}},
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot:   ptr.To(true),
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			},
+			Containers: []corev1.Container{{
+				Name:  "never-runs",
+				Image: neverPulledImage,
+				SecurityContext: &corev1.SecurityContext{
+					AllowPrivilegeEscalation: ptr.To(false),
+					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+				},
+			}},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("creating pod %s/%s: %v", f.atespace, name, err)
+	}
+	bound := principalFor(t, ctx, f.clients, f.atespace, name, &authv1.BoundObjectReference{
+		Kind: "Pod", APIVersion: "v1", Name: pod.Name, UID: pod.UID,
+	})
+	setAtespacePolicy(t, ctx, f.clients, f.atespace, binding("viewer", unbound))
+	cleanupAtespacePolicy(t, f.clients, f.atespace)
+	expectAll(t, ctx, []call{
+		{"GetActor with the pod-bound token", bound, getActor(f.actor), allowed},
+		{"GetActor with an unbound token", unbound, getActor(f.actor), allowed},
+	})
+	if t.Failed() {
+		return
+	}
+
+	if err := pods.Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("deleting pod %s/%s: %v", f.atespace, name, err)
+	}
+	expectAll(t, ctx, []call{
+		{"GetActor with the pod-bound token", bound, getActor(f.actor), unauthenticated},
+		{"GetActor with an unbound token", unbound, getActor(f.actor), allowed},
+	})
+}
+
 // testWorkerServiceRequiresAtelet checks that WorkerService rejects every
 // caller but atelet. Its RPCs skip the permission checks; each handler
 // authenticates atelet by its mTLS certificate, so that is all that guards
@@ -279,7 +368,7 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 	if !serviceAccountExists(t, ctx, f.clients, ns, sa) {
 		t.Fatalf("ServiceAccount %s/%s not found", ns, sa)
 	}
-	ateletToken := principalFor(t, ctx, f.clients, ns, sa)
+	ateletToken := principalFor(t, ctx, f.clients, ns, sa, nil)
 
 	// The worker named is never created: a handler that let the caller
 	// through would answer NotFound, not reject it.

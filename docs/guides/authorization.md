@@ -61,6 +61,10 @@ A principal is the ID authentication produces. Access policies name it as
 A denied call names the principal in the error with `:` percent-encoded
 (`user:system%3Aserviceaccount%3A...`); decode it before using it.
 
+A ServiceAccount token from the Substrate cluster stops working when its
+ServiceAccount is deleted; see
+[ServiceAccount tokens](authentication.md#serviceaccount-tokens).
+
 ## Bootstrap owners
 
 Bootstrap owners always hold `owner` on the global scope, whatever the access
@@ -327,6 +331,10 @@ For a shared cluster, beyond replacing the default bootstrap owner:
   than one JWT provider, any of them that can issue a token whose `sub` is
   another principal's ID, a bootstrap owner's included, acts as that principal.
   System roles are unaffected: they need the component's pod certificate.
+- **Tokens from another cluster aren't revoked.** `ate-api-server` checks
+  them offline, so deleting their ServiceAccount or bound objects doesn't
+  stop them before they expire; see
+  [Pods in another cluster](authentication.md#pods-in-another-cluster).
 - **The atespace is the only boundary.** There are no per-actor or
   per-template grants.
 - **Any atelet can read any actor's egress policy.** Every node's atelet

@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -64,6 +65,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	authenticationv1client "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	"k8s.io/client-go/rest"
 )
 
@@ -267,9 +269,17 @@ func main() {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	clientset, ateClient, err := newKubeClients()
+	kubeConfig, err := rest.InClusterConfig()
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to get in-cluster Kubernetes config", err)
+	}
+	clientset, ateClient, err := newKubeClients(kubeConfig)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
+	}
+	authCfg.TokenReviewer, err = newTokenReviewer(ctx, kubeConfig, authCfg.JWTProviders)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create TokenReviewer", err)
 	}
 
 	serverCreds, err := buildServerCreds(ctx)
@@ -600,12 +610,8 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 }
 
 // newKubeClients builds the standard Kubernetes clientset and the ate
-// (substrate CRD) clientset from in-cluster config.
-func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, nil, fmt.Errorf("get cluster config: %w", err)
-	}
+// (substrate CRD) clientset from config.
+func newKubeClients(config *rest.Config) (*kubernetes.Clientset, versioned.Interface, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create clientset: %w", err)
@@ -615,6 +621,26 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 		return nil, nil, fmt.Errorf("create ate clientset: %w", err)
 	}
 	return clientset, ateClient, nil
+}
+
+// newTokenReviewer returns a TokenReviewer for the issuer of ate-api-server's
+// own ServiceAccount token, which the API server in config minted.
+func newTokenReviewer(ctx context.Context, config *rest.Config, providers []apiauthn.JWTProvider) (*apiauthn.TokenReviewer, error) {
+	issuer, err := apiauthn.TokenFileIssuer(config.BearerTokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("read the cluster's ServiceAccount issuer: %w", err)
+	}
+	// TokenReviewer limits reviews per namespace. client-go's limiter would
+	// queue every namespace's reviews together.
+	config = rest.CopyConfig(config)
+	config.QPS = -1
+	client, err := authenticationv1client.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("create authentication client: %w", err)
+	}
+	trusted := slices.ContainsFunc(providers, func(p apiauthn.JWTProvider) bool { return p.Issuer == issuer })
+	slog.InfoContext(ctx, "Checking the cluster's ServiceAccount tokens with TokenReview", slog.String("issuer", issuer), slog.Bool("trusted", trusted))
+	return apiauthn.NewTokenReviewer(client.TokenReviews(), issuer), nil
 }
 
 // buildServerCreds composes gRPC TransportCredentials over the server bundle
@@ -677,14 +703,11 @@ func buildJWTProviders(ctx context.Context, cfg *apiconfig.AuthenticationConfig)
 		}
 		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, oidcjwt.HTTPKeySource(providerCfg.Issuer, httpClient))
 		serverCfg.JWTProviders = append(serverCfg.JWTProviders, apiauthn.JWTProvider{
-			Name:   providerCfg.Name,
-			Issuer: providerCfg.Issuer,
-			Verify: func(ctx context.Context, bearer string) (string, error) {
-				claims, err := verifier.Verify(ctx, bearer, time.Now())
-				if err != nil {
-					return "", err
-				}
-				return claims.Subject, nil
+			Name:      providerCfg.Name,
+			Issuer:    providerCfg.Issuer,
+			Audiences: providerCfg.Audiences,
+			Verify: func(ctx context.Context, bearer string) (*oidcjwt.Claims, error) {
+				return verifier.Verify(ctx, bearer, time.Now())
 			},
 		})
 		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
