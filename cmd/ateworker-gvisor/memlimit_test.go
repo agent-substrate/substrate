@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -99,6 +101,7 @@ func TestRemoveStaleSandboxLeaf(t *testing.T) {
 // A sandbox past the overshoot cap is killed once, and a checkpoint pausing
 // the watch waits for the kill.
 func TestCheckMemoryKillsOncePausesForCheckpoint(t *testing.T) {
+	logs := captureWarnings(t)
 	root := t.TempDir()
 	s := &AteWorkerService{cgroupRoot: root, throttleMemory: true}
 	h := &hostedActor{attribution: resources.ActorAttribution{UID: "uid-a"}}
@@ -107,9 +110,10 @@ func TestCheckMemoryKillsOncePausesForCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	const limit = 256 << 20
+	const current = limit + 32<<20
 	writeCgroupFiles(t, leaf, map[string]string{
-		"memory.current": strconv.Itoa(limit+32<<20) + "\n",
-		"memory.stat":    "anon " + strconv.Itoa(limit+32<<20) + "\n",
+		"memory.current": strconv.Itoa(current) + "\n",
+		"memory.stat":    "anon " + strconv.Itoa(current) + "\n",
 		"cgroup.kill":    "",
 		"cgroup.events":  "populated 0\nfrozen 0\n",
 	})
@@ -132,5 +136,27 @@ func TestCheckMemoryKillsOncePausesForCheckpoint(t *testing.T) {
 	h.memory.Pause()
 	if got := readCgroupFile(t, leaf, "cgroup.kill"); got != "" {
 		t.Errorf("sandbox was killed twice")
+	}
+
+	type killLog struct {
+		Level            string `json:"level"`
+		Msg              string `json:"msg"`
+		ActorUID         string `json:"ate.actor.uid"`
+		MemoryLimitBytes uint64 `json:"memoryLimitBytes"`
+		MemoryUsage      uint64 `json:"ate.stats.memory.usage"`
+	}
+	var got killLog
+	if err := json.Unmarshal(logs.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal log %q: %v", logs.String(), err)
+	}
+	want := killLog{
+		Level:            slog.LevelError.String(),
+		Msg:              "Killing a sandbox over its memory limit",
+		ActorUID:         "uid-a",
+		MemoryLimitBytes: limit,
+		MemoryUsage:      current,
+	}
+	if got != want {
+		t.Errorf("kill log = %+v, want %+v", got, want)
 	}
 }
