@@ -21,11 +21,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.ate.dev/substrate/internal/actorlock"
@@ -40,9 +43,18 @@ type fakeExitReader struct {
 	stateErr error
 	code     int32
 	waitErr  error
+	// hold, if set, blocks cmdState until it is closed. running counts the
+	// calls that wait on it.
+	hold    chan struct{}
+	running atomic.Int32
 }
 
 func (f *fakeExitReader) cmdState(context.Context, string) (string, error) {
+	if f.hold != nil {
+		f.running.Add(1)
+		<-f.hold
+		f.running.Add(-1)
+	}
 	return f.status, f.stateErr
 }
 
@@ -51,12 +63,13 @@ func (f *fakeExitReader) cmdExitCode(context.Context, string) (int32, error) {
 }
 
 // exitService hosts testActor on a service that logs to w.
-func exitService(w *bytes.Buffer) (*AteWorkerService, *hostedActor) {
+func exitService(w io.Writer) (*AteWorkerService, *hostedActor) {
 	hosted := &hostedActor{attribution: testActor}
 	s := &AteWorkerService{
 		locks:       actorlock.New(),
 		actors:      map[string]*hostedActor{testActor.UID: hosted},
 		actorLogger: actorlog.NewActorLogger(w, false),
+		exitChecks:  make(chan struct{}, containerExitChecks),
 	}
 	return s, hosted
 }
@@ -182,12 +195,7 @@ func (w recordWriter) Write(p []byte) (int, error) {
 // container's last line, including a line with no newline.
 func TestStartContainerLogsOrder(t *testing.T) {
 	records := make(recordWriter, 2)
-	hosted := &hostedActor{attribution: testActor}
-	s := &AteWorkerService{
-		locks:       actorlock.New(),
-		actors:      map[string]*hostedActor{testActor.UID: hosted},
-		actorLogger: actorlog.NewActorLogger(records, false),
-	}
+	s, hosted := exitService(records)
 	pw, err := s.startContainerLogs(hosted, &fakeExitReader{status: containerStopped, code: 1}, "app")
 	if err != nil {
 		t.Fatal(err)
@@ -206,6 +214,33 @@ func TestStartContainerLogsOrder(t *testing.T) {
 			t.Fatalf("no %q record", want)
 		}
 	}
+}
+
+// TestContainerExitChecksAreCapped pins that the worker runs no more than
+// containerExitChecks checks at once when the containers of many actors exit
+// together.
+func TestContainerExitChecksAreCapped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, _ := exitService(io.Discard)
+		rcmd := &fakeExitReader{status: "running", hold: make(chan struct{})}
+		const actors = 3 * containerExitChecks
+		for i := range actors {
+			attribution := testActor
+			attribution.UID = "actor-" + strconv.Itoa(i)
+			hosted := &hostedActor{attribution: attribution}
+			s.actors[attribution.UID] = hosted
+			go s.containerOutputEnded(hosted, rcmd, "app")
+		}
+		synctest.Wait()
+		if got := rcmd.running.Load(); got != containerExitChecks {
+			t.Errorf("checks that run at once = %d, want %d", got, containerExitChecks)
+		}
+		close(rcmd.hold)
+		synctest.Wait()
+		if got := len(s.exitChecks); got != 0 {
+			t.Errorf("slots held after the checks = %d, want 0", got)
+		}
+	})
 }
 
 // scriptRunsc is a runsc that prints output and exits with code.

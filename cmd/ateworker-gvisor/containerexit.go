@@ -27,7 +27,14 @@ import (
 )
 
 // containerExitTimeout bounds the runsc commands that read one container exit.
-const containerExitTimeout = 10 * time.Second
+// They run under the actor's lock, so a suspend or a terminate waits this long
+// for each container if the sandbox is slow to answer.
+const containerExitTimeout = 3 * time.Second
+
+// containerExitChecks is how many container exit checks may run at once on the
+// worker. Each runs a runsc process in the worker's own memory, and many
+// containers can exit together.
+const containerExitChecks = 4
 
 // containerStopped is the status `runsc state` gives a container whose first
 // process exited. It gives the same status when the sandbox is gone.
@@ -64,6 +71,10 @@ func (s *AteWorkerService) containerOutputEnded(hosted *hostedActor, rcmd exitRe
 	if s.shuttingDown.Load() {
 		return
 	}
+	// Taken before the actor's lock, so a burst of exits delays the exit
+	// records and not a suspend or a terminate.
+	s.exitChecks <- struct{}{}
+	defer func() { <-s.exitChecks }()
 	attribution := hosted.attribution
 	ctx := context.Background()
 	// The lock keeps `runsc delete` away until the exit code is read. It also

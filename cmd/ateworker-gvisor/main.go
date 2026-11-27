@@ -426,7 +426,9 @@ type AteWorkerService struct {
 	// checkpointWrites holds a slot per checkpoint writing its page cache,
 	// which memoryReservedBytes budgets for.
 	checkpointWrites chan struct{}
-	borrow           *memborrow.Ledger
+	// exitChecks holds a slot per container exit check that runs.
+	exitChecks chan struct{}
+	borrow     *memborrow.Ledger
 
 	// enableCoreTags indicates whether the host kernel supports core tagging.
 	enableCoreTags bool
@@ -446,6 +448,7 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 		cgroupRoot:       defaultCgroupRoot,
 		flags:            flags,
 		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
+		exitChecks:       make(chan struct{}, containerExitChecks),
 		bootID:           bootID,
 		enableCoreTags:   checkCoreTagsSupported(),
 	}
