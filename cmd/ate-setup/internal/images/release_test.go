@@ -46,6 +46,22 @@ func TestReleasedAreComponents(t *testing.T) {
 	}
 }
 
+// A tool entry is published although no manifest deploys it, so one that
+// shows up in Components means either the manifests changed without the
+// lists following, or a component would be built twice under one tag.
+func TestReleasedToolsAreNotComponents(t *testing.T) {
+	seen := make(map[string]bool, len(releasedTools))
+	for _, pkg := range releasedTools {
+		if slices.Contains(Components, pkg) {
+			t.Errorf("releasedTools names %s, which is also in Components", pkg)
+		}
+		if seen[pkg] {
+			t.Errorf("releasedTools lists %s twice", pkg)
+		}
+		seen[pkg] = true
+	}
+}
+
 // Only a release tag that makes a valid reference passes. A comma would be
 // split by ko into two tags, and a stray tag would publish a full image set to
 // the release repository.
