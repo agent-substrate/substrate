@@ -15,9 +15,13 @@
 package localjwtauthority
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -430,5 +434,113 @@ func TestVerificationKeysCarryAlgorithm(t *testing.T) {
 	}
 	if diff := cmp.Diff(map[string]string{"es": "ES256", "rs": "RS256"}, got); diff != "" {
 		t.Errorf("verification key algorithms (-want +got):\n%s", diff)
+	}
+}
+
+// mustMarshalPKCS8 marshals key to PKCS#8, failing the test on error.
+func mustMarshalPKCS8(t *testing.T, key any) []byte {
+	t.Helper()
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pkcs8
+}
+
+// poolWire builds the JSON form of a one-authority pool holding the given
+// PKCS#8 key, bypassing Marshal so tests can express keys that are not
+// crypto.Signers.
+func poolWire(t *testing.T, id, algorithm string, pkcs8 []byte) []byte {
+	t.Helper()
+	wire, err := json.Marshal(&serializedPool{
+		Authorities: []*serializedAuthority{{
+			ID:              id,
+			Algorithm:       algorithm,
+			SigningKeyPKCS8: pkcs8,
+		}},
+		ActiveForSigning: id,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
+func TestUnmarshalRejectsUnsignableKey(t *testing.T) {
+	// An X25519 key round-trips through PKCS#8, but parses back as
+	// *ecdh.PrivateKey, which is not a crypto.Signer.  A pool file carrying
+	// one must fail to load instead of crashing the process.
+	x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Unmarshal(poolWire(t, "bad-key", "RS256", mustMarshalPKCS8(t, x25519)))
+	if err == nil {
+		t.Fatal("Unmarshal accepted an X25519 signing key")
+	}
+	if !strings.Contains(err.Error(), "bad-key") || !strings.Contains(err.Error(), "*ecdh.PrivateKey") {
+		t.Errorf("error = %q, want it to name authority bad-key and key type *ecdh.PrivateKey", err)
+	}
+}
+
+func TestUnmarshalRejectsAlgorithmKeyMismatch(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ed25519Key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		algorithm string
+		key       any
+		wantErr   string
+	}{
+		{name: "RS256 with an ECDSA key", algorithm: "RS256", key: ecdsaKey, wantErr: "requires an RSA signing key"},
+		{name: "RS384 with an ECDSA key", algorithm: "RS384", key: ecdsaKey, wantErr: "requires an RSA signing key"},
+		{name: "ES256 with an RSA key", algorithm: "ES256", key: rsaKey, wantErr: "requires an ECDSA signing key"},
+		{name: "RS256 with an Ed25519 key", algorithm: "RS256", key: ed25519Key, wantErr: "requires an RSA signing key"},
+		{name: "ES256 with a P-384 key", algorithm: "ES256", key: p384Key, wantErr: "requires a P256 key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Unmarshal(poolWire(t, "mismatch", tc.algorithm, mustMarshalPKCS8(t, tc.key)))
+			if err == nil {
+				t.Fatal("Unmarshal accepted an algorithm/key-type mismatch")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestSignJWTRejectsAlgorithmKeyMismatch(t *testing.T) {
+	es, err := GenerateAuthority("ES256", "es")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An in-memory pool can pair an algorithm with the wrong key type;
+	// signing must return an error instead of panicking.
+	authority := &Authority{ID: "es", Algorithm: "RS256", SigningKey: es.SigningKey}
+	pool := &ConcretePool{Authorities: []*Authority{authority}, ActiveForSigning: authority.ID}
+	_, err = pool.SignJWT(&actoridjwt.Claims{Kind: actoridjwt.KindActor, Subject: "actor/a/b", Audiences: []string{"aud"}})
+	if err == nil {
+		t.Fatal("SignJWT accepted an algorithm/key-type mismatch")
+	}
+	if !strings.Contains(err.Error(), "requires an RSA signing key") {
+		t.Errorf("error = %q, want an algorithm/key-type mismatch message", err)
 	}
 }

@@ -265,21 +265,30 @@ func sign(payloadBytes []byte, signingKey crypto.PrivateKey, algorithm, keyID st
 	var sigBytes []byte
 	switch algorithm {
 	case "RS256":
-		rsaKey := signingKey.(*rsa.PrivateKey)
+		rsaKey, ok := signingKey.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("authority %q: algorithm %q requires an RSA signing key, got key type %T", keyID, algorithm, signingKey)
+		}
 		toBeSignedDigest := hashBytes(crypto.SHA256.New(), []byte(toBeSigned))
 		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, toBeSignedDigest)
 		if err != nil {
 			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
 		}
 	case "RS384":
-		rsaKey := signingKey.(*rsa.PrivateKey)
+		rsaKey, ok := signingKey.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("authority %q: algorithm %q requires an RSA signing key, got key type %T", keyID, algorithm, signingKey)
+		}
 		toBeSignedDigest := hashBytes(crypto.SHA384.New(), []byte(toBeSigned))
 		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA384, toBeSignedDigest)
 		if err != nil {
 			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
 		}
 	case "RS512":
-		rsaKey := signingKey.(*rsa.PrivateKey)
+		rsaKey, ok := signingKey.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("authority %q: algorithm %q requires an RSA signing key, got key type %T", keyID, algorithm, signingKey)
+		}
 		toBeSignedDigest := hashBytes(crypto.SHA512.New(), []byte(toBeSigned))
 		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA512, toBeSignedDigest)
 		if err != nil {
@@ -287,7 +296,10 @@ func sign(payloadBytes []byte, signingKey crypto.PrivateKey, algorithm, keyID st
 		}
 	case "ES256":
 		// JOSE ES256 defined at https://datatracker.ietf.org/doc/rfc7518/ section 3.4
-		ecdsaKey := signingKey.(*ecdsa.PrivateKey)
+		ecdsaKey, ok := signingKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("authority %q: algorithm %q requires an ECDSA signing key, got key type %T", keyID, algorithm, signingKey)
+		}
 		if ecdsaKey.Curve != elliptic.P256() {
 			return "", fmt.Errorf("ES256 requires a P256 key")
 		}
@@ -358,6 +370,30 @@ func Marshal(pool *ConcretePool) ([]byte, error) {
 	return wireBytes, nil
 }
 
+// validateSigningKey checks that signingKey can sign with algorithm, so a
+// malformed pool file is rejected at load time rather than panicking or
+// failing later at signing time.  Not all key types that
+// x509.ParsePKCS8PrivateKey can return support the algorithm that the pool
+// claims: for example, an Ed25519 key is a crypto.Signer but cannot produce
+// RSA or ECDSA signatures.
+func validateSigningKey(id, algorithm string, signingKey crypto.PrivateKey) error {
+	switch algorithm {
+	case "RS256", "RS384", "RS512":
+		if _, ok := signingKey.(*rsa.PrivateKey); !ok {
+			return fmt.Errorf("authority %q: algorithm %q requires an RSA signing key, got key type %T", id, algorithm, signingKey)
+		}
+	case "ES256":
+		ecdsaKey, ok := signingKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("authority %q: algorithm %q requires an ECDSA signing key, got key type %T", id, algorithm, signingKey)
+		}
+		if ecdsaKey.Curve != elliptic.P256() {
+			return fmt.Errorf("authority %q: algorithm %q requires a P256 key, got curve %s", id, algorithm, ecdsaKey.Curve.Params().Name)
+		}
+	}
+	return nil
+}
+
 // Unmarshal loads a Pool from JSON.
 func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 	wire := &serializedPool{}
@@ -380,8 +416,16 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 			return nil, fmt.Errorf("while parsing signing key: %w", err)
 		}
 
-		// All key types from ParsePKCS8PrivateKey implement Signer
-		authority.SigningKey = key.(crypto.Signer)
+		// Not all key types from ParsePKCS8PrivateKey implement Signer; for
+		// example, an X25519 key parses to *ecdh.PrivateKey.
+		signer, ok := key.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("authority %q: signing key type %T is not a signer", wireAuthority.ID, key)
+		}
+		if err := validateSigningKey(wireAuthority.ID, wireAuthority.Algorithm, key); err != nil {
+			return nil, err
+		}
+		authority.SigningKey = signer
 
 		pool.Authorities = append(pool.Authorities, authority)
 	}
