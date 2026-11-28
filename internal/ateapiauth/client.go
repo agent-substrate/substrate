@@ -22,16 +22,13 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/grpclb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 )
 
 const DefaultServiceAccountCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-
-// roundRobinServiceConfig spreads RPCs across every address the resolver
-// returns.
-const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
 
 // ClientConfig configures how to dial the ateapi gRPC server with mutual TLS.
 // The credential bundle is re-read on every handshake so in-place
@@ -89,7 +86,7 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	}
 
 	opts := []grpc.DialOption{
-		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+		grpc.WithDefaultServiceConfig(grpclb.RoundRobinServiceConfig),
 		// Without pings, an RPC on a connection to a node that disappeared
 		// hangs until the kernel gives up, about 15 minutes by default.
 		// ate-api-server's keepalive EnforcementPolicy allows this rate.
