@@ -442,7 +442,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 	namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 
 	if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
-		return fmt.Errorf("actor %s is not currently running on any worker pod", r.actorRef)
+		return actorNotRunningError(r.actorRef, actor)
 	}
 
 	filter := r.filter
@@ -507,8 +507,11 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		state := actor.GetStatus().GetState()
 
 		if podName == "" || namespace == "" || state != ateapi.ActorState_ACTOR_STATE_RUNNING {
+			if state == ateapi.ActorState_ACTOR_STATE_CRASHED {
+				return actorNotRunningError(r.actorRef, actor)
+			}
 			if !waitingLogged || state != lastWaitingState {
-				vlogf(r.stderr, vBasic, "Actor %s is not running (state=%s); waiting for worker assignment...", r.actorRef, state)
+				fmt.Fprintf(r.stderr, "Actor %s is not running (state=%s); waiting for worker assignment...\n", r.actorRef, state)
 				waitingLogged = true
 				lastWaitingState = state
 			}
@@ -610,6 +613,25 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		case <-time.After(r.reconnectInterval):
 		}
 	}
+}
+
+// actorNotRunningError returns the error for an actor with no running worker
+// pod. The error includes the actor's state. For a crashed actor it also
+// includes the crash time and message when they are set.
+func actorNotRunningError(ref resources.ActorRef, actor *ateapi.Actor) error {
+	state := actor.GetStatus().GetState()
+	msg := fmt.Sprintf("actor %s is not currently running on any worker pod (state=%s)", ref, state)
+	if state != ateapi.ActorState_ACTOR_STATE_CRASHED {
+		return errors.New(msg)
+	}
+	crash := actor.GetStatus().GetCrash()
+	if t := crash.GetCrashTime(); t.IsValid() {
+		msg += ": crashed at " + t.AsTime().UTC().Format(time.RFC3339)
+	}
+	if m := crash.GetMessage(); m != "" {
+		msg += ": " + m
+	}
+	return errors.New(msg)
 }
 
 // startMigrationMonitor launches a background goroutine to query the control plane
