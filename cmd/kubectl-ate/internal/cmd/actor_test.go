@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -923,50 +924,97 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 }
 
 func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
-	actorName := "act-123"
+	const notRunning = "actor space-1/act-123 is not currently running on any worker pod"
+	crashTime := timestamppb.New(time.Date(2026, 11, 27, 16, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60)))
 
-	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
-			return &ateapi.Actor{
-				Metadata: &ateapi.ResourceMetadata{Name: actorName},
-				Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}, // not running
-			}, nil
+	tests := []struct {
+		name    string
+		status  *ateapi.ActorStatus
+		wantErr string
+	}{
+		{
+			name:    "suspended",
+			status:  &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+			wantErr: notRunning + " (state=ACTOR_STATE_SUSPENDED)",
+		},
+		{
+			name: "crashed with time and message",
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_CRASHED,
+				Crash: &ateapi.ActorCrash{Message: "worker pod lost", CrashTime: crashTime},
+			},
+			wantErr: notRunning + " (state=ACTOR_STATE_CRASHED): crashed at 2026-11-27T08:00:00Z: worker pod lost",
+		},
+		{
+			name: "crashed without time",
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_CRASHED,
+				Crash: &ateapi.ActorCrash{Message: "worker pod lost"},
+			},
+			wantErr: notRunning + " (state=ACTOR_STATE_CRASHED): worker pod lost",
+		},
+		{
+			name: "crashed with invalid time",
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_CRASHED,
+				Crash: &ateapi.ActorCrash{Message: "worker pod lost", CrashTime: &timestamppb.Timestamp{Nanos: -1}},
+			},
+			wantErr: notRunning + " (state=ACTOR_STATE_CRASHED): worker pod lost",
+		},
+		{
+			name: "crashed without message",
+			status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_CRASHED,
+				Crash: &ateapi.ActorCrash{CrashTime: crashTime},
+			},
+			wantErr: notRunning + " (state=ACTOR_STATE_CRASHED): crashed at 2026-11-27T08:00:00Z",
+		},
+		{
+			name:    "crashed with nil crash",
+			status:  &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED},
+			wantErr: notRunning + " (state=ACTOR_STATE_CRASHED)",
 		},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAPI := &mockAteAPIClient{
+				GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+					return &ateapi.Actor{
+						Metadata: &ateapi.ResourceMetadata{Name: "act-123"},
+						Status:   tc.status,
+					}, nil
+				},
+			}
+			mockStreamer := &mockPodLogsStreamer{
+				StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+					return nil, fmt.Errorf("StreamLogs should not be called")
+				},
+			}
 
-	mockStreamer := &mockPodLogsStreamer{
-		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
-			return nil, fmt.Errorf("StreamLogs should not be called")
-		},
-	}
+			var stdout, stderr bytes.Buffer
+			runner := &LogsActorRunner{
+				apiClient: mockAPI,
+				actorRef:  resources.ActorRef{Atespace: "space-1", Name: "act-123"},
+				filter:    logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: "act-123"}},
+				streamer:  mockStreamer,
+				stdout:    &stdout,
+				stderr:    &stderr,
+				follow:    false,
+			}
 
-	var stdout, stderr bytes.Buffer
-	runner := &LogsActorRunner{
-		apiClient: mockAPI,
-		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
-		filter:    logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
-		streamer:  mockStreamer,
-		stdout:    &stdout,
-		stderr:    &stderr,
-		follow:    false,
-	}
-
-	err := runner.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	wantErrMsg := "actor space-1/act-123 is not currently running on any worker pod"
-	if !strings.Contains(err.Error(), wantErrMsg) {
-		t.Errorf("unexpected error message: %v (expected substring %q)", err, wantErrMsg)
-	}
-
-	if mockAPI.CloseCalls != 1 {
-		t.Errorf("expected Close to be called once, got %d", mockAPI.CloseCalls)
+			err := runner.Run(context.Background())
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("Run() error = %v, want %q", err, tc.wantErr)
+			}
+			if mockAPI.CloseCalls != 1 {
+				t.Errorf("expected Close to be called once, got %d", mockAPI.CloseCalls)
+			}
+		})
 	}
 }
 
 func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
+	setVerbosity(t, 0)
 	actorName := "act-123"
 	podName := "pod-xyz"
 	namespace := "ns-abc"
@@ -1055,15 +1103,123 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	}
 
 	gotStderr := stderr.String()
-	wantErrStderr := fmt.Sprintf("Actor is currently running on pod %s/%s\n", namespace, podName)
-	if !strings.Contains(gotStderr, wantErrStderr) {
-		t.Errorf("got stderr %q, want it to contain %q", gotStderr, wantErrStderr)
+	for _, want := range []string{
+		"Actor space-1/act-123 is not running (state=ACTOR_STATE_SUSPENDED); waiting for worker assignment...\n",
+		fmt.Sprintf("Actor is currently running on pod %s/%s\n", namespace, podName),
+	} {
+		if !strings.Contains(gotStderr, want) {
+			t.Errorf("got stderr %q, want it to contain %q", gotStderr, want)
+		}
 	}
 
 	gotStdout := strings.TrimSpace(stdout.String())
 	wantStdout := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello"}`
 	if gotStdout != wantStdout {
 		t.Errorf("got stdout %q, want %q", gotStdout, wantStdout)
+	}
+}
+
+func TestLogsActorRunner_Run_Follow_ActorCrashed(t *testing.T) {
+	const actorName = "act-crashed"
+	crashed := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Name: actorName},
+		Status: &ateapi.ActorStatus{
+			State: ateapi.ActorState_ACTOR_STATE_CRASHED,
+			Crash: &ateapi.ActorCrash{
+				Message:   "worker pod lost",
+				CrashTime: timestamppb.New(time.Date(2026, 11, 27, 8, 0, 0, 0, time.UTC)),
+			},
+		},
+	}
+	running := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Name: actorName},
+		Status: &ateapi.ActorStatus{
+			State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapi.WorkerAssignment{WorkerPod: "pod-1", WorkerNamespace: "ns"},
+		},
+	}
+	const wantErr = "actor space-1/act-crashed is not currently running on any worker pod (state=ACTOR_STATE_CRASHED): crashed at 2026-11-27T08:00:00Z: worker pod lost"
+
+	tests := []struct {
+		name          string
+		startsRunning bool
+		wantStdout    string
+	}{
+		{name: "crashed before follow"},
+		{name: "crashes mid-stream", startsRunning: true, wantStdout: `{"time":"2026-11-27T07:59:59Z","level":"info","msg":"before crash"}` + "\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			lineRead := make(chan struct{})
+			var mu sync.Mutex
+			var getActorCalls int
+			mockAPI := &mockAteAPIClient{
+				GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
+					mu.Lock()
+					getActorCalls++
+					call := getActorCalls
+					mu.Unlock()
+					if !tc.startsRunning {
+						return crashed, nil
+					}
+					if call == 1 {
+						return running, nil
+					}
+					select {
+					case <-lineRead:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					return crashed, nil
+				},
+			}
+
+			var streamCalls int
+			mockStreamer := &mockPodLogsStreamer{
+				StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+					mu.Lock()
+					streamCalls++
+					call := streamCalls
+					mu.Unlock()
+					if !tc.startsRunning || call > 1 {
+						return nil, fmt.Errorf("unexpected StreamLogs call %d", call)
+					}
+					pr, pw := io.Pipe()
+					go func() {
+						fmt.Fprintln(pw, `{"time":"2026-11-27T07:59:59Z","level":"info","msg":"before crash","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-crashed"}}`)
+						close(lineRead)
+						<-streamCtx.Done()
+						pw.Close()
+					}()
+					return pr, nil
+				},
+			}
+
+			var stdout, stderr bytes.Buffer
+			runner := &LogsActorRunner{
+				apiClient:         mockAPI,
+				actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+				filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
+				streamer:          mockStreamer,
+				stdout:            &stdout,
+				stderr:            &stderr,
+				follow:            true,
+				pollInterval:      1 * time.Millisecond,
+				reconnectInterval: 1 * time.Millisecond,
+				tickerInterval:    1 * time.Millisecond,
+			}
+
+			err := runner.Run(ctx)
+			if err == nil || err.Error() != wantErr {
+				t.Errorf("Run() error = %v, want %q", err, wantErr)
+			}
+			if got := stdout.String(); got != tc.wantStdout {
+				t.Errorf("stdout = %q, want %q", got, tc.wantStdout)
+			}
+		})
 	}
 }
 

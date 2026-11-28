@@ -45,11 +45,11 @@ an atespace, so an actor is always addressed by `(atespace, name)`.
 > **Note:** By default, `kubectl ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
 
 #### Example 1: Actor Not Currently Running
-If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
+If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately and includes the actor's state:
 
 ```bash
 $ kubectl ate logs actor test -a demo
-Error: actor demo/test is not currently running on any worker pod
+Error: actor demo/test is not currently running on any worker pod (state=ACTOR_STATE_SUSPENDED)
 ```
 
 #### Example 2: Default Clean JSON Lines Output
@@ -64,13 +64,14 @@ $ kubectl ate logs actor test -a demo
 ```
 
 #### Example 3: Streaming/Live Logs (`--follow` or `-f`)
-To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod:
+To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod. If the actor is or becomes `ACTOR_STATE_CRASHED`, the command exits with an error that includes the crash time and message when they are set:
 
 ```bash
 $ kubectl ate logs actor test -a demo -f
 Actor is currently running on pod ate-demo-counter/counter-d8f99-m7d96
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}
+Actor demo/test is not running (state=ACTOR_STATE_SUSPENDED); waiting for worker assignment...
 Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
